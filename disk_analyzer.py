@@ -1,16 +1,17 @@
 #!/usr/bin/env python3
 """
-Analizador de Disco para macOS
-Herramienta para diagnosticar el uso de espacio en disco
+Analizador de Disco Multiplataforma
+Herramienta para diagnosticar el uso de espacio en disco en Windows, macOS y Linux
 """
 
-import os
 import os
 import sys
 import json
 import time
 import argparse
 import subprocess
+import platform
+import shutil
 from pathlib import Path
 from datetime import datetime
 from collections import defaultdict
@@ -21,23 +22,63 @@ KB = 1024
 MB = KB * 1024
 GB = MB * 1024
 
-# Directorios típicos con archivos temporales o cache en macOS
-CACHE_DIRS = [
-    "~/Library/Caches",
-    "~/Library/Logs",
-    "~/Library/Application Support/Code/Cache",
-    "~/Library/Application Support/Code/CachedData",
-    "~/Library/Developer/Xcode/DerivedData",
-    "~/Library/Developer/Xcode/Archives",
-    "~/Library/Developer/CoreSimulator/Devices",
-    "~/.npm",
-    "~/.cache",
-    "~/Downloads",
-    "~/.Trash",
-    "/private/var/folders",  # Temporal files
-    "~/Library/Containers/com.docker.docker/Data",  # Docker Desktop
-    "~/.docker",
-]
+# Detección del sistema operativo
+SYSTEM = platform.system()
+IS_WINDOWS = SYSTEM == 'Windows'
+IS_MACOS = SYSTEM == 'Darwin'
+IS_LINUX = SYSTEM == 'Linux'
+
+# Directorios típicos con archivos temporales o cache por sistema
+if IS_WINDOWS:
+    CACHE_DIRS = [
+        "~/AppData/Local/Temp",
+        "~/AppData/Local/Microsoft/Windows/INetCache",
+        "~/AppData/Local/Microsoft/Windows/Explorer",
+        "~/AppData/Roaming/Code/Cache",
+        "~/AppData/Roaming/Code/CachedData",
+        "~/AppData/Local/Google/Chrome/User Data/Default/Cache",
+        "~/AppData/Local/Mozilla/Firefox/Profiles",
+        "~/.npm",
+        "~/.cache",
+        "~/Downloads",
+        "$RECYCLE.BIN",
+        "C:/Windows/Temp",
+        "~/AppData/Local/Docker",
+        "~/.docker",
+    ]
+elif IS_MACOS:
+    CACHE_DIRS = [
+        "~/Library/Caches",
+        "~/Library/Logs",
+        "~/Library/Application Support/Code/Cache",
+        "~/Library/Application Support/Code/CachedData",
+        "~/Library/Developer/Xcode/DerivedData",
+        "~/Library/Developer/Xcode/Archives",
+        "~/Library/Developer/CoreSimulator/Devices",
+        "~/.npm",
+        "~/.cache",
+        "~/Downloads",
+        "~/.Trash",
+        "/private/var/folders",
+        "~/Library/Containers/com.docker.docker/Data",
+        "~/.docker",
+    ]
+else:  # Linux
+    CACHE_DIRS = [
+        "~/.cache",
+        "~/.local/share/Trash",
+        "/tmp",
+        "/var/tmp",
+        "~/.config/Code/Cache",
+        "~/.config/Code/CachedData",
+        "~/.mozilla/firefox",
+        "~/.cache/google-chrome",
+        "~/.npm",
+        "~/Downloads",
+        "/var/cache",
+        "~/.docker",
+        "/var/lib/docker",
+    ]
 
 # Extensiones de archivos grandes comunes
 LARGE_FILE_EXTENSIONS = {
@@ -65,6 +106,10 @@ class DiskAnalyzer:
         self.file_type_stats = defaultdict(lambda: {'count': 0, 'size': 0})
         self.docker_stats = None
         self.disk_usage = None
+        self.system = SYSTEM
+        self.is_windows = IS_WINDOWS
+        self.is_macos = IS_MACOS
+        self.is_linux = IS_LINUX
         
     def format_size(self, size: int) -> str:
         """Formatea el tamaño en formato legible"""
@@ -92,7 +137,52 @@ class DiskAnalyzer:
     def should_ignore(self, path: Path) -> bool:
         """Determina si el path debe ser ignorado"""
         path_str = str(path)
+        # En Windows, ignorar también archivos del sistema
+        if self.is_windows:
+            if path.name in ['pagefile.sys', 'hiberfil.sys', 'swapfile.sys']:
+                return True
         return any(pattern in path_str for pattern in IGNORE_PATTERNS)
+    
+    def get_home_dir(self) -> Path:
+        """Obtiene el directorio home según el sistema"""
+        return Path.home()
+    
+    def get_all_drives(self) -> List[str]:
+        """Obtiene todas las unidades disponibles en el sistema"""
+        drives = []
+        if self.is_windows:
+            # En Windows, buscar todas las letras de unidad
+            import string
+            for letter in string.ascii_uppercase:
+                drive = f"{letter}:\\"
+                if os.path.exists(drive):
+                    drives.append(drive)
+        else:
+            # En Unix-like, usar el sistema de archivos raíz
+            drives.append('/')
+        return drives
+    
+    def get_temp_dirs(self) -> List[Path]:
+        """Obtiene directorios temporales según el sistema"""
+        temp_dirs = []
+        if self.is_windows:
+            temp_dirs.extend([
+                Path(os.environ.get('TEMP', '')),
+                Path(os.environ.get('TMP', '')),
+                Path('C:/Windows/Temp'),
+            ])
+        elif self.is_macos:
+            temp_dirs.extend([
+                Path('/tmp'),
+                Path('/var/tmp'),
+                Path('/private/var/folders'),
+            ])
+        else:  # Linux
+            temp_dirs.extend([
+                Path('/tmp'),
+                Path('/var/tmp'),
+            ])
+        return [d for d in temp_dirs if d and d.exists()]
     
     def scan_directory(self, directory: Path) -> int:
         """Escanea un directorio y retorna su tamaño total"""
@@ -197,7 +287,18 @@ class DiskAnalyzer:
         
         try:
             # Verificar si Docker está instalado
-            result = subprocess.run(['docker', 'version'], capture_output=True, text=True)
+            docker_cmd = 'docker'
+            if self.is_windows:
+                # En Windows, Docker puede estar en diferentes ubicaciones
+                if shutil.which('docker') is None:
+                    # Intentar con Docker Desktop
+                    docker_desktop_path = 'C:\\Program Files\\Docker\\Docker\\resources\\bin\\docker.exe'
+                    if os.path.exists(docker_desktop_path):
+                        docker_cmd = docker_desktop_path
+                    else:
+                        return docker_stats
+            
+            result = subprocess.run([docker_cmd, 'version'], capture_output=True, text=True)
             if result.returncode != 0:
                 return docker_stats
                 
@@ -331,28 +432,43 @@ class DiskAnalyzer:
             pass
         return 0
     
-    def get_disk_usage(self) -> Dict:
-        """Obtiene el uso total del disco"""
+    def get_disk_usage(self, path: Optional[str] = None) -> Dict:
+        """Obtiene el uso total del disco de forma multiplataforma"""
         try:
-            result = subprocess.run(['df', '-k', '/'], capture_output=True, text=True)
-            if result.returncode == 0:
-                lines = result.stdout.strip().split('\n')
-                if len(lines) > 1:
-                    parts = lines[1].split()
-                    if len(parts) >= 4:
-                        # df -k returns values in 1K blocks
-                        total = int(parts[1]) * 1024
-                        available = int(parts[3]) * 1024
-                        # Calculate used as total - available for accurate APFS reporting
-                        used = total - available
-                        return {
-                            'total': total,
-                            'used': used,
-                            'available': available,
-                            'percent': (used / total * 100) if total > 0 else 0
-                        }
-        except:
-            pass
+            if path is None:
+                path = str(self.start_path)
+            
+            if self.is_windows:
+                # En Windows, usar shutil.disk_usage
+                import shutil
+                usage = shutil.disk_usage(path)
+                return {
+                    'total': usage.total,
+                    'used': usage.used,
+                    'available': usage.free,
+                    'percent': (usage.used / usage.total * 100) if usage.total > 0 else 0
+                }
+            else:
+                # En Unix-like, usar df
+                result = subprocess.run(['df', '-k', path], capture_output=True, text=True)
+                if result.returncode == 0:
+                    lines = result.stdout.strip().split('\n')
+                    if len(lines) > 1:
+                        parts = lines[1].split()
+                        if len(parts) >= 4:
+                            # df -k returns values in 1K blocks
+                            total = int(parts[1]) * 1024
+                            available = int(parts[3]) * 1024
+                            # Calculate used as total - available for accurate APFS reporting
+                            used = total - available
+                            return {
+                                'total': total,
+                                'used': used,
+                                'available': available,
+                                'percent': (used / total * 100) if total > 0 else 0
+                            }
+        except Exception as e:
+            self.errors.append(f"Error obteniendo uso del disco: {str(e)}")
         return {'total': 0, 'used': 0, 'available': 0, 'percent': 0}
     
     def analyze(self):
@@ -2018,26 +2134,48 @@ class DiskAnalyzer:
         
         if category_name == 'Desarrollo':
             # Comandos para limpiar desarrollo
-            commands.extend([
-                {
-                    'description': 'Limpiar índices de Continue (archivos > 30 días)',
-                    'command': 'find ~/.continue/index -name "*.lance" -mtime +30 -exec rm -rf {} +',
-                    'risk': 'Bajo',
-                    'space_estimate': '5-10 GB'
-                },
-                {
-                    'description': 'Limpiar logs de Airflow antiguos',
-                    'command': 'find ~/Documents/repos -name "*.log" -mtime +7 -size +10M -delete',
-                    'risk': 'Bajo',
-                    'space_estimate': '1-5 GB'
-                },
-                {
-                    'description': 'Limpiar node_modules no utilizados',
-                    'command': 'find ~/Documents/repos -name "node_modules" -type d -mtime +30 -exec rm -rf {} +',
-                    'risk': 'Medio',
-                    'space_estimate': '500MB-2GB'
-                }
-            ])
+            if self.is_windows:
+                commands.extend([
+                    {
+                        'description': 'Limpiar índices de Continue (archivos > 30 días)',
+                        'command': 'forfiles /P "%USERPROFILE%\\.continue\\index" /M *.lance /D -30 /C "cmd /c del @path"',
+                        'risk': 'Bajo',
+                        'space_estimate': '5-10 GB'
+                    },
+                    {
+                        'description': 'Limpiar logs antiguos',
+                        'command': 'forfiles /P "%USERPROFILE%\\Documents\\repos" /M *.log /D -7 /C "cmd /c if @fsize gtr 10485760 del @path"',
+                        'risk': 'Bajo',
+                        'space_estimate': '1-5 GB'
+                    },
+                    {
+                        'description': 'Limpiar node_modules no utilizados',
+                        'command': 'for /d /r "%USERPROFILE%\\Documents\\repos" %%d in (node_modules) do @if exist "%%d" rd /s /q "%%d"',
+                        'risk': 'Medio',
+                        'space_estimate': '500MB-2GB'
+                    }
+                ])
+            else:
+                commands.extend([
+                    {
+                        'description': 'Limpiar índices de Continue (archivos > 30 días)',
+                        'command': 'find ~/.continue/index -name "*.lance" -mtime +30 -exec rm -rf {} +',
+                        'risk': 'Bajo',
+                        'space_estimate': '5-10 GB'
+                    },
+                    {
+                        'description': 'Limpiar logs antiguos',
+                        'command': 'find ~/Documents/repos -name "*.log" -mtime +7 -size +10M -delete',
+                        'risk': 'Bajo',
+                        'space_estimate': '1-5 GB'
+                    },
+                    {
+                        'description': 'Limpiar node_modules no utilizados',
+                        'command': 'find ~/Documents/repos -name "node_modules" -type d -mtime +30 -exec rm -rf {} +',
+                        'risk': 'Medio',
+                        'space_estimate': '500MB-2GB'
+                    }
+                ])
         
         elif category_name == 'Docker':
             commands.extend([
@@ -2056,20 +2194,51 @@ class DiskAnalyzer:
             ])
         
         elif category_name == 'Library':
-            commands.extend([
-                {
-                    'description': 'Limpiar caches de aplicaciones',
-                    'command': 'rm -rf ~/Library/Caches/*',
-                    'risk': 'Bajo',
-                    'space_estimate': '1-5 GB'
-                },
-                {
-                    'description': 'Limpiar logs del sistema',
-                    'command': 'sudo rm -rf /var/log/*.log',
-                    'risk': 'Medio',
-                    'space_estimate': '100MB-1GB'
-                }
-            ])
+            if self.is_windows:
+                commands.extend([
+                    {
+                        'description': 'Limpiar caches de aplicaciones',
+                        'command': 'del /f /s /q "%LOCALAPPDATA%\\Temp\\*"',
+                        'risk': 'Bajo',
+                        'space_estimate': '1-5 GB'
+                    },
+                    {
+                        'description': 'Limpiar logs del sistema Windows',
+                        'command': 'wevtutil cl Application && wevtutil cl System',
+                        'risk': 'Medio',
+                        'space_estimate': '100MB-1GB'
+                    }
+                ])
+            elif self.is_macos:
+                commands.extend([
+                    {
+                        'description': 'Limpiar caches de aplicaciones',
+                        'command': 'rm -rf ~/Library/Caches/*',
+                        'risk': 'Bajo',
+                        'space_estimate': '1-5 GB'
+                    },
+                    {
+                        'description': 'Limpiar logs del sistema',
+                        'command': 'sudo rm -rf /var/log/*.log',
+                        'risk': 'Medio',
+                        'space_estimate': '100MB-1GB'
+                    }
+                ])
+            else:  # Linux
+                commands.extend([
+                    {
+                        'description': 'Limpiar caches de aplicaciones',
+                        'command': 'rm -rf ~/.cache/*',
+                        'risk': 'Bajo',
+                        'space_estimate': '1-5 GB'
+                    },
+                    {
+                        'description': 'Limpiar logs del sistema',
+                        'command': 'sudo journalctl --vacuum-time=7d',
+                        'risk': 'Medio',
+                        'space_estimate': '100MB-1GB'
+                    }
+                ])
         
         elif category_name == 'Otros':
             # Para "Otros", generar comandos basados en los directorios más grandes
@@ -2653,13 +2822,99 @@ class DiskAnalyzer:
             print(f"\n✅ Espacio total liberado: {self.format_size(total_cleaned)}")
 
 
+def analyze_all_drives():
+    """Analiza todas las unidades disponibles en Windows"""
+    if not IS_WINDOWS:
+        print("❗ Esta función solo está disponible en Windows")
+        return
+    
+    analyzer = DiskAnalyzer('C:\\', min_size_mb=50)
+    drives = analyzer.get_all_drives()
+    
+    print(f"💿 Unidades detectadas: {', '.join(drives)}")
+    print("\n" + "="*80 + "\n")
+    
+    all_reports = []
+    
+    for drive in drives:
+        print(f"\n🔍 ANALIZANDO UNIDAD {drive}")
+        print("=" * 40)
+        
+        try:
+            drive_analyzer = DiskAnalyzer(drive, min_size_mb=50)
+            report = drive_analyzer.analyze()
+            
+            if report:
+                all_reports.append({
+                    'drive': drive,
+                    'report': report,
+                    'disk_usage': drive_analyzer.disk_usage
+                })
+                
+                # Mostrar resumen de la unidad
+                print(f"\n📊 RESUMEN DE {drive}:")
+                print(f"   • Espacio total: {drive_analyzer.format_size(drive_analyzer.disk_usage['total'])}")
+                print(f"   • Espacio usado: {drive_analyzer.format_size(drive_analyzer.disk_usage['used'])} ({drive_analyzer.disk_usage['percent']:.1f}%)")
+                print(f"   • Espacio libre: {drive_analyzer.format_size(drive_analyzer.disk_usage['available'])}")
+                print(f"   • Archivos grandes encontrados: {len(drive_analyzer.large_files)}")
+                
+        except Exception as e:
+            print(f"   ⚠️  Error analizando {drive}: {e}")
+    
+    # Generar reporte combinado
+    if all_reports:
+        print("\n" + "="*80)
+        print("📊 RESUMEN TOTAL DE TODAS LAS UNIDADES:")
+        print("=" * 80)
+        
+        total_used = sum(r['disk_usage']['used'] for r in all_reports)
+        total_available = sum(r['disk_usage']['available'] for r in all_reports)
+        total_space = sum(r['disk_usage']['total'] for r in all_reports)
+        
+        # Crear instancia temporal para usar format_size
+        temp_analyzer = DiskAnalyzer('.')
+        print(f"\n   • Espacio total en todas las unidades: {temp_analyzer.format_size(total_space)}")
+        print(f"   • Espacio usado total: {temp_analyzer.format_size(total_used)} ({(total_used/total_space*100):.1f}%)")
+        print(f"   • Espacio libre total: {temp_analyzer.format_size(total_available)}")
+        
+        # Generar HTML con todas las unidades
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        report_path = Path(f"disk_analysis_all_drives_{timestamp}.html")
+        
+        # Combinar todos los archivos grandes
+        all_large_files = []
+        for r in all_reports:
+            analyzer = DiskAnalyzer(r['drive'])
+            for f in r['report'].get('large_files', []):
+                f['drive'] = r['drive']
+                all_large_files.append(f)
+        
+        # Usar el primer analizador para generar el reporte HTML
+        first_analyzer = DiskAnalyzer(drives[0])
+        first_analyzer.large_files = all_large_files
+        first_analyzer.generate_html_report({
+            'total_size': total_used,
+            'large_files': all_large_files,
+            'summary': {
+                'total_space': total_space,
+                'total_used': total_used,
+                'total_available': total_available,
+                'drives_analyzed': len(drives)
+            }
+        }, report_path)
+        
+        print(f"\n📦 Reporte HTML generado: {report_path}")
+
+
 def main():
     parser = argparse.ArgumentParser(
-        description='Analizador de uso de disco para macOS con soporte para Docker',
+        description='Analizador de uso de disco multiplataforma con soporte para Docker',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Ejemplos de uso:
   %(prog)s ~/                    # Analizar directorio home
+  %(prog)s C:\\                   # Analizar unidad C: en Windows
+  %(prog)s --all-drives          # Analizar todas las unidades (Windows)
   %(prog)s /Applications         # Analizar aplicaciones
   %(prog)s ~/ --min-size 50      # Solo archivos > 50MB
   %(prog)s ~/ --export report    # Exportar a report.json
@@ -2669,7 +2924,9 @@ Ejemplos de uso:
         """
     )
     
-    parser.add_argument('path', help='Ruta a analizar')
+    parser.add_argument('path', nargs='?', default='.', help='Ruta a analizar (default: directorio actual)')
+    parser.add_argument('--all-drives', action='store_true',
+                        help='Analizar todas las unidades disponibles (solo Windows)')
     parser.add_argument('--min-size', type=float, default=10,
                         help='Tamaño mínimo de archivo a reportar en MB (default: 10)')
     parser.add_argument('--export', help='Exportar reporte a archivo JSON')
@@ -2687,6 +2944,14 @@ Ejemplos de uso:
                         help='Solo generar reporte sin análisis completo')
     
     args = parser.parse_args()
+    
+    # Si se solicita analizar todas las unidades en Windows
+    if args.all_drives:
+        if not IS_WINDOWS:
+            print("❗ La opción --all-drives solo está disponible en Windows")
+            sys.exit(1)
+        analyze_all_drives()
+        return
     
     # Verificar que la ruta existe
     if not Path(args.path).exists():

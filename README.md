@@ -1,7 +1,6 @@
 # 🚀 Disk Use Analyzer
 
 <div align="center">
-
 ![Python](https://img.shields.io/badge/python-3.6+-blue.svg)
 ![Platform](https://img.shields.io/badge/platform-macOS-lightgrey.svg)
 ![License](https://img.shields.io/badge/license-MIT-green.svg)

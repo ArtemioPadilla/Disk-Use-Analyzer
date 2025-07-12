@@ -1,0 +1,339 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Disk Space Analyzer</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body>
+    <div class="app">
+        <!-- Header -->
+        <header class="header">
+            <div class="header-content">
+                <h1><i class="fas fa-hard-drive"></i> Disk Space Analyzer</h1>
+                <div class="header-info">
+                    <span id="system-info"></span>
+                    <button class="theme-toggle" onclick="toggleTheme()">
+                        <i class="fas fa-moon"></i>
+                    </button>
+                </div>
+            </div>
+        </header>
+
+        <!-- Main Content -->
+        <main class="main-content">
+            <!-- Home View -->
+            <div id="home-view" class="view active">
+                <div class="hero">
+                    <h2>Analyze Your Disk Space</h2>
+                    <p>Cross-platform disk analysis tool with beautiful visualizations</p>
+                    <button class="btn btn-primary btn-large" onclick="startAnalysis()">
+                        <i class="fas fa-search"></i> Start Analysis
+                    </button>
+                </div>
+
+                <div class="features">
+                    <div class="feature-card">
+                        <i class="fas fa-tachometer-alt"></i>
+                        <h3>Real-time Progress</h3>
+                        <p>Watch as your disk is analyzed with live updates</p>
+                    </div>
+                    <div class="feature-card">
+                        <i class="fas fa-chart-pie"></i>
+                        <h3>Visual Reports</h3>
+                        <p>Interactive charts showing disk usage by file type</p>
+                    </div>
+                    <div class="feature-card">
+                        <i class="fas fa-broom"></i>
+                        <h3>Smart Cleanup</h3>
+                        <p>Get recommendations for safe space recovery</p>
+                    </div>
+                </div>
+
+                <!-- Recent Analyses -->
+                <div class="recent-analyses" id="recent-analyses" style="display: none;">
+                    <h3>Recent Analyses</h3>
+                    <div id="recent-list"></div>
+                </div>
+            </div>
+
+            <!-- Analysis Wizard View -->
+            <div id="wizard-view" class="view" style="display: none;">
+                <div class="wizard-container">
+                    <div class="wizard-steps">
+                        <div class="step active" data-step="1">
+                            <span class="step-number">1</span>
+                            <span class="step-label">Select Paths</span>
+                        </div>
+                        <div class="step" data-step="2">
+                            <span class="step-number">2</span>
+                            <span class="step-label">Configure Options</span>
+                        </div>
+                        <div class="step" data-step="3">
+                            <span class="step-number">3</span>
+                            <span class="step-label">Analyzing</span>
+                        </div>
+                    </div>
+
+                    <!-- Step 1: Path Selection -->
+                    <div class="wizard-content" id="step-1">
+                        <h3>Select Paths to Analyze</h3>
+                        
+                        <div class="path-selection">
+                            <div class="drives-section" id="drives-section">
+                                <h4>Available Drives</h4>
+                                <div id="drives-list" class="drives-list">
+                                    <!-- Populated by JavaScript -->
+                                </div>
+                            </div>
+
+                            <div class="paths-section">
+                                <h4>Common Locations</h4>
+                                <div id="common-paths" class="common-paths">
+                                    <!-- Populated by JavaScript -->
+                                </div>
+                            </div>
+
+                            <div class="custom-path">
+                                <h4>Custom Path</h4>
+                                <div class="input-group">
+                                    <input type="text" id="custom-path-input" placeholder="/path/to/analyze">
+                                    <button class="btn btn-secondary" onclick="addCustomPath()">
+                                        <i class="fas fa-plus"></i> Add
+                                    </button>
+                                </div>
+                            </div>
+
+                            <div class="selected-paths">
+                                <h4>Selected Paths</h4>
+                                <div id="selected-paths-list">
+                                    <!-- Populated by JavaScript -->
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="wizard-actions">
+                            <button class="btn btn-secondary" onclick="showView('home-view')">Cancel</button>
+                            <button class="btn btn-primary" onclick="nextStep()" id="next-step-1">
+                                Next <i class="fas fa-arrow-right"></i>
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Step 2: Options -->
+                    <div class="wizard-content" id="step-2" style="display: none;">
+                        <h3>Configure Analysis Options</h3>
+                        
+                        <div class="options-grid">
+                            <div class="option-group">
+                                <label for="min-size">Minimum File Size</label>
+                                <div class="slider-container">
+                                    <input type="range" id="min-size" min="1" max="1000" value="10">
+                                    <span id="min-size-value">10 MB</span>
+                                </div>
+                            </div>
+
+                            <div class="option-group">
+                                <label>Categories to Analyze</label>
+                                <div class="checkbox-group">
+                                    <label class="checkbox">
+                                        <input type="checkbox" name="category" value="cache" checked>
+                                        <span>System Cache</span>
+                                    </label>
+                                    <label class="checkbox">
+                                        <input type="checkbox" name="category" value="development" checked>
+                                        <span>Development Files</span>
+                                    </label>
+                                    <label class="checkbox">
+                                        <input type="checkbox" name="category" value="docker" checked>
+                                        <span>Docker Resources</span>
+                                    </label>
+                                    <label class="checkbox">
+                                        <input type="checkbox" name="category" value="media" checked>
+                                        <span>Media Files</span>
+                                    </label>
+                                    <label class="checkbox">
+                                        <input type="checkbox" name="category" value="downloads" checked>
+                                        <span>Downloads</span>
+                                    </label>
+                                    <label class="checkbox">
+                                        <input type="checkbox" name="category" value="temp" checked>
+                                        <span>Temporary Files</span>
+                                    </label>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="wizard-actions">
+                            <button class="btn btn-secondary" onclick="previousStep()">
+                                <i class="fas fa-arrow-left"></i> Back
+                            </button>
+                            <button class="btn btn-primary" onclick="startAnalysisRun()">
+                                Start Analysis <i class="fas fa-play"></i>
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Step 3: Progress -->
+                    <div class="wizard-content" id="step-3" style="display: none;">
+                        <h3>Analyzing Disk Space...</h3>
+                        
+                        <div class="progress-container">
+                            <div class="progress-circle">
+                                <svg width="200" height="200">
+                                    <circle cx="100" cy="100" r="90" stroke="#e0e0e0" stroke-width="10" fill="none"/>
+                                    <circle id="progress-arc" cx="100" cy="100" r="90" stroke="#3498db" stroke-width="10" fill="none"
+                                            stroke-dasharray="565.48" stroke-dashoffset="565.48"
+                                            transform="rotate(-90 100 100)"/>
+                                </svg>
+                                <div class="progress-text">
+                                    <span id="progress-percent">0%</span>
+                                </div>
+                            </div>
+
+                            <div class="progress-details">
+                                <div class="progress-stat">
+                                    <span class="label">Current Path:</span>
+                                    <span id="current-path" class="value">-</span>
+                                </div>
+                                <div class="progress-stat">
+                                    <span class="label">Files Scanned:</span>
+                                    <span id="files-scanned" class="value">0</span>
+                                </div>
+                                <div class="progress-stat">
+                                    <span class="label">Large Files Found:</span>
+                                    <span id="large-files" class="value">0</span>
+                                </div>
+                                <div class="progress-stat">
+                                    <span class="label">Errors:</span>
+                                    <span id="errors-count" class="value">0</span>
+                                </div>
+                            </div>
+
+                            <div class="progress-log">
+                                <div id="progress-messages"></div>
+                            </div>
+                        </div>
+
+                        <div class="wizard-actions">
+                            <button class="btn btn-secondary" onclick="cancelAnalysis()" id="cancel-btn">
+                                <i class="fas fa-stop"></i> Cancel
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Results View -->
+            <div id="results-view" class="view" style="display: none;">
+                <div class="results-container">
+                    <div class="results-header">
+                        <h2>Analysis Results</h2>
+                        <div class="results-actions">
+                            <button class="btn btn-secondary" onclick="exportResults('json')">
+                                <i class="fas fa-download"></i> Export JSON
+                            </button>
+                            <button class="btn btn-secondary" onclick="exportResults('csv')">
+                                <i class="fas fa-file-csv"></i> Export CSV
+                            </button>
+                            <button class="btn btn-primary" onclick="startAnalysis()">
+                                <i class="fas fa-redo"></i> New Analysis
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Results Tabs -->
+                    <div class="tabs">
+                        <div class="tab-buttons">
+                            <button class="tab-button active" onclick="showTab('overview')">
+                                <i class="fas fa-chart-pie"></i> Overview
+                            </button>
+                            <button class="tab-button" onclick="showTab('files')">
+                                <i class="fas fa-file"></i> Large Files
+                            </button>
+                            <button class="tab-button" onclick="showTab('recommendations')">
+                                <i class="fas fa-lightbulb"></i> Recommendations
+                            </button>
+                        </div>
+
+                        <!-- Overview Tab -->
+                        <div class="tab-content" id="overview-tab">
+                            <div class="summary-cards">
+                                <div class="summary-card">
+                                    <i class="fas fa-hdd"></i>
+                                    <h4>Total Analyzed</h4>
+                                    <p id="total-size">-</p>
+                                </div>
+                                <div class="summary-card">
+                                    <i class="fas fa-file-alt"></i>
+                                    <h4>Files Scanned</h4>
+                                    <p id="total-files">-</p>
+                                </div>
+                                <div class="summary-card">
+                                    <i class="fas fa-exclamation-triangle"></i>
+                                    <h4>Large Files</h4>
+                                    <p id="total-large-files">-</p>
+                                </div>
+                                <div class="summary-card">
+                                    <i class="fas fa-broom"></i>
+                                    <h4>Recoverable</h4>
+                                    <p id="recoverable-space">-</p>
+                                </div>
+                            </div>
+
+                            <div class="charts-grid">
+                                <div class="chart-container">
+                                    <h4>Disk Usage by File Type</h4>
+                                    <canvas id="file-type-chart"></canvas>
+                                </div>
+                                <div class="chart-container">
+                                    <h4>Top Directories</h4>
+                                    <canvas id="directory-chart"></canvas>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Files Tab -->
+                        <div class="tab-content" id="files-tab" style="display: none;">
+                            <div class="files-header">
+                                <input type="text" id="file-search" placeholder="Search files..." class="search-input">
+                                <select id="file-sort" class="sort-select">
+                                    <option value="size">Sort by Size</option>
+                                    <option value="name">Sort by Name</option>
+                                    <option value="age">Sort by Age</option>
+                                </select>
+                            </div>
+                            <div id="files-list" class="files-list">
+                                <!-- Populated by JavaScript -->
+                            </div>
+                        </div>
+
+                        <!-- Recommendations Tab -->
+                        <div class="tab-content" id="recommendations-tab" style="display: none;">
+                            <div id="recommendations-list" class="recommendations-list">
+                                <!-- Populated by JavaScript -->
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </main>
+
+        <!-- Footer -->
+        <footer class="footer">
+            <p>&copy; 2024 Disk Space Analyzer | <a href="/docs" target="_blank">API Docs</a></p>
+        </footer>
+    </div>
+
+    <!-- Loading Overlay -->
+    <div id="loading-overlay" class="loading-overlay" style="display: none;">
+        <div class="spinner"></div>
+    </div>
+
+    <!-- JavaScript -->
+    <script src="/static/js/app.js"></script>
+</body>
+</html>

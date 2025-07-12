@@ -1,0 +1,161 @@
+# Cross-Platform Disk Analyzer Makefile
+# Works on Windows (with make), macOS, and Linux
+
+# Detect OS
+ifeq ($(OS),Windows_NT)
+    PYTHON = python
+    RM = del /F /Q
+    RMDIR = rmdir /S /Q
+    SEP = \\
+    HOME_DIR = %USERPROFILE%
+    DEFAULT_PATH = C:\\
+else
+    PYTHON = python3
+    RM = rm -f
+    RMDIR = rm -rf
+    SEP = /
+    UNAME_S := $(shell uname -s)
+    ifeq ($(UNAME_S),Darwin)
+        HOME_DIR = ~
+        DEFAULT_PATH = ~/
+    else
+        HOME_DIR = ~
+        DEFAULT_PATH = /
+    endif
+endif
+
+# Default target
+.DEFAULT_GOAL := help
+
+# Help message
+help:
+	@echo "Disk Analyzer - Cross-Platform Makefile"
+	@echo ""
+	@echo "Uso básico:"
+	@echo "  make analyze       - Analizar directorio actual"
+	@echo "  make home          - Analizar directorio home"
+	@echo "  make quick         - Análisis rápido (archivos > 50MB)"
+	@echo "  make full          - Análisis completo con HTML"
+	@echo "  make report        - Generar reporte HTML"
+	@echo ""
+	@echo "Análisis específico:"
+	@echo "  make custom path=/ruta min_size=100"
+ifeq ($(OS),Windows_NT)
+	@echo "  make all-drives    - Analizar todas las unidades (Windows)"
+	@echo "  make c-drive       - Analizar unidad C:"
+	@echo "  make d-drive       - Analizar unidad D:"
+endif
+	@echo "  make apps          - Analizar aplicaciones"
+	@echo "  make downloads     - Analizar carpeta Downloads"
+	@echo "  make dev           - Analizar proyectos de desarrollo"
+	@echo ""
+	@echo "Limpieza:"
+	@echo "  make clean-preview - Ver qué se puede limpiar"
+	@echo "  make clean-cache   - Limpiar archivos de cache"
+	@echo "  make clean-docker  - Limpiar recursos Docker"
+	@echo "  make clean-all     - Limpiar todo"
+	@echo ""
+	@echo "Utilidades:"
+	@echo "  make check         - Verificar instalación"
+	@echo "  make install-deps  - Instalar dependencias"
+
+# Verificar dependencias
+check:
+	@echo "Verificando instalación..."
+	@$(PYTHON) --version
+	@echo "✓ Python instalado"
+	@$(PYTHON) -c "import sys; assert sys.version_info >= (3,6), 'Python 3.6+ requerido'"
+	@echo "✓ Versión de Python compatible"
+	@echo "✓ Listo para usar!"
+
+# Instalar dependencias (no requiere ninguna)
+install-deps:
+	@echo "Este proyecto no requiere dependencias externas"
+	@echo "Usa solo la biblioteca estándar de Python"
+
+# Análisis básico
+analyze:
+	$(PYTHON) disk_analyzer.py .
+
+# Analizar directorio home
+home:
+	$(PYTHON) disk_analyzer.py $(HOME_DIR)
+
+# Análisis rápido
+quick:
+	$(PYTHON) disk_analyzer.py $(HOME_DIR) --min-size 50
+
+# Análisis completo con reporte HTML
+full:
+	$(PYTHON) disk_analyzer.py $(HOME_DIR) --min-size 10 --html --export disk_analysis
+
+# Solo generar reporte HTML
+report: full
+
+# Windows specific: analizar todas las unidades
+ifeq ($(OS),Windows_NT)
+all-drives:
+	$(PYTHON) disk_analyzer.py --all-drives
+
+c-drive:
+	$(PYTHON) disk_analyzer.py C:\\
+
+d-drive:
+	$(PYTHON) disk_analyzer.py D:\\
+endif
+
+# Análisis personalizado
+custom:
+ifndef path
+	@echo "Error: Especifica path=/ruta/a/analizar"
+	@exit 1
+endif
+	$(PYTHON) disk_analyzer.py "$(path)" $(if $(min_size),--min-size $(min_size),)
+
+# Directorios comunes
+apps:
+ifeq ($(OS),Windows_NT)
+	$(PYTHON) disk_analyzer.py "C:\\Program Files"
+else ifeq ($(UNAME_S),Darwin)
+	$(PYTHON) disk_analyzer.py /Applications
+else
+	$(PYTHON) disk_analyzer.py /usr/share/applications
+endif
+
+downloads:
+	$(PYTHON) disk_analyzer.py $(HOME_DIR)$(SEP)Downloads
+
+documents:
+	$(PYTHON) disk_analyzer.py $(HOME_DIR)$(SEP)Documents
+
+dev:
+ifeq ($(OS),Windows_NT)
+	$(PYTHON) disk_analyzer.py $(HOME_DIR)$(SEP)Documents$(SEP)repos --min-size 50
+else
+	$(PYTHON) disk_analyzer.py $(HOME_DIR)/Developer --min-size 50
+endif
+
+# Limpieza
+clean-preview:
+	$(PYTHON) disk_analyzer.py $(HOME_DIR) --clean-all --dry-run
+
+clean-cache:
+	$(PYTHON) disk_analyzer.py $(HOME_DIR) --clean-cache
+
+clean-docker:
+	$(PYTHON) disk_analyzer.py $(HOME_DIR) --clean-docker
+
+clean-all:
+	$(PYTHON) disk_analyzer.py $(HOME_DIR) --clean-all
+
+# Limpiar archivos generados
+clean:
+ifeq ($(OS),Windows_NT)
+	-$(RM) disk_analysis*.json 2>NUL
+	-$(RM) disk_analysis*.html 2>NUL
+else
+	-$(RM) disk_analysis*.json
+	-$(RM) disk_analysis*.html
+endif
+
+.PHONY: help check install-deps analyze home quick full report custom apps downloads documents dev clean-preview clean-cache clean-docker clean-all clean all-drives c-drive d-drive

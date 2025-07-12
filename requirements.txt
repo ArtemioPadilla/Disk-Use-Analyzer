@@ -1,0 +1,4 @@
+# GUI Requirements for Disk Analyzer Wizard
+customtkinter>=5.2.0
+matplotlib>=3.7.0
+Pillow>=10.0.0  # For image handling and icons

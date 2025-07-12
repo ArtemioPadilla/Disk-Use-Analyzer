@@ -17,7 +17,7 @@ BLUE = \033[0;34m
 NC = \033[0m # No Color
 
 # Comandos principales
-.PHONY: help analyze quick full report clean-preview clean-cache clean-docker clean-all install
+.PHONY: help analyze quick full report clean-preview clean-cache clean-docker clean-all install gui install-gui check-gui web install-web
 
 help:
 	@echo "$(BLUE)═══════════════════════════════════════════════════════════════$(NC)"
@@ -46,6 +46,12 @@ help:
 	@echo "  $(YELLOW)make install$(NC)      - Instalar dependencias"
 	@echo "  $(YELLOW)make check$(NC)        - Verificar que todo esté instalado"
 	@echo "  $(YELLOW)make open$(NC)         - Abrir el último reporte HTML"
+	@echo ""
+	@echo "$(GREEN)Interfaz Gráfica:$(NC)"
+	@echo "  $(YELLOW)make gui$(NC)          - Ejecutar interfaz gráfica moderna"
+	@echo "  $(YELLOW)make install-gui$(NC)  - Instalar dependencias para GUI"
+	@echo "  $(YELLOW)make web$(NC)          - Ejecutar interfaz web (sin problemas de GUI!)"
+	@echo "  $(YELLOW)make install-web$(NC)  - Instalar dependencias para web"
 	@echo ""
 	@echo "$(BLUE)Ejemplos:$(NC)"
 	@echo "  make analyze path=/Users/me/Projects"
@@ -132,6 +138,18 @@ check:
 	else \
 		echo "$(RED)✗ No instalado$(NC)"; \
 	fi
+	@echo -n "tkinter (GUI): "
+	@if $(PYTHON) -c "import tkinter" 2>/dev/null; then \
+		echo "$(GREEN)✓ Instalado$(NC)"; \
+	else \
+		echo "$(RED)✗ No instalado (requerido para GUI)$(NC)"; \
+	fi
+	@echo -n "CustomTkinter: "
+	@if $(PYTHON) -c "import customtkinter" 2>/dev/null; then \
+		echo "$(GREEN)✓ Instalado$(NC)"; \
+	else \
+		echo "$(YELLOW)⚠ No instalado (ejecuta 'make install')$(NC)"; \
+	fi
 	@echo -n "Docker: "
 	@if command -v docker >/dev/null 2>&1; then \
 		echo "$(GREEN)✓ $(shell docker --version | cut -d' ' -f3 | tr -d ',')$(NC)"; \
@@ -146,7 +164,35 @@ install:
 		echo "$(RED)Python 3 no está instalado. Instálalo con: brew install python3$(NC)"; \
 		exit 1; \
 	fi
-	@echo "$(GREEN)✅ Todo listo para usar$(NC)"
+	@echo "$(BLUE)Verificando tkinter (interfaz gráfica base)...$(NC)"
+	@if ! $(PYTHON) -c "import tkinter" 2>/dev/null; then \
+		echo "$(RED)⚠️  tkinter no está instalado$(NC)"; \
+		echo "$(YELLOW)tkinter es necesario para la interfaz gráfica.$(NC)"; \
+		echo ""; \
+		if [ "$$(uname)" = "Linux" ]; then \
+			if [ -f /etc/debian_version ]; then \
+				echo "$(YELLOW)Ejecuta: sudo apt install python3-tk$(NC)"; \
+			elif [ -f /etc/fedora-release ]; then \
+				echo "$(YELLOW)Ejecuta: sudo dnf install python3-tkinter$(NC)"; \
+			elif [ -f /etc/arch-release ]; then \
+				echo "$(YELLOW)Ejecuta: sudo pacman -S tk$(NC)"; \
+			elif [ -f /etc/SuSE-release ] || [ -f /etc/SUSE-brand ]; then \
+				echo "$(YELLOW)Ejecuta: sudo zypper install python3-tk$(NC)"; \
+			else \
+				echo "$(YELLOW)Instala python3-tk o python3-tkinter según tu distribución$(NC)"; \
+			fi; \
+		elif [ "$$(uname)" = "Darwin" ]; then \
+			echo "$(YELLOW)Ejecuta: brew install python-tk$(NC)"; \
+		fi; \
+		echo ""; \
+		echo "$(YELLOW)Después de instalar tkinter, ejecuta 'make install' nuevamente$(NC)"; \
+		echo ""; \
+	else \
+		echo "$(GREEN)✅ tkinter está instalado$(NC)"; \
+	fi
+	@echo "$(GREEN)📦 Instalando dependencias para GUI...$(NC)"
+	@$(PYTHON) -m pip install -r requirements.txt 2>/dev/null || pip install -r requirements.txt
+	@echo "$(GREEN)✅ Todo listo para usar (CLI y GUI)$(NC)"
 
 # Abrir último reporte
 open:
@@ -179,6 +225,63 @@ stats:
 		echo "$(GREEN)Docker:$(NC)"; \
 		docker system df 2>/dev/null || echo "$(YELLOW)Docker no está ejecutándose$(NC)"; \
 	fi
+
+# GUI Commands
+install-gui:
+	@echo "$(GREEN)📦 Instalando dependencias para la interfaz gráfica...$(NC)"
+	@echo "$(BLUE)Usando Python: $(PYTHON)$(NC)"
+	@$(PYTHON) -m pip install -r requirements.txt || echo "$(RED)Error al instalar con $(PYTHON)$(NC)"
+	@echo "$(GREEN)✅ Dependencias GUI instaladas$(NC)"
+	@echo "$(BLUE)Verificando instalación...$(NC)"
+	@$(PYTHON) -c "import customtkinter; print('✅ CustomTkinter instalado correctamente')" || echo "$(RED)❌ CustomTkinter NO se instaló correctamente$(NC)"
+
+gui:
+	@echo "$(GREEN)🎨 Iniciando interfaz gráfica...$(NC)"
+	@echo "$(BLUE)Verificando CustomTkinter con $(PYTHON)...$(NC)"
+	@if ! $(PYTHON) -c "import customtkinter" 2>&1; then \
+		echo "$(RED)Error: CustomTkinter no está instalado$(NC)"; \
+		echo "$(YELLOW)Intenta ejecutar: $(PYTHON) -m pip install customtkinter$(NC)"; \
+		echo "$(YELLOW)O verifica tu instalación con: make check-gui$(NC)"; \
+		exit 1; \
+	fi
+	@$(PYTHON) disk_analyzer_gui.py
+
+# Verificar instalación de GUI
+check-gui:
+	@echo "$(BLUE)🔍 Diagnóstico de instalación GUI$(NC)"
+	@echo "$(BLUE)═══════════════════════════════════$(NC)"
+	@echo "Python ejecutable: $(PYTHON)"
+	@$(PYTHON) --version
+	@echo ""
+	@echo "Ubicación de Python:"
+	@which $(PYTHON)
+	@echo ""
+	@echo "Ubicación de pip:"
+	@which pip3 || which pip || echo "pip no encontrado"
+	@echo ""
+	@echo "Verificando paquetes GUI:"
+	@$(PYTHON) -m pip list | grep -E "customtkinter|matplotlib|Pillow" || echo "Paquetes no encontrados"
+	@echo ""
+	@echo "Intentando importar customtkinter:"
+	@$(PYTHON) -c "import customtkinter; print('✅ CustomTkinter versión:', customtkinter.__version__)" 2>&1 || echo "$(RED)❌ Error al importar$(NC)"
+	@echo ""
+	@echo "Path de Python:"
+	@$(PYTHON) -c "import sys; print('\n'.join(sys.path[:5]))"
+
+# Web Interface Commands
+install-web:
+	@echo "$(GREEN)🌐 Instalando dependencias para interfaz web...$(NC)"
+	@$(PYTHON) -m pip install -r requirements-web.txt || pip install -r requirements-web.txt
+	@echo "$(GREEN)✅ Servidor web listo para usar$(NC)"
+
+web:
+	@echo "$(GREEN)🌐 Iniciando servidor web...$(NC)"
+	@echo "$(BLUE)Verificando dependencias...$(NC)"
+	@$(PYTHON) -c "import fastapi" 2>/dev/null || (echo "$(YELLOW)Instalando dependencias web...$(NC)" && $(PYTHON) -m pip install -r requirements-web.txt)
+	@echo "$(GREEN)✅ Servidor iniciando en http://localhost:8000$(NC)"
+	@echo "$(BLUE)📚 API Docs en http://localhost:8000/docs$(NC)"
+	@echo ""
+	@$(PYTHON) disk_analyzer_web.py
 
 # Comando por defecto
 .DEFAULT_GOAL := help
