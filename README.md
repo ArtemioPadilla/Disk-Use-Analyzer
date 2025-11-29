@@ -115,7 +115,8 @@ disk-use-analyzer/
 ├── disk_analyzer.py      # Single-file analyzer (no dependencies!)
 ├── Makefile             # User-friendly commands
 ├── README.md            # You are here
-├── CLAUDE.md            # Development guide
+├── CLAUDE.md            # Claude AI development guide
+├── AGENTS.md            # General AI agent guidance
 ├── LICENSE              # MIT License
 ├── docs/                # Documentation
 │   ├── FAQ.md          # Frequently Asked Questions
