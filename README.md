@@ -2,19 +2,19 @@
 
 <div align="center">
 ![Python](https://img.shields.io/badge/python-3.6+-blue.svg)
-![Platform](https://img.shields.io/badge/platform-macOS-lightgrey.svg)
+![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg)
 ![License](https://img.shields.io/badge/license-MIT-green.svg)
 ![Dependencies](https://img.shields.io/badge/dependencies-none-brightgreen.svg)
 
-*A powerful macOS disk space analyzer with zero dependencies*
+*A powerful cross-platform disk space analyzer with zero dependencies*
 
-[Features](#features) • [Quick Start](#quick-start) • [Usage](#usage) • [Examples](#examples) • [FAQ](docs/FAQ.md)
+[Features](#features) • [Quick Start](#quick-start) • [Usage](#usage) • [Windows](#-windows) • [Examples](#examples) • [FAQ](docs/FAQ.md)
 
 </div>
 
 ## 🎯 Overview
 
-**Disk Use Analyzer** is a standalone Python tool that helps you understand and manage your macOS disk space. It generates beautiful interactive HTML reports and provides smart cleanup suggestions - all without requiring any external dependencies!
+**Disk Use Analyzer** is a standalone Python tool that helps you understand and manage your disk space on **Windows, macOS, and Linux**. It generates beautiful interactive HTML reports and provides smart cleanup suggestions - all without requiring any external dependencies!
 
 ### ✨ Key Features
 
@@ -27,8 +27,11 @@
 | ⚡ **Performance Mode** | Handles millions of files efficiently |
 | 🔒 **Safety First** | Dry-run mode and confirmation prompts |
 | 🌐 **100% Offline** | No internet connection required |
+| 💻 **Cross-Platform** | Works on Windows, macOS, and Linux |
 
 ## 🚀 Quick Start
+
+### macOS / Linux
 
 ```bash
 # Clone the repository
@@ -42,12 +45,31 @@ make check
 make analyze
 ```
 
+### Windows
+
+```powershell
+# Clone the repository
+git clone https://github.com/yourusername/disk-use-analyzer.git
+cd disk-use-analyzer
+
+# Using PowerShell (recommended)
+.\run.ps1 check
+.\run.ps1 analyze
+
+# Or using Command Prompt
+run check
+run analyze
+
+# Or run Python directly
+python disk_analyzer.py C:\
+```
+
 That's it! No `pip install`, no virtual environments, no hassle.
 
 ## 📋 Requirements
 
-- **macOS** (10.14 or later)
-- **Python 3.6+** (included with macOS)
+- **Python 3.6+** (included with macOS, download from python.org for Windows)
+- **Operating System**: Windows 10/11, macOS 10.14+, or Linux
 - **Docker Desktop** (optional, for Docker analysis)
 
 ## 🛠️ Usage
@@ -97,6 +119,49 @@ make documents   # ~/Documents
 make custom path=/path/to/analyze min_size=100
 ```
 
+## 🪟 Windows
+
+Windows users have multiple options to run the analyzer:
+
+### PowerShell (Recommended)
+
+```powershell
+# Basic analysis
+.\run.ps1 analyze
+
+# Analyze all drives
+.\run.ps1 all-drives
+
+# Quick analysis
+.\run.ps1 quick
+
+# Full report
+.\run.ps1 full
+
+# Custom path
+.\run.ps1 custom -Path "C:\Users\Me\Projects" -MinSize 100
+```
+
+### Command Prompt (Batch)
+
+```cmd
+run analyze
+run all-drives
+run quick
+run full
+run custom path=C:\Users\Me\Projects min_size=100
+```
+
+### Direct Python
+
+```powershell
+python disk_analyzer.py C:\
+python disk_analyzer.py --all-drives
+python disk_analyzer.py C:\Users\Me\Downloads --min-size 50 --html --export my_report
+```
+
+📖 For detailed Windows instructions, see [README_WINDOWS.md](README_WINDOWS.md)
+
 ## 📊 Report Features
 
 The HTML report includes:
@@ -113,8 +178,11 @@ The HTML report includes:
 ```
 disk-use-analyzer/
 ├── disk_analyzer.py      # Single-file analyzer (no dependencies!)
-├── Makefile             # User-friendly commands
+├── Makefile             # macOS/Linux commands
+├── run.ps1              # Windows PowerShell script
+├── run.bat              # Windows batch script
 ├── README.md            # You are here
+├── README_WINDOWS.md    # Windows-specific guide
 ├── CLAUDE.md            # Claude AI development guide
 ├── AGENTS.md            # General AI agent guidance
 ├── LICENSE              # MIT License
@@ -193,7 +261,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ## 🙏 Acknowledgments
 
-- Built with love for the macOS community
+- Built with love for the cross-platform community
 - Special thanks to all contributors
 
 ---
