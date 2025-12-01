@@ -192,11 +192,23 @@ switch ($Command.ToLower()) {
         Write-Host ""
         
         Write-Host "Python version:" -ForegroundColor Cyan
-        & $Python --version
+        try {
+            & $Python --version
+        }
+        catch {
+            Write-Host "Python not found. Please install Python from https://python.org" -ForegroundColor Red
+            exit 1
+        }
         Write-Host ""
         
         Write-Host "Python location:" -ForegroundColor Cyan
-        Get-Command python | Select-Object -ExpandProperty Source
+        $pythonPath = Get-Command python -ErrorAction SilentlyContinue
+        if ($pythonPath) {
+            Write-Host $pythonPath.Source
+        }
+        else {
+            Write-Host "Python not in PATH" -ForegroundColor Yellow
+        }
         Write-Host ""
         
         Write-Host "Checking Python version compatibility..." -ForegroundColor Cyan
@@ -241,7 +253,7 @@ switch ($Command.ToLower()) {
         Write-Host "Starting graphical interface..." -ForegroundColor Green
         
         # Check if customtkinter is installed
-        $hasCustomTkinter = & $Python -c "import customtkinter" 2>&1
+        & $Python -c "import customtkinter" 2>&1 | Out-Null
         if ($LASTEXITCODE -ne 0) {
             Write-Host "CustomTkinter not installed. Installing..." -ForegroundColor Yellow
             & $Python -m pip install customtkinter
@@ -262,7 +274,7 @@ switch ($Command.ToLower()) {
         Write-Host "Starting web interface..." -ForegroundColor Green
         
         # Check if fastapi is installed
-        $hasFastAPI = & $Python -c "import fastapi" 2>&1
+        & $Python -c "import fastapi" 2>&1 | Out-Null
         if ($LASTEXITCODE -ne 0) {
             Write-Host "FastAPI not installed. Installing..." -ForegroundColor Yellow
             & $Python -m pip install -r requirements-web.txt
