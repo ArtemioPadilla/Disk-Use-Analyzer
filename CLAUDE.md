@@ -2,9 +2,60 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Build and Test Commands
+
+```bash
+# Verify installation and dependencies
+make check
+
+# Run standard disk analysis
+make analyze
+
+# Quick analysis (files > 50MB only)
+make quick
+
+# Full analysis with HTML report generation
+make full
+
+# Generate HTML report
+make report
+
+# Test cleanup (ALWAYS use dry-run first)
+make clean-preview
+
+# Test on a specific small directory
+make custom path=./test min_size=1
+```
+
 ## Project Overview
 
 This is a **macOS Disk Usage Analyzer** - a powerful standalone Python tool for analyzing disk usage on macOS systems with advanced visualization capabilities, smart cleanup recommendations, and special support for Docker resources. The tool generates beautiful interactive HTML reports with tabbed navigation and category-specific analysis.
+
+## Repository Structure
+
+```
+├── disk_analyzer.py        # Main CLI tool (~2,600 lines, no dependencies)
+├── disk_analyzer_core.py   # Core analysis logic (shared module)
+├── disk_analyzer_gui.py    # GUI interface (CustomTkinter)
+├── disk_analyzer_web.py    # Web interface (FastAPI)
+├── Makefile                # User-friendly command interface
+├── Makefile.cross-platform # Cross-platform Makefile variant
+├── requirements.txt        # GUI dependencies
+├── requirements-web.txt    # Web interface dependencies
+├── docs/                   # Documentation
+│   ├── FAQ.md              # Frequently Asked Questions
+│   └── examples/           # Usage examples
+├── static/                 # Web static assets
+└── utils/                  # Helper scripts
+```
+
+## Code Style and Conventions
+
+- **Language**: User-facing CLI/GUI messages are in Spanish; code comments and documentation in English
+- **Type Hints**: Use Python type hints for all function signatures
+- **No External Dependencies**: Core CLI (`disk_analyzer.py`) uses only Python standard library
+- **Single Class Design**: Main logic is in the `DiskAnalyzer` class
+- **Safety First**: All destructive operations require confirmation and support dry-run mode
 
 ## Key Commands
 
