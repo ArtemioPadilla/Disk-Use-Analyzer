@@ -27,9 +27,54 @@ Esta herramienta ahora es completamente compatible con Windows, macOS y Linux. E
    python disk_analyzer.py --help
    ```
 
-## Uso Básico en Windows
+## 🚀 Uso Rápido
 
-### Analizar una unidad específica
+### Opción 1: PowerShell (Recomendado)
+
+```powershell
+# Ver comandos disponibles
+.\run.ps1 help
+
+# Análisis estándar
+.\run.ps1 analyze
+
+# Analizar todas las unidades
+.\run.ps1 all-drives
+
+# Análisis rápido (archivos > 50MB)
+.\run.ps1 quick
+
+# Generar reporte HTML
+.\run.ps1 full
+
+# Analizar ruta personalizada
+.\run.ps1 custom -Path "C:\Users\TuUsuario\Documents" -MinSize 100
+```
+
+### Opción 2: Command Prompt (Batch)
+
+```cmd
+REM Ver comandos disponibles
+run help
+
+REM Análisis estándar
+run analyze
+
+REM Analizar todas las unidades
+run all-drives
+
+REM Análisis rápido
+run quick
+
+REM Generar reporte HTML
+run full
+
+REM Analizar ruta personalizada
+run custom path=C:\Users\TuUsuario\Documents min_size=100
+```
+
+### Opción 3: Python Directo
+
 ```powershell
 # Analizar unidad C:
 python disk_analyzer.py C:\
@@ -41,9 +86,19 @@ python disk_analyzer.py D:\
 python disk_analyzer.py C:\Users\TuUsuario\Documents
 ```
 
+## Uso Avanzado
+
+## Uso Avanzado
+
 ### Analizar TODAS las unidades
 ```powershell
-# Esta función analiza todas las unidades disponibles
+# PowerShell
+.\run.ps1 all-drives
+
+# Batch
+run all-drives
+
+# Python
 python disk_analyzer.py --all-drives
 ```
 
@@ -119,11 +174,14 @@ python disk_analyzer.py %USERPROFILE%\Documents\GitHub --min-size 10
 
 ## Uso con Makefile (Opcional)
 
-Si tienes `make` instalado (viene con Git Bash o puedes usar [GnuWin32](http://gnuwin32.sourceforge.net/packages/make.htm)):
+Si tienes `make` instalado (viene con Git Bash, Chocolatey, o [GnuWin32](http://gnuwin32.sourceforge.net/packages/make.htm)):
 
 ```bash
-# Usar el Makefile multiplataforma
-cp Makefile.cross-platform Makefile
+# Instalar make con Chocolatey (administrador)
+choco install make
+
+# O usar el Makefile multiplataforma
+copy Makefile.cross-platform Makefile
 
 # Comandos disponibles
 make help           # Ver ayuda
@@ -131,6 +189,31 @@ make all-drives     # Analizar todas las unidades
 make c-drive        # Analizar C:
 make clean-preview  # Ver qué se puede limpiar
 ```
+
+## Comandos PowerShell Disponibles
+
+| Comando | Descripción |
+|---------|-------------|
+| `.\run.ps1 help` | Mostrar ayuda |
+| `.\run.ps1 analyze` | Análisis estándar |
+| `.\run.ps1 quick` | Análisis rápido (>50MB) |
+| `.\run.ps1 full` | Análisis completo + HTML |
+| `.\run.ps1 report` | Solo generar reporte |
+| `.\run.ps1 all-drives` | Analizar todas las unidades |
+| `.\run.ps1 c-drive` | Analizar C: |
+| `.\run.ps1 d-drive` | Analizar D: |
+| `.\run.ps1 downloads` | Analizar Downloads |
+| `.\run.ps1 documents` | Analizar Documents |
+| `.\run.ps1 apps` | Analizar Program Files |
+| `.\run.ps1 clean-preview` | Vista previa de limpieza |
+| `.\run.ps1 clean-cache` | Limpiar cache |
+| `.\run.ps1 clean-docker` | Limpiar Docker |
+| `.\run.ps1 clean-all` | Limpiar todo |
+| `.\run.ps1 check` | Verificar instalación |
+| `.\run.ps1 install-gui` | Instalar GUI |
+| `.\run.ps1 gui` | Ejecutar interfaz gráfica |
+| `.\run.ps1 install-web` | Instalar web |
+| `.\run.ps1 web` | Ejecutar interfaz web |
 
 ## Consejos para Windows
 
