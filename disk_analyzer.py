@@ -94,6 +94,43 @@ IGNORE_PATTERNS = {
     '.git/objects', 'venv', 'env', '.virtualenv', 'Docker.raw'
 }
 
+# Volúmenes APFS a excluir en macOS para evitar doble conteo por firmlinks
+MACOS_APFS_SKIP_DIRS = {
+    '/System/Volumes/Data',
+    '/System/Volumes/VM',
+    '/System/Volumes/Preboot',
+    '/System/Volumes/Update',
+    '/System/Volumes/xarts',
+    '/System/Volumes/iSCPreboot',
+    '/System/Volumes/Hardware',
+}
+
+# Prefijos de rutas del sistema que nunca deben tener comandos de borrado
+# Estas se comparan con startswith() para evitar falsos positivos por substring
+PROTECTED_PATH_PREFIXES = [
+    # Volúmenes del sistema macOS
+    '/System/Volumes/',
+    '/private/var/vm/',
+    '/var/vm/',
+    # Bibliotecas y frameworks del sistema
+    '/System/Library/',
+    '/usr/lib/',
+    '/usr/bin/',
+    '/usr/sbin/',
+    '/Library/Updates/',
+    '/private/var/folders/',
+]
+
+# Prefijos que protegen internos de apps (Contents/ dentro de un .app o .AppBundle)
+# pero NO el .app en sí (el usuario puede borrar una app entera)
+PROTECTED_APP_MARKERS = ['.app/', '.AppBundle/']
+
+# Nombres de archivo del sistema (match exacto contra el nombre, no la ruta)
+PROTECTED_FILENAMES = {'sleepimage', 'swapfile'}
+
+# Rutas raíz del sistema (match exacto de los primeros componentes)
+PROTECTED_ROOT_DIRS = {'/bin', '/sbin'}
+
 class DiskAnalyzer:
     def __init__(self, start_path: str, min_size_mb: float = 10):
         self.start_path = Path(start_path).expanduser()
@@ -140,6 +177,10 @@ class DiskAnalyzer:
         # En Windows, ignorar también archivos del sistema
         if self.is_windows:
             if path.name in ['pagefile.sys', 'hiberfil.sys', 'swapfile.sys']:
+                return True
+        # En macOS, ignorar volúmenes APFS que duplican contenido via firmlinks
+        if self.is_macos:
+            if path_str in MACOS_APFS_SKIP_DIRS:
                 return True
         return any(pattern in path_str for pattern in IGNORE_PATTERNS)
     
@@ -421,13 +462,14 @@ class DiskAnalyzer:
     def get_directory_size(self, path: Path) -> int:
         """Obtiene el tamaño de un directorio usando du"""
         try:
+            # du -sk es POSIX (macOS + Linux), du -sb es solo GNU/Linux
             result = subprocess.run(
-                ['du', '-sb', str(path)],
+                ['du', '-sk', str(path)],
                 capture_output=True,
                 text=True
             )
-            if result.returncode == 0:
-                return int(result.stdout.split()[0])
+            if result.returncode == 0 and result.stdout.strip():
+                return int(result.stdout.split()[0]) * 1024
         except:
             pass
         return 0
@@ -471,6 +513,39 @@ class DiskAnalyzer:
             self.errors.append(f"Error obteniendo uso del disco: {str(e)}")
         return {'total': 0, 'used': 0, 'available': 0, 'percent': 0}
     
+    def estimate_skipped_apfs_volumes(self) -> int:
+        """Estima el tamaño de los volúmenes APFS excluidos usando diskutil.
+        Solo cuenta volúmenes de sistema (VM, Preboot, Recovery, System, Update),
+        NO el volumen Data ya que su contenido se accede via firmlinks."""
+        if not self.is_macos:
+            return 0
+        import re
+        total = 0
+        system_roles = {'VM', 'Preboot', 'Recovery', 'System', 'Update'}
+        try:
+            result = subprocess.run(
+                ['diskutil', 'apfs', 'list'],
+                capture_output=True, text=True, timeout=15
+            )
+            if result.returncode == 0:
+                current_role = None
+                for line in result.stdout.split('\n'):
+                    # Match role: "APFS Volume Disk (Role):  disk3s6 (VM)"
+                    role_match = re.search(r'\(Role\):\s+\S+\s+\((\w+)\)', line)
+                    if not role_match:
+                        role_match = re.search(r'Role:\s+\S+\s+\((\w+)\)', line)
+                    if role_match:
+                        current_role = role_match.group(1)
+                    # Match capacity: "Capacity Consumed:  35714965504 B (35.7 GB)"
+                    elif 'Capacity Consumed' in line and current_role in system_roles:
+                        cap_match = re.search(r'Capacity Consumed:\s+(\d+)\s+B', line)
+                        if cap_match:
+                            total += int(cap_match.group(1))
+                        current_role = None
+        except Exception:
+            pass
+        return total
+
     def analyze(self):
         """Ejecuta el análisis completo"""
         print(f"🔍 Iniciando análisis de: {self.start_path}")
@@ -491,17 +566,61 @@ class DiskAnalyzer:
         
         # Analizar Docker
         self.analyze_docker()
-        
+
+        # Estimar tamaño de volúmenes APFS excluidos
+        self.skipped_volumes_size = self.estimate_skipped_apfs_volumes()
+
         elapsed_time = time.time() - start_time
-        
+
         return {
             'total_size': total_size,
             'elapsed_time': elapsed_time,
             'files_scanned': self.total_scanned
         }
     
+    def is_protected_path(self, file_path: str) -> bool:
+        """Determina si un archivo es del sistema y no debe borrarse"""
+        # Prefijos de rutas del sistema
+        if any(file_path.startswith(prefix) for prefix in PROTECTED_PATH_PREFIXES):
+            return True
+        # Rutas raíz del sistema (/bin, /sbin - no /Users/robin/)
+        parts = Path(file_path).parts
+        if len(parts) >= 2 and '/' + parts[1] in PROTECTED_ROOT_DIRS:
+            return True
+        # Internos de aplicaciones (.app/Contents/... o .AppBundle/Contents/...)
+        if '/Contents/' in file_path and any(m in file_path for m in PROTECTED_APP_MARKERS):
+            return True
+        # Nombres de archivo del sistema (match exacto)
+        if Path(file_path).name in PROTECTED_FILENAMES:
+            return True
+        return False
+
+    def _categorize_path(self, dir_path: str) -> str:
+        """Asigna una categoría a un directorio basado en su ruta"""
+        if '/Applications' in dir_path:
+            return 'Applications'
+        if '/Library' in dir_path and '/Caches' not in dir_path:
+            return 'Library'
+        if '/Documents' in dir_path and not any(x in dir_path for x in ['/repos', '/Developer']):
+            return 'Documents'
+        if '/Downloads' in dir_path:
+            return 'Downloads'
+        if any(docker in dir_path for docker in ['/.docker', '/Docker', '/Containers/com.docker']):
+            return 'Docker'
+        if any(dev in dir_path for dev in ['/Developer', '/repos', '/.npm', '/node_modules', '/.continue', '/venv', '/.cargo', '/.rustup']):
+            return 'Desarrollo'
+        if any(cache in dir_path.lower() for cache in ['/cache', '/caches', '/tmp', '/temp', '/logs']):
+            return 'Cache'
+        if any(media in dir_path for media in ['/Pictures', '/Movies', '/Music', '/Photos Library']):
+            return 'Media'
+        if 'Mobile Documents' in dir_path or 'CloudDocs' in dir_path:
+            return 'iCloud'
+        return 'Otros'
+
     def generate_delete_command(self, file_path: str) -> str:
         """Genera comando seguro para borrar un archivo"""
+        if self.is_protected_path(file_path):
+            return f"# ⚠️ ARCHIVO DEL SISTEMA - NO BORRAR: {Path(file_path).name}"
         # Escapar caracteres especiales en la ruta
         escaped_path = file_path.replace("'", "'\"'\"'")
         return f"rm -f '{escaped_path}'"
@@ -568,7 +687,7 @@ class DiskAnalyzer:
         
         # Archivos de desarrollo
         dev_files = [
-            f for f in self.large_files 
+            f for f in self.large_files
             if any(ext in f['extension'] for ext in ['.vmdk', '.vdi', '.qcow2'])
         ]
         if dev_files:
@@ -581,7 +700,39 @@ class DiskAnalyzer:
                 'space': size,
                 'command': '# Lista VMs: find . -name "*.vmdk" -o -name "*.vdi" -size +1G'
             })
-        
+
+        # Homebrew caches
+        brew_files = [
+            f for f in self.large_files
+            if 'Homebrew/downloads' in f['path']
+        ]
+        if brew_files:
+            size = sum(f['size'] for f in brew_files)
+            recommendations.append({
+                'priority': 'Alta',
+                'type': 'Cache de Homebrew',
+                'description': f'{len(brew_files)} descargas de Homebrew ocupan {self.format_size(size)}',
+                'action': 'Limpia el cache de Homebrew de forma segura',
+                'space': size,
+                'command': 'brew cleanup --prune=all'
+            })
+
+        # Simulator caches
+        sim_files = [
+            f for f in self.large_files
+            if 'CoreSimulator' in f['path'] and not self.is_protected_path(f['path'])
+        ]
+        if sim_files:
+            size = sum(f['size'] for f in sim_files)
+            recommendations.append({
+                'priority': 'Media',
+                'type': 'Cache de Simuladores iOS',
+                'description': f'{len(sim_files)} archivos de cache de simuladores ({self.format_size(size)})',
+                'action': 'Limpia caches de simuladores antiguos (se regeneran al usar Xcode)',
+                'space': size,
+                'command': 'xcrun simctl delete unavailable && rm -rf ~/Library/Developer/CoreSimulator/Caches/'
+            })
+
         return sorted(recommendations, key=lambda x: x['space'], reverse=True)
     
     def generate_report(self) -> Dict:
@@ -594,7 +745,7 @@ class DiskAnalyzer:
             self.directory_sizes.items(),
             key=lambda x: x[1],
             reverse=True
-        )[:20]  # Top 20 directorios
+        )[:100]  # Top 100 directorios (usado por Sankey y categorización)
         
         # Ordenar tipos de archivo por tamaño total
         sorted_file_types = sorted(
@@ -603,13 +754,23 @@ class DiskAnalyzer:
             reverse=True
         )[:15]  # Top 15 tipos
         
-        # Calcular espacio recuperable
+        # Calcular espacio recuperable desde archivos detectados como cache/temp
         recoverable_space = sum(loc['size'] for loc in self.cache_locations)
         old_downloads = sum(
-            f['size'] for f in self.large_files 
+            f['size'] for f in self.large_files
             if 'downloads' in f['path'].lower() and f['age_days'] > 30
         )
-        
+        # Homebrew caches
+        recoverable_space += sum(
+            f['size'] for f in self.large_files
+            if 'Homebrew/downloads' in f['path']
+        )
+        # Simulator caches (non-protected)
+        recoverable_space += sum(
+            f['size'] for f in self.large_files
+            if 'CoreSimulator' in f['path'] and not self.is_protected_path(f['path'])
+        )
+
         # Agregar espacio recuperable de Docker
         if self.docker_stats and self.docker_stats['available']:
             recoverable_space += self.docker_stats['reclaimable']
@@ -633,7 +794,8 @@ class DiskAnalyzer:
             'recommendations': self.generate_recommendations(),
             'errors': self.errors[:10],  # Primeros 10 errores
             'delete_commands': self._generate_delete_commands(self.large_files[:50]),
-            'disk_usage': self.disk_usage
+            'disk_usage': self.disk_usage,
+            'skipped_volumes_size': getattr(self, 'skipped_volumes_size', 0)
         }
         
         return report
@@ -701,7 +863,10 @@ class DiskAnalyzer:
         # Top directorios
         print(f"\n📁 TOP 10 DIRECTORIOS MÁS GRANDES:")
         for path, size in report['top_directories'][:10]:
-            rel_path = path.replace(str(self.start_path), '.')
+            if str(self.start_path) == '/':
+                rel_path = path
+            else:
+                rel_path = path.replace(str(self.start_path), '.', 1)
             print(f"   {self.format_size(size):>10} - {rel_path}")
         
         # Top tipos de archivo
@@ -742,6 +907,19 @@ class DiskAnalyzer:
         print("\n" + "="*60)
         print("✅ Análisis completado")
         print("="*60)
+
+        # Aviso de sudo solo si hay errores de permisos reales y se escaneó una porción
+        # significativa del disco (>25% del espacio usado). No mostrar cuando se
+        # analiza un subdirectorio pequeño como ~/Documents.
+        perm_errors = [e for e in self.errors if 'permisos' in e.lower()]
+        if self.disk_usage and os.geteuid() != 0 and perm_errors:
+            skipped = getattr(self, 'skipped_volumes_size', 0)
+            accounted = report['summary']['total_size'] + skipped
+            gap = self.disk_usage['used'] - accounted
+            scan_coverage = accounted / self.disk_usage['used'] if self.disk_usage['used'] > 0 else 0
+            if gap > 10 * GB and scan_coverage > 0.25:
+                print(f"\n💡 {self.format_size(int(gap))} no se pudieron analizar por falta de permisos.")
+                print("   Para un análisis completo: sudo make full path=/ min_size=250")
     
     def export_json(self, report: Dict, filename: str):
         """Exporta el reporte a JSON"""
@@ -795,6 +973,7 @@ class DiskAnalyzer:
         # Preparar archivos para la tabla interactiva
         files_data = []
         for i, f in enumerate(report['large_files'][:50]):
+            protected = self.is_protected_path(f['path'])
             files_data.append({
                 'id': i,
                 'name': Path(f['path']).name,
@@ -804,6 +983,7 @@ class DiskAnalyzer:
                 'age_days': f['age_days'],
                 'extension': f['extension'],
                 'is_cache': f['is_cache'],
+                'is_protected': protected,
                 'delete_cmd': self.generate_delete_command(f['path'])
             })
         
@@ -1145,68 +1325,72 @@ class DiskAnalyzer:
                 'Libre': '#f3f4f6'
             }
             
-            # Calcular tamaños por categoría principal
+            # Calcular tamaños por categoría usando solo hijos directos de start_path
+            # para evitar doble conteo de directorios anidados.
+            # Para directorios "contenedor" como /Users o /Users/username que no
+            # aportan categorización útil, reemplazarlos por sus hijos.
             category_sizes = {}
             analyzed_total = summary.get('total_size', 0)
+
+            # Obtener hijos directos del directorio analizado
+            start_path_str = str(self.start_path)
+            direct_children = {}
+            for dir_path, size in self.directory_sizes.items():
+                parent = str(Path(dir_path).parent)
+                if parent == start_path_str and dir_path != start_path_str:
+                    direct_children[dir_path] = size
+
+            # Expandir directorios "contenedor" que se categorizan como Otros
+            # pero tienen hijos con categorías más útiles (ej: /Users -> /Users/me/Library)
+            expanded = {}
+            for dir_path, size in direct_children.items():
+                if self._categorize_path(dir_path) == 'Otros':
+                    # Buscar hijos de este directorio para categorizar mejor
+                    children_found = {}
+                    children_total = 0
+                    for sub_path, sub_size in self.directory_sizes.items():
+                        sub_parent = str(Path(sub_path).parent)
+                        if sub_parent == dir_path:
+                            children_found[sub_path] = sub_size
+                            children_total += sub_size
+                    if children_found:
+                        for child_path, child_size in children_found.items():
+                            # Recursivamente expandir (ej: /Users -> /Users/me -> /Users/me/Library)
+                            if self._categorize_path(child_path) == 'Otros':
+                                grandchildren = {}
+                                for gp, gs in self.directory_sizes.items():
+                                    if str(Path(gp).parent) == child_path:
+                                        grandchildren[gp] = gs
+                                if grandchildren:
+                                    for gp, gs in grandchildren.items():
+                                        expanded[gp] = gs
+                                    # Espacio de archivos sueltos en el directorio hijo
+                                    gc_total = sum(grandchildren.values())
+                                    if child_size > gc_total:
+                                        expanded[child_path + '/_files'] = child_size - gc_total
+                                else:
+                                    expanded[child_path] = child_size
+                            else:
+                                expanded[child_path] = child_size
+                        # Espacio de archivos sueltos en el directorio padre
+                        if size > children_total:
+                            expanded[dir_path + '/_files'] = size - children_total
+                    else:
+                        expanded[dir_path] = size
+                else:
+                    expanded[dir_path] = size
+
+            # Categorizar cada entrada (sin solapamiento)
+            for dir_path, size in expanded.items():
+                category = self._categorize_path(dir_path)
+                category_sizes[category] = category_sizes.get(category, 0) + size
             
-            # Categorizar directorios
-            for dir_path, size in report.get('top_directories', [])[:100]:  # Analizar más directorios
-                categorized = False
-                
-                # Aplicaciones
-                if '/Applications' in dir_path:
-                    category_sizes['Applications'] = category_sizes.get('Applications', 0) + size
-                    categorized = True
-                
-                # Sistema y Library
-                elif '/Library' in dir_path and '/Caches' not in dir_path:
-                    category_sizes['Library'] = category_sizes.get('Library', 0) + size
-                    categorized = True
-                
-                # Documentos
-                elif '/Documents' in dir_path and not any(x in dir_path for x in ['/repos', '/Developer']):
-                    category_sizes['Documents'] = category_sizes.get('Documents', 0) + size
-                    categorized = True
-                
-                # Descargas
-                elif '/Downloads' in dir_path:
-                    category_sizes['Downloads'] = category_sizes.get('Downloads', 0) + size
-                    categorized = True
-                
-                # Docker
-                elif any(docker in dir_path for docker in ['/.docker', '/Docker', '/Containers/com.docker']):
-                    category_sizes['Docker'] = category_sizes.get('Docker', 0) + size
-                    categorized = True
-                
-                # Desarrollo (incluye repos)
-                elif any(dev in dir_path for dev in ['/Developer', '/repos', '/.npm', '/node_modules', '/.continue', '/venv', '/.cargo', '/.rustup']):
-                    category_sizes['Desarrollo'] = category_sizes.get('Desarrollo', 0) + size
-                    categorized = True
-                
-                # Cache y temporales
-                elif any(cache in dir_path.lower() for cache in ['/cache', '/caches', '/tmp', '/temp', '/logs']):
-                    category_sizes['Cache'] = category_sizes.get('Cache', 0) + size
-                    categorized = True
-                
-                # Media (fotos, videos, música)
-                elif any(media in dir_path for media in ['/Pictures', '/Movies', '/Music', '/Photos Library']):
-                    category_sizes['Media'] = category_sizes.get('Media', 0) + size
-                    categorized = True
-                
-                # iCloud
-                elif 'Mobile Documents' in dir_path or 'CloudDocs' in dir_path:
-                    category_sizes['iCloud'] = category_sizes.get('iCloud', 0) + size
-                    categorized = True
-                
-                # Si no se categorizó, va a Otros
-                if not categorized:
-                    category_sizes['Otros'] = category_sizes.get('Otros', 0) + size
-            
-            # Agregar Docker stats si está disponible
+            # Agregar Docker stats solo si NO fue cubierto por el escaneo de directorios
+            # (evitar doble conteo: el scan ya recorre ~/Library/Containers/com.docker.docker)
             if report.get('docker') and report['docker'].get('available'):
                 docker_size = report['docker'].get('total_size', 0)
-                if docker_size > 0:
-                    category_sizes['Docker'] = category_sizes.get('Docker', 0) + docker_size
+                if docker_size > 0 and 'Docker' not in category_sizes:
+                    category_sizes['Docker'] = docker_size
             
             # Calcular porcentajes
             for cat, size in sorted(category_sizes.items(), key=lambda x: x[1], reverse=True):
@@ -1219,11 +1403,22 @@ class DiskAnalyzer:
                         'color': colors.get(cat, '#6b7280')
                     })
             
-            # Agregar espacio no analizado si hay diferencia
-            unanalyzed = disk_usage['used'] - analyzed_total
+            # Agregar volúmenes del sistema excluidos (VM, Preboot, etc.)
+            skipped_size = report.get('skipped_volumes_size', 0)
+            if skipped_size > 0:
+                categories.append({
+                    'name': 'Sistema (macOS)',
+                    'size': skipped_size,
+                    'percent': (skipped_size / disk_usage['total']) * 100,
+                    'color': '#94a3b8'
+                })
+
+            # Espacio sin permisos de lectura (requiere sudo para acceder)
+            accounted = analyzed_total + skipped_size
+            unanalyzed = disk_usage['used'] - accounted
             if unanalyzed > 0:
                 categories.append({
-                    'name': 'Sin analizar',
+                    'name': 'Sin permisos (sudo)',
                     'size': unanalyzed,
                     'percent': (unanalyzed / disk_usage['total']) * 100,
                     'color': colors['Sin analizar']
@@ -1242,16 +1437,20 @@ class DiskAnalyzer:
             <h2>💽 Uso del Disco</h2>
             <div class="disk-usage-bar" style="position: relative; height: 80px; border-radius: 12px; overflow: hidden; margin-bottom: 1rem; box-shadow: 0 2px 8px rgba(0,0,0,0.1);">'''
             
-            # Generar segmentos de la barra
+            # Generar segmentos de la barra (con cap a 100%)
             left_position = 0
             segment_id = 0
             for cat in categories:
-                if cat['percent'] > 0.5:  # Solo mostrar si es más del 0.5%
+                remaining = 100.0 - left_position
+                if remaining <= 0:
+                    break
+                segment_width = min(cat['percent'], remaining)
+                if segment_width > 0.5:  # Solo mostrar si es más del 0.5%
                     # Determinar si el texto debe mostrarse basado en el ancho
-                    show_text = cat['percent'] > 5  # Mostrar texto solo si es más del 5%
+                    show_text = segment_width > 5  # Mostrar texto solo si es más del 5%
                     html += f'''
                 <div class="disk-segment" data-category="{cat['name']}" data-size="{cat['size']}" data-percent="{cat['percent']:.1f}"
-                     style="position: absolute; left: {left_position}%; width: {cat['percent']}%; height: 100%; 
+                     style="position: absolute; left: {left_position}%; width: {segment_width}%; height: 100%; 
                             background: {cat['color']}; display: flex; align-items: center; justify-content: center;
                             border-right: 1px solid rgba(255,255,255,0.2); cursor: pointer; transition: all 0.2s ease;
                             overflow: hidden;" 
@@ -1281,7 +1480,7 @@ class DiskAnalyzer:
                     
                     html += '''
                 </div>'''
-                    left_position += cat['percent']
+                    left_position += segment_width
                     segment_id += 1
             
             html += f'''
@@ -1289,8 +1488,8 @@ class DiskAnalyzer:
             
             <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 0.75rem; margin-bottom: 1rem;">'''
             
-            # Leyenda de categorías - excluir "Libre" y "Sin analizar" de la leyenda principal
-            display_categories = [cat for cat in categories if cat['name'] not in ['Libre', 'Sin analizar']][:10]
+            # Leyenda de categorías - excluir "Libre" y "Sin permisos" de la leyenda principal
+            display_categories = [cat for cat in categories if cat['name'] not in ['Libre', 'Sin permisos (sudo)']][:10]
             
             for cat in display_categories:
                 # Determinar icono según categoría
@@ -1327,13 +1526,28 @@ class DiskAnalyzer:
             
             html += f'''
             </div>
-            
-            <div style="display: flex; justify-content: space-between; color: var(--gray); font-size: 0.875rem; 
+
+            <div style="display: flex; justify-content: space-between; color: var(--gray); font-size: 0.875rem;
                         padding-top: 1rem; border-top: 1px solid var(--border);">
                 <span><strong>Usado:</strong> {self.format_size(disk_usage['used'])} ({percent_used:.1f}%)</span>
                 <span><strong>Libre:</strong> {self.format_size(disk_usage['available'])} ({100-percent_used:.1f}%)</span>
                 <span><strong>Total:</strong> {self.format_size(disk_usage['total'])}</span>
-            </div>
+            </div>'''
+
+            # Mostrar aviso de sudo solo si hay errores de permisos reales y cobertura >25%
+            accounted_for_hint = analyzed_total + report.get('skipped_volumes_size', 0)
+            permission_gap = disk_usage['used'] - accounted_for_hint
+            scan_coverage = accounted_for_hint / disk_usage['used'] if disk_usage['used'] > 0 else 0
+            perm_errors = [e for e in report.get('errors', []) if 'permisos' in e.lower()]
+            if permission_gap > 10 * GB and os.geteuid() != 0 and scan_coverage > 0.25 and perm_errors:
+                html += f'''
+            <div style="margin-top: 0.75rem; padding: 0.75rem 1rem; background: #fef3c7; border: 1px solid #f59e0b;
+                        border-radius: 8px; font-size: 0.8rem; color: #92400e;">
+                <strong>💡 Tip:</strong> {self.format_size(int(permission_gap))} del disco no se pudieron analizar por falta de permisos.
+                Para un análisis completo ejecuta: <code style="background: #fde68a; padding: 2px 6px; border-radius: 4px;">sudo make full path=/ min_size=250</code>
+            </div>'''
+
+            html += '''
         </div>'''
         
         html += f'''
@@ -1375,7 +1589,8 @@ class DiskAnalyzer:
             active_class = 'active' if idx == 0 else ''
             category_display = category_key.capitalize()
             if category_key == 'general':
-                category_display = f'Vista General ({Path(self.start_path).name})'
+                dir_name = Path(self.start_path).name or str(self.start_path)
+                category_display = f'Vista General ({dir_name})'
             
             # Obtener el tamaño total de la categoría
             if category_key != 'general' and 'totalSize' in sankey_data:
@@ -1585,21 +1800,33 @@ class DiskAnalyzer:
         for file_data in files_data:
             age_str = f"{file_data['age_days']}d" if file_data['age_days'] >= 0 else "N/A"
             cache_badge = '<span class="badge cache">Cache</span>' if file_data['is_cache'] else ''
-            
-            # Escapar comillas en el comando para el atributo data
-            delete_cmd_escaped = file_data['delete_cmd'].replace('"', '&quot;').replace("'", '&apos;')
-            
-            html += f'''
-                            <tr>
-                                <td>
-                                    <input type="checkbox" class="checkbox file-checkbox" 
-                                           data-id="{file_data['id']}" 
+            is_protected = file_data.get('is_protected', False)
+
+            if is_protected:
+                protected_badge = '<span class="badge" style="background: #ef4444; color: white;">🔒 Sistema</span>'
+                checkbox_html = f'''<input type="checkbox" class="checkbox file-checkbox"
+                                           data-id="{file_data['id']}"
+                                           data-size="{file_data['size']}"
+                                           data-cmd=""
+                                           disabled title="Archivo del sistema - no se puede borrar">'''
+                row_style = 'opacity: 0.6;'
+            else:
+                protected_badge = ''
+                delete_cmd_escaped = file_data['delete_cmd'].replace('"', '&quot;').replace("'", '&apos;')
+                checkbox_html = f'''<input type="checkbox" class="checkbox file-checkbox"
+                                           data-id="{file_data['id']}"
                                            data-size="{file_data['size']}"
                                            data-cmd="{delete_cmd_escaped}"
-                                           onchange="updateSelection()">
+                                           onchange="updateSelection()">'''
+                row_style = ''
+
+            html += f'''
+                            <tr style="{row_style}">
+                                <td>
+                                    {checkbox_html}
                                 </td>
                                 <td>
-                                    <div class="file-name">{file_data['name']}</div>
+                                    <div class="file-name">{file_data['name']} {protected_badge}</div>
                                     <div class="file-path">{file_data['path']}</div>
                                 </td>
                                 <td style="font-weight: 600; color: var(--primary);">{file_data['size_formatted']}</td>
@@ -1687,6 +1914,7 @@ class DiskAnalyzer:
             const sankeyTrace = {{
                 type: "sankey",
                 orientation: "h",
+                arrangement: "fixed",
                 node: {{
                     pad: 15,
                     thickness: 20,
@@ -1696,6 +1924,8 @@ class DiskAnalyzer:
                     }},
                     label: sankeyData.labels,
                     color: sankeyData.colors,
+                    x: sankeyData.nodeX || undefined,
+                    y: sankeyData.nodeY || undefined,
                     hovertemplate: '%{{label}}<extra></extra>'
                 }},
                 link: {{
@@ -1894,7 +2124,7 @@ class DiskAnalyzer:
         function toggleAll(checkbox) {
             const checkboxes = document.querySelectorAll('.file-checkbox');
             checkboxes.forEach(cb => {
-                cb.checked = checkbox.checked;
+                if (!cb.disabled) cb.checked = checkbox.checked;
             });
             updateSelection();
         }
@@ -1948,7 +2178,7 @@ class DiskAnalyzer:
             ];
             
             selectedFiles.forEach(file => {
-                commands.push(file.cmd.replace(/&quot;/g, '"').replace(/&apos;/g, "'"));
+                if (file.cmd) commands.push(file.cmd.replace(/&quot;/g, '"').replace(/&apos;/g, "'"));
             });
             
             const script = commands.join('\\n');
@@ -1993,6 +2223,17 @@ class DiskAnalyzer:
         
         return html
     
+    @staticmethod
+    def _deduplicate_dirs(dirs: List[Tuple[str, int]]) -> List[Tuple[str, int]]:
+        """Filtra directorios anidados: si /a y /a/b están en la lista, solo queda /a."""
+        sorted_dirs = sorted(dirs, key=lambda x: x[0])
+        result = []
+        for path, size in sorted_dirs:
+            # Verificar si algún directorio ya agregado es padre de este
+            if not any(path.startswith(parent + '/') for parent, _ in result):
+                result.append((path, size))
+        return result
+
     def _prepare_sankey_data_by_category(self, report: Dict) -> Dict:
         """Prepara datos Sankey separados por categoría"""
         all_sankeys = {}
@@ -2044,9 +2285,10 @@ class DiskAnalyzer:
                         break
             
             if category_dirs and len(category_dirs) > 2:  # Solo si hay suficientes datos
-                # Crear un mini-report para esta categoría
+                # Usar dirs deduplicados para el total (evitar contar /a + /a/b)
+                deduped = self._deduplicate_dirs(category_dirs)
                 category_report = {
-                    'summary': {'total_size': sum(size for _, size in category_dirs)},
+                    'summary': {'total_size': sum(size for _, size in deduped)},
                     'top_directories': category_dirs[:20],  # Limitar a top 20
                     'disk_usage': report.get('disk_usage', {})
                 }
@@ -2083,8 +2325,9 @@ class DiskAnalyzer:
                         break
             
             if otros_dirs:
+                deduped_otros = self._deduplicate_dirs(otros_dirs)
                 otros_report = {
-                    'summary': {'total_size': sum(size for _, size in otros_dirs)},
+                    'summary': {'total_size': sum(size for _, size in deduped_otros)},
                     'top_directories': otros_dirs[:20],  # Limitar a top 20
                     'disk_usage': report.get('disk_usage', {})
                 }
@@ -2241,13 +2484,19 @@ class DiskAnalyzer:
                 ])
         
         elif category_name == 'Otros':
-            # Para "Otros", generar comandos basados en los directorios más grandes
-            for path, size in category_dirs[:5]:
-                if size > 1 * GB:  # Solo directorios > 1GB
+            # Para "Otros", generar comandos solo para directorios del usuario
+            # Excluir directorios del sistema que no son accionables
+            system_roots = {'/Users', '/System', '/private', '/usr', '/bin', '/sbin',
+                            '/var', '/etc', '/tmp', '/cores', '/opt'}
+            for path, size in category_dirs[:10]:
+                if size > 1 * GB:
                     dir_name = Path(path).name
+                    # Solo sugerir directorios que el usuario puede revisar
+                    if path in system_roots or Path(path).parent == Path('/'):
+                        continue
                     commands.append({
                         'description': f'Revisar directorio grande: {dir_name}',
-                        'command': f'ls -lah "{path}"',
+                        'command': f'du -sh "{path}"/* | sort -hr | head -20',
                         'risk': 'N/A',
                         'space_estimate': self.format_size(size)
                     })
@@ -2515,14 +2764,15 @@ class DiskAnalyzer:
         return base_color
     
     def _prepare_sankey_data(self, report: Dict) -> Dict:
-        """Prepara los datos para el diagrama Sankey - versión corregida"""
+        """Prepara datos para el diagrama Sankey con conservación de flujo.
+        Regla: para cada nodo, sum(outflows) == inflow. Si los hijos visibles
+        no cubren el total del padre, se agrega un flujo residual 'otros'."""
         labels = []
         source = []
         target = []
         value = []
         colors = []
-        
-        # Colores para diferentes tipos
+
         color_map = {
             'root': '#1f2937',
             'containers': '#f59e0b',
@@ -2537,145 +2787,128 @@ class DiskAnalyzer:
             'library': '#8b5cf6',
             'default': '#94a3b8'
         }
-        
-        # Nodo raíz del análisis
-        root_path = str(self.start_path)
+
+        root_path = str(Path(self.start_path).resolve())
         root_name = Path(root_path).name or 'Directorio'
         total_analyzed = report['summary']['total_size']
-        
+
         labels.append(f"{root_name}\n{self.format_size(total_analyzed)}")
         colors.append(color_map.get(root_name.lower(), color_map['root']))
-        
-        # Crear un mapa de directorios y sus índices
-        dir_map = {root_path: 0}
+
+        # Construir mapa de hijos directos desde directory_sizes
         dir_children = defaultdict(list)
-        
-        # Procesar todos los directorios para entender la jerarquía
-        all_dirs = {}
         for path, size in report['top_directories']:
-            # Normalizar la ruta
             abs_path = str(Path(path).resolve())
-            all_dirs[abs_path] = size
-            
-            # Encontrar el padre
             parent_path = str(Path(abs_path).parent)
-            abs_root_path = str(Path(root_path).resolve())
-            
-            if parent_path in all_dirs or parent_path == abs_root_path:
+            if abs_path != root_path:
                 dir_children[parent_path].append((abs_path, size))
-        
-        # Función para agregar directorios recursivamente
-        def add_directory(parent_path, parent_idx, level=0, max_level=2):
+
+        dir_map = {root_path: 0}
+        node_depths = {0: 0}  # Track depth (column) for each node
+        node_sizes = {0: total_analyzed}
+        node_parents = {}  # child_idx -> parent_idx
+
+        def get_color(name):
+            for key in color_map:
+                if key in name.lower():
+                    return color_map[key]
+            return color_map['default']
+
+        def add_directory(parent_path, parent_idx, parent_size, level=0, max_level=2):
             if level > max_level:
                 return
-                
-            # Obtener hijos directos
+
             children = dir_children.get(parent_path, [])
-            
-            # Ordenar por tamaño descendente para mejor visualización
             children.sort(key=lambda x: x[1], reverse=True)
-            
-            # Limitar número de hijos mostrados por nivel
-            max_children = 10 if level == 0 else 5
-            
-            for child_path, child_size in children[:max_children]:
-                # No agregar si ya está en el mapa
+
+            min_size = parent_size * 0.02
+            max_children = 8 if level == 0 else 5
+
+            shown_total = 0
+            shown_count = 0
+
+            for child_path, child_size in children:
                 if child_path in dir_map:
                     continue
-                
-                # Solo agregar si es significativo (>1% del total)
-                if child_size / total_analyzed < 0.01:
-                    continue
-                
+                if child_size < min_size or shown_count >= max_children:
+                    break
+
                 dir_name = Path(child_path).name
-                
-                # Truncar nombres muy largos
                 if len(dir_name) > 30:
                     dir_name = dir_name[:27] + "..."
-                
-                # Determinar color
-                dir_color = color_map['default']
-                for key in color_map:
-                    if key in dir_name.lower():
-                        dir_color = color_map[key]
-                        break
-                
-                # Agregar nodo
+
                 node_idx = len(labels)
                 labels.append(f"{dir_name}\n{self.format_size(child_size)}")
-                colors.append(dir_color)
+                colors.append(get_color(dir_name))
                 dir_map[child_path] = node_idx
-                
-                # Agregar enlace
+                node_depths[node_idx] = level + 1
+                node_sizes[node_idx] = child_size
+                node_parents[node_idx] = parent_idx
+
                 source.append(parent_idx)
                 target.append(node_idx)
                 value.append(child_size)
-                
-                # Recursivamente agregar hijos de este directorio
-                add_directory(child_path, node_idx, level + 1, max_level)
-        
-        # Construir el árbol desde la raíz
-        abs_root_path = str(Path(root_path).resolve())
-        dir_map[abs_root_path] = 0  # Actualizar el mapa con la ruta absoluta
-        add_directory(abs_root_path, 0)
-        
-        # Agrupar directorios pequeños en "Otros"
-        if len(source) > 15:  # Si hay muchos nodos, agrupar los pequeños
-            # Calcular el tamaño total de nodos pequeños
-            small_nodes = []
-            small_total = 0
-            threshold = total_analyzed * 0.02  # 2% del total
-            
-            # Identificar nodos pequeños (no incluir el root)
-            for i in range(len(source)):
-                if value[i] < threshold and target[i] != 0:
-                    small_nodes.append(i)
-                    small_total += value[i]
-            
-            # Si hay suficientes nodos pequeños, agruparlos
-            if len(small_nodes) > 3 and small_total > 0:
-                # Remover nodos pequeños
-                for idx in reversed(sorted(small_nodes)):
-                    del source[idx]
-                    del target[idx]
-                    del value[idx]
-                
-                # Agregar nodo "Otros"
+                shown_total += child_size
+                shown_count += 1
+
+                add_directory(child_path, node_idx, child_size, level + 1, max_level)
+
+            residual = parent_size - shown_total
+            if shown_count > 0 and residual > parent_size * 0.05:
                 otros_idx = len(labels)
-                labels.append(f"Otros ({len(small_nodes)} directorios)\n{self.format_size(small_total)}")
-                colors.append('#94a3b8')
-                source.append(0)
+                labels.append(f"otros\n{self.format_size(int(residual))}")
+                colors.append('#d1d5db')
+                node_depths[otros_idx] = level + 1
+                node_sizes[otros_idx] = int(residual)
+                node_parents[otros_idx] = parent_idx
+                source.append(parent_idx)
                 target.append(otros_idx)
-                value.append(small_total)
-        
-        # Si algunos directorios grandes no fueron agregados (huérfanos), agregarlos a la raíz
-        # Ya vienen ordenados por tamaño desde top_directories
-        for path, size in report['top_directories'][:10]:
-            abs_path = str(Path(path).resolve())
-            if abs_path not in dir_map and abs_path != abs_root_path:
-                # Verificar si es significativo
-                if size / total_analyzed < 0.01:
-                    continue
-                    
-                dir_name = Path(abs_path).name
-                if len(dir_name) > 30:
-                    dir_name = dir_name[:27] + "..."
-                
-                # Determinar color
-                dir_color = color_map['default']
-                for key in color_map:
-                    if key in dir_name.lower():
-                        dir_color = color_map[key]
-                        break
-                
-                # Agregar como hijo de la raíz si no tiene padre en el gráfico
-                node_idx = len(labels)
-                labels.append(f"{dir_name}\n{self.format_size(size)}")
-                colors.append(dir_color)
-                
-                source.append(0)  # Conectar a la raíz
-                target.append(node_idx)
-                value.append(size)
+                value.append(int(residual))
+
+        add_directory(root_path, 0, total_analyzed)
+
+        # Compute x/y positions to minimize crossings.
+        # x = column based on depth, y = position within column sorted by
+        # parent position first, then by size descending. This keeps children
+        # adjacent to their parent and ordered by size.
+        max_depth = max(node_depths.values()) if node_depths else 0
+        node_x = {}
+        node_y = {}
+
+        if max_depth > 0:
+            # Group nodes by depth
+            depth_groups = defaultdict(list)
+            for idx, depth in node_depths.items():
+                depth_groups[depth].append(idx)
+
+            # Sort each column: by parent's y-position, then by size descending
+            # This ensures children are near their parent vertically
+            for depth in range(max_depth + 1):
+                nodes_at_depth = depth_groups[depth]
+                if depth == 0:
+                    # Root node centered
+                    for idx in nodes_at_depth:
+                        node_x[idx] = 0.001  # Plotly doesn't like exact 0
+                        node_y[idx] = 0.001
+                else:
+                    # Sort by: parent y-position (primary), then size desc (secondary)
+                    nodes_at_depth.sort(key=lambda idx: (
+                        node_y.get(node_parents.get(idx, 0), 0),
+                        -node_sizes.get(idx, 0)
+                    ))
+
+                    x_pos = min(depth / max_depth, 0.999)
+                    total_size_at_depth = sum(node_sizes.get(idx, 0) for idx in nodes_at_depth)
+                    y_cursor = 0.001
+
+                    for idx in nodes_at_depth:
+                        node_x[idx] = x_pos
+                        node_y[idx] = min(y_cursor, 0.999)
+                        # Space proportional to size
+                        if total_size_at_depth > 0:
+                            y_cursor += (node_sizes.get(idx, 0) / total_size_at_depth) * 0.998
+                        else:
+                            y_cursor += 1.0 / len(nodes_at_depth)
         
         # Calcular el contexto del disco
         disk_context = None
@@ -2726,6 +2959,10 @@ class DiskAnalyzer:
             else:
                 link_colors.append('rgba(139, 92, 246, 0.3)')
         
+        # Build position arrays for all nodes
+        x_positions = [node_x.get(i, 0.5) for i in range(len(labels))]
+        y_positions = [node_y.get(i, 0.5) for i in range(len(labels))]
+
         return {
             'labels': labels,
             'source': source,
@@ -2733,6 +2970,8 @@ class DiskAnalyzer:
             'value': value,
             'colors': colors,
             'linkColors': link_colors,
+            'nodeX': x_positions,
+            'nodeY': y_positions,
             'diskContext': disk_context
         }
     
@@ -2801,6 +3040,7 @@ class DiskAnalyzer:
             if safe_to_clean and path.exists():
                 if dry_run:
                     print(f"   • Limpiaría: {cache_loc['type']} - {self.format_size(cache_loc['size'])}")
+                    total_cleaned += cache_loc['size']
                 else:
                     try:
                         if path.is_file():

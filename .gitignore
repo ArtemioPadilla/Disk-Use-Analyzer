@@ -1,0 +1,39 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+ENV/
+.venv
+
+# Virtual environments
+bin/
+lib/
+include/
+share/
+pyvenv.cfg
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# macOS
+.DS_Store
+
+# Analysis outputs
+disk_report_*.html
+disk_report_*.json
+*.log
+
+# Web interface
+sessions_metadata.json
+static/node_modules/
+
+# Temporary files
+*.tmp
+*.temp
