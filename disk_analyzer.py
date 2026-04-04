@@ -1017,6 +1017,38 @@ class DiskAnalyzer:
             --light: #f9fafb;
             --gray: #6b7280;
             --border: #e5e7eb;
+            --card-bg: white;
+            --code-bg: #1f2937;
+            --hover-bg: rgba(0,0,0,0.02);
+            --text-secondary: rgba(255,255,255,0.9);
+        }}
+
+        [data-theme="dark"] {{
+            --primary: #818cf8;
+            --primary-dark: #6366f1;
+            --secondary: #a78bfa;
+            --dark: #f1f5f9;
+            --light: #0f172a;
+            --gray: #94a3b8;
+            --border: #334155;
+            --card-bg: #1e293b;
+            --code-bg: #0f172a;
+            --hover-bg: rgba(255,255,255,0.03);
+        }}
+
+        @media (prefers-color-scheme: dark) {{
+            :root:not([data-theme="light"]) {{
+                --primary: #818cf8;
+                --primary-dark: #6366f1;
+                --secondary: #a78bfa;
+                --dark: #f1f5f9;
+                --light: #0f172a;
+                --gray: #94a3b8;
+                --border: #334155;
+                --card-bg: #1e293b;
+                --code-bg: #0f172a;
+                --hover-bg: rgba(255,255,255,0.03);
+            }}
         }}
         
         * {{ margin: 0; padding: 0; box-sizing: border-box; }}
@@ -1042,7 +1074,7 @@ class DiskAnalyzer:
         }}
         
         .stat-card {{
-            background: white;
+            background: var(--card-bg);
             border-radius: 16px;
             padding: 1.5rem;
             box-shadow: 0 1px 3px rgba(0,0,0,0.1);
@@ -1082,7 +1114,7 @@ class DiskAnalyzer:
         }}
         
         .card {{
-            background: white;
+            background: var(--card-bg);
             border-radius: 16px;
             padding: 1.5rem;
             box-shadow: 0 1px 3px rgba(0,0,0,0.1);
@@ -1111,7 +1143,7 @@ class DiskAnalyzer:
         #sankeyChart {{ width: 100%; height: 500px; }}
         
         .recommendation {{
-            background: var(--light);
+            background: var(--hover-bg);
             border-radius: 12px;
             padding: 1rem;
             margin-bottom: 1rem;
@@ -1144,8 +1176,8 @@ class DiskAnalyzer:
         .priority.baja {{ background: rgba(16, 185, 129, 0.1); color: var(--success); }}
         
         .command-box {{
-            background: var(--dark);
-            color: white;
+            background: var(--code-bg);
+            color: #e2e8f0;
             padding: 0.75rem 1rem;
             border-radius: 8px;
             font-family: 'SF Mono', Monaco, monospace;
@@ -1202,7 +1234,7 @@ class DiskAnalyzer:
         .action-bar {{
             position: sticky;
             bottom: 0;
-            background: white;
+            background: var(--card-bg);
             border-top: 2px solid var(--border);
             padding: 1rem;
             display: flex;
@@ -1245,7 +1277,7 @@ class DiskAnalyzer:
         }}
         
         .modal-content {{
-            background: white;
+            background: var(--card-bg);
             border-radius: 16px;
             padding: 2rem;
             max-width: 600px;
@@ -1303,9 +1335,39 @@ class DiskAnalyzer:
             .dashboard-grid {{ grid-template-columns: 1fr; }}
             .col-span-4, .col-span-6, .col-span-8 {{ grid-column: span 1; }}
         }}
+
+        .theme-toggle {{
+            position: fixed;
+            top: 1rem;
+            right: 1rem;
+            z-index: 100;
+            background: var(--card-bg);
+            border: 1px solid var(--border);
+            border-radius: 999px;
+            padding: 0.5rem 1rem;
+            cursor: pointer;
+            font-size: 1.1rem;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+            transition: all 0.2s ease;
+            color: var(--dark);
+        }}
+        .theme-toggle:hover {{ transform: scale(1.05); }}
+
+        .file-table th, .file-table td {{ color: var(--dark); }}
+        .file-table thead {{ background: var(--light); }}
+        .file-table tr:nth-child(even) {{ background: var(--hover-bg); }}
+        .badge {{ white-space: nowrap; }}
     </style>
+    <script>
+        // Theme: system default, toggleable, persisted
+        (function() {{
+            const saved = localStorage.getItem('disk-analyzer-theme');
+            if (saved) document.documentElement.setAttribute('data-theme', saved);
+        }})();
+    </script>
 </head>
 <body>
+    <button class="theme-toggle" onclick="toggleTheme()" title="Toggle dark/light mode" id="themeBtn">🌙</button>
     <div class="container">
         <div class="header">
             <h1>💾 Disk Analyzer Dashboard</h1>
@@ -1523,10 +1585,8 @@ class DiskAnalyzer:
                 icon = icons.get(cat['name'], '📁')
                 
                 html += f'''
-                <div style="display: flex; align-items: center; gap: 0.5rem; padding: 0.5rem; border-radius: 8px; 
-                            background: rgba(0,0,0,0.02); transition: all 0.2s ease;"
-                     onmouseover="this.style.background='rgba(0,0,0,0.05)'"
-                     onmouseout="this.style.background='rgba(0,0,0,0.02)'">
+                <div style="display: flex; align-items: center; gap: 0.5rem; padding: 0.5rem; border-radius: 8px;
+                            background: var(--hover-bg); transition: all 0.2s ease;">
                     <div style="width: 20px; height: 20px; background: {cat['color']}; border-radius: 6px; 
                                 box-shadow: 0 1px 3px rgba(0,0,0,0.1);"></div>
                     <div style="flex: 1;">
@@ -2232,6 +2292,36 @@ class DiskAnalyzer:
                 closeModal();
             }
         }
+
+        // Theme toggle
+        function toggleTheme() {
+            const root = document.documentElement;
+            const current = root.getAttribute('data-theme');
+            const isDarkSystem = window.matchMedia('(prefers-color-scheme: dark)').matches;
+
+            let next;
+            if (!current) {
+                // No explicit preference — system is active, toggle away from it
+                next = isDarkSystem ? 'light' : 'dark';
+            } else if (current === 'dark') {
+                next = 'light';
+            } else {
+                next = 'dark';
+            }
+
+            root.setAttribute('data-theme', next);
+            localStorage.setItem('disk-analyzer-theme', next);
+            updateThemeIcon();
+        }
+
+        function updateThemeIcon() {
+            const root = document.documentElement;
+            const theme = root.getAttribute('data-theme');
+            const isDarkSystem = window.matchMedia('(prefers-color-scheme: dark)').matches;
+            const isDark = theme === 'dark' || (!theme && isDarkSystem);
+            document.getElementById('themeBtn').textContent = isDark ? '☀️' : '🌙';
+        }
+        updateThemeIcon();
     </script>
 </body>
 </html>'''
@@ -2537,7 +2627,7 @@ class DiskAnalyzer:
             }.get(cmd.get('risk', 'N/A'), 'var(--gray)')
             
             html += f'''
-                    <div style="border: 1px solid var(--border); border-radius: 8px; padding: 1rem; background: white;">
+                    <div style="border: 1px solid var(--border); border-radius: 8px; padding: 1rem; background: var(--card-bg);">
                         <div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 0.5rem;">
                             <strong style="color: var(--dark); font-size: 0.9rem;">{cmd['description']}</strong>
                             <span style="background: {risk_color}; color: white; padding: 0.25rem 0.5rem; border-radius: 4px; font-size: 0.75rem;">
@@ -2566,7 +2656,7 @@ class DiskAnalyzer:
         html = f'''
             <div style="margin-bottom: 1.5rem;">
                 <h4 style="margin: 0 0 0.75rem 0; color: var(--primary); font-size: 1rem;">📁 Archivos Más Grandes ({len(large_files)})</h4>
-                <div style="background: white; border-radius: 8px; overflow: hidden; border: 1px solid var(--border);">
+                <div style="background: var(--card-bg); border-radius: 8px; overflow: hidden; border: 1px solid var(--border);">
                     <table style="width: 100%; border-collapse: collapse;">
                         <thead style="background: var(--light);">
                             <tr>
@@ -2625,7 +2715,7 @@ class DiskAnalyzer:
         
         for ext, stats in file_types[:8]:  # Mostrar solo top 8
             html += f'''
-                    <div style="background: white; border: 1px solid var(--border); border-radius: 6px; padding: 0.75rem;">
+                    <div style="background: var(--card-bg); border: 1px solid var(--border); border-radius: 6px; padding: 0.75rem;">
                         <div style="font-weight: 600; color: var(--dark); margin-bottom: 0.25rem;">{ext}</div>
                         <div style="font-size: 0.8rem; color: var(--gray);">
                             {self.format_size(stats['size'])} • {stats['count']} archivos
