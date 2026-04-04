@@ -8,6 +8,7 @@ import os
 import sys
 import json
 import time
+import hashlib
 import argparse
 import subprocess
 import platform
@@ -142,6 +143,7 @@ class DiskAnalyzer:
         self.large_files = []
         self.directory_sizes = defaultdict(int)
         self.file_type_stats = defaultdict(lambda: {'count': 0, 'size': 0})
+        self.duplicates = []
         self.docker_stats = None
         self.disk_usage = None
         self.system = SYSTEM
@@ -280,6 +282,71 @@ class DiskAnalyzer:
             
         return total_size
     
+    def find_duplicates(self) -> List[Dict]:
+        """Detecta archivos duplicados entre los archivos grandes encontrados.
+
+        Strategy:
+        1. Only consider files > 1 MB to keep it fast.
+        2. Group by exact size – unique sizes cannot be duplicates.
+        3. For groups with >1 file, compute a fast partial hash (first 8 KB + last 8 KB).
+        4. Files matching on both size and hash are considered duplicates.
+        5. Skip protected system paths.
+
+        Returns a list of dicts sorted by wasted space descending:
+            {'hash': str, 'size': int, 'files': [path1, …], 'wasted': size * (len-1)}
+        """
+        PARTIAL_HASH_BYTES = 8192  # 8 KB from each end
+
+        # Step 1: filter to files > 1 MB that are not protected
+        candidates = [
+            f for f in self.large_files
+            if f['size'] > 1 * MB and not self.is_protected_path(f['path'])
+        ]
+
+        # Step 2: group by size
+        size_groups: Dict[int, List[str]] = defaultdict(list)
+        for f in candidates:
+            size_groups[f['size']].append(f['path'])
+
+        # Step 3: for size-matched groups, compute partial hash
+        hash_groups: Dict[str, Dict] = {}  # key = "size:hash"
+
+        for size, paths in size_groups.items():
+            if len(paths) < 2:
+                continue
+
+            hashes: Dict[str, List[str]] = defaultdict(list)
+            for path in paths:
+                try:
+                    h = hashlib.md5()
+                    with open(path, 'rb') as fh:
+                        head = fh.read(PARTIAL_HASH_BYTES)
+                        h.update(head)
+                        # Seek to last 8 KB if file is large enough
+                        if size > PARTIAL_HASH_BYTES * 2:
+                            fh.seek(-PARTIAL_HASH_BYTES, 2)
+                        last = fh.read(PARTIAL_HASH_BYTES)
+                        h.update(last)
+                    hashes[h.hexdigest()].append(path)
+                except (OSError, IOError):
+                    continue
+
+            # Step 4: collect groups with actual duplicates
+            for digest, matched_paths in hashes.items():
+                if len(matched_paths) < 2:
+                    continue
+                key = f"{size}:{digest}"
+                hash_groups[key] = {
+                    'hash': digest,
+                    'size': size,
+                    'files': matched_paths,
+                    'wasted': size * (len(matched_paths) - 1),
+                }
+
+        # Step 5: sort by wasted space descending
+        duplicates = sorted(hash_groups.values(), key=lambda d: d['wasted'], reverse=True)
+        return duplicates
+
     def find_cache_locations(self):
         """Busca ubicaciones de cache conocidas"""
         for cache_dir in CACHE_DIRS:
@@ -562,7 +629,16 @@ class DiskAnalyzer:
         # Escanear directorio principal
         total_size = self.scan_directory(self.start_path)
         self.directory_sizes[str(self.start_path)] = total_size
-        
+
+        # Detectar archivos duplicados
+        print("🔍 Buscando archivos duplicados (>1 MB)...")
+        self.duplicates = self.find_duplicates()
+        if self.duplicates:
+            total_wasted = sum(d['wasted'] for d in self.duplicates)
+            print(f"   Encontrados {len(self.duplicates)} grupos de duplicados ({self.format_size(total_wasted)} desperdiciados)")
+        else:
+            print("   No se encontraron archivos duplicados")
+
         # Buscar ubicaciones de cache
         print("🔍 Buscando archivos de cache y temporales...")
         self.find_cache_locations()
@@ -627,7 +703,218 @@ class DiskAnalyzer:
         # Escapar caracteres especiales en la ruta
         escaped_path = file_path.replace("'", "'\"'\"'")
         return f"rm -f '{escaped_path}'"
-    
+
+    def detect_smart_recommendations(self) -> List[Dict]:
+        """Detecta patrones avanzados en directory_sizes y large_files para
+        generar recomendaciones inteligentes de limpieza.  Cada deteccion
+        esta envuelta en try/except para que un fallo individual no rompa
+        el resto."""
+        smart_recs: List[Dict] = []
+        home = str(Path.home())
+
+        # -- 1. Entornos Conda obsoletos --
+        try:
+            conda_env_bases = [
+                os.path.join(home, 'miniconda3', 'envs'),
+                os.path.join(home, 'anaconda3', 'envs'),
+                os.path.join(home, 'opt', 'anaconda3', 'envs'),
+            ]
+            for base in conda_env_bases:
+                for dir_path, size in self.directory_sizes.items():
+                    if not dir_path.startswith(base + os.sep):
+                        continue
+                    # Solo hijos directos (nombre del env)
+                    rel = dir_path[len(base) + 1:]
+                    if os.sep in rel:
+                        continue
+                    env_name = rel
+                    env_path = Path(dir_path)
+                    has_stale = False
+                    try:
+                        for f_info in self.large_files:
+                            if f_info['path'].startswith(dir_path) and f_info.get('age_days', 0) > 180:
+                                has_stale = True
+                                break
+                        if not has_stale and env_path.exists():
+                            if self.get_file_age(env_path) > 180:
+                                has_stale = True
+                    except Exception:
+                        pass
+                    if has_stale and size > 0:
+                        smart_recs.append({
+                            'tier': 2, 'priority': 'Moderado',
+                            'type': 'Entorno Conda Obsoleto',
+                            'description': (
+                                f'Entorno conda "{env_name}" sin actividad reciente '
+                                f'({self.format_size(size)})'
+                            ),
+                            'space': size,
+                            'command': f'conda env remove -n {env_name}',
+                        })
+        except Exception:
+            pass
+
+        # -- 2. node_modules huerfanos --
+        try:
+            for dir_path, size in self.directory_sizes.items():
+                if not dir_path.endswith(os.sep + 'node_modules') and not dir_path.endswith('/node_modules'):
+                    continue
+                parent = str(Path(dir_path).parent)
+                git_head = os.path.join(parent, '.git', 'HEAD')
+                pkg_json = os.path.join(parent, 'package.json')
+                stale = False
+                try:
+                    for ref_file in (git_head, pkg_json):
+                        if os.path.exists(ref_file):
+                            age = self.get_file_age(Path(ref_file))
+                            if age > 60:
+                                stale = True
+                                break
+                    else:
+                        # Ni .git/HEAD ni package.json encontrados
+                        if not os.path.exists(git_head) and not os.path.exists(pkg_json):
+                            stale = True
+                except Exception:
+                    pass
+                if stale and size > 0:
+                    smart_recs.append({
+                        'tier': 2, 'priority': 'Moderado',
+                        'type': 'node_modules Huerfano',
+                        'description': (
+                            f'node_modules sin actividad de proyecto en 60+ dias '
+                            f'({self.format_size(size)}) en {parent}'
+                        ),
+                        'space': size,
+                        'command': f"rm -rf '{dir_path}'",
+                    })
+        except Exception:
+            pass
+
+        # -- 3. Multiples instalaciones de Python --
+        try:
+            homebrew_python_size = 0
+            anaconda_python_size = 0
+            for dir_path, size in self.directory_sizes.items():
+                if '/opt/homebrew/lib/python' in dir_path or '/usr/local/lib/python' in dir_path:
+                    homebrew_python_size += size
+                if '/opt/anaconda3/lib/python' in dir_path or '/anaconda3/lib/python' in dir_path:
+                    anaconda_python_size += size
+            if homebrew_python_size > 100 * MB and anaconda_python_size > 100 * MB:
+                total = homebrew_python_size + anaconda_python_size
+                smart_recs.append({
+                    'tier': 3, 'priority': 'Agresivo',
+                    'type': 'Multiples Instalaciones Python',
+                    'description': (
+                        f'Se detectaron instalaciones de Python tanto en Homebrew '
+                        f'({self.format_size(homebrew_python_size)}) como en Anaconda '
+                        f'({self.format_size(anaconda_python_size)}). '
+                        f'Considera consolidar en una sola.'
+                    ),
+                    'space': total,
+                    'command': (
+                        '# Revisa cual instalacion de Python usas y elimina la otra:\n'
+                        '#   brew uninstall python  # si usas Anaconda\n'
+                        '#   conda deactivate && rm -rf ~/anaconda3  # si usas Homebrew'
+                    ),
+                })
+        except Exception:
+            pass
+
+        # -- 4. Repos Git con pack files grandes --
+        try:
+            pack_by_repo: Dict[str, int] = {}
+            for f_info in self.large_files:
+                fpath = f_info['path']
+                if '/.git/objects/pack/' in fpath and fpath.endswith('.pack') and f_info['size'] > 100 * MB:
+                    repo_path = fpath.split('/.git/objects/pack/')[0]
+                    pack_by_repo[repo_path] = pack_by_repo.get(repo_path, 0) + f_info['size']
+            for repo_path, total_pack in pack_by_repo.items():
+                repo_name = os.path.basename(repo_path)
+                smart_recs.append({
+                    'tier': 2, 'priority': 'Moderado',
+                    'type': 'Git Pack Files Grandes',
+                    'description': (
+                        f'Repositorio "{repo_name}" tiene pack files de '
+                        f'{self.format_size(total_pack)}. '
+                        f'Ejecuta gc para compactar.'
+                    ),
+                    'space': total_pack,
+                    'command': f"cd '{repo_path}' && git gc --aggressive",
+                })
+        except Exception:
+            pass
+
+        # -- 5. Snapshots locales de Time Machine --
+        try:
+            if self.is_macos:
+                result = subprocess.run(
+                    ['tmutil', 'listlocalsnapshots', '/'],
+                    capture_output=True, text=True, timeout=10,
+                )
+                if result.returncode == 0 and result.stdout.strip():
+                    lines = result.stdout.strip().splitlines()
+                    snapshot_dates = []
+                    for line in lines:
+                        line = line.strip()
+                        if 'TimeMachine' in line or line.startswith('com.apple.'):
+                            parts = line.split('.')
+                            for part in parts:
+                                if len(part) >= 10 and part[:4].isdigit() and '-' in part:
+                                    snapshot_dates.append(part)
+                                    break
+                            else:
+                                snapshot_dates.append(line)
+                    if snapshot_dates:
+                        commands = ' && '.join(
+                            f'sudo tmutil deletelocalsnapshots {d}' for d in snapshot_dates
+                        )
+                        smart_recs.append({
+                            'tier': 3, 'priority': 'Agresivo',
+                            'type': 'Snapshots Locales de Time Machine',
+                            'description': (
+                                f'{len(snapshot_dates)} snapshot(s) local(es) de Time Machine '
+                                f'detectados. Pueden ocupar varios GB.'
+                            ),
+                            'space': len(snapshot_dates) * GB,
+                            'command': commands,
+                        })
+        except Exception:
+            pass
+
+        # -- 6. Archivos antiguos de Xcode Archives --
+        try:
+            xcode_archives_path = os.path.join(
+                home, 'Library', 'Developer', 'Xcode', 'Archives'
+            )
+            archives_size = 0
+            for dir_path, size in self.directory_sizes.items():
+                if dir_path.startswith(xcode_archives_path):
+                    archives_size = max(archives_size, size)
+            if archives_size == 0:
+                ap = Path(xcode_archives_path)
+                if ap.exists():
+                    try:
+                        archives_size = sum(
+                            f.stat().st_size for f in ap.rglob('*') if f.is_file()
+                        )
+                    except Exception:
+                        pass
+            if archives_size > 1 * GB:
+                smart_recs.append({
+                    'tier': 3, 'priority': 'Agresivo',
+                    'type': 'Xcode Archives Antiguos',
+                    'description': (
+                        f'{self.format_size(archives_size)} en Xcode Archives. '
+                        f'Los archivos se pueden eliminar si ya no necesitas distribuir esas builds.'
+                    ),
+                    'space': archives_size,
+                    'command': f"rm -rf '{xcode_archives_path}'/*",
+                })
+        except Exception:
+            pass
+
+        return smart_recs
+
     def generate_recommendations(self) -> List[Dict]:
         """Genera recomendaciones agrupadas por nivel de agresividad.
         Cada recomendación tiene un 'tier' (1-4) de conservador a agresivo."""
@@ -791,8 +1078,11 @@ class DiskAnalyzer:
                 'command': 'find / -name "*.vmdk" -o -name "*.vdi" -o -name "*.qcow2" 2>/dev/null | head -20'
             })
 
+        # -- Recomendaciones inteligentes --
+        recommendations.extend(self.detect_smart_recommendations())
+
         return sorted(recommendations, key=lambda x: (x['tier'], -x['space']))
-    
+
     def generate_report(self) -> Dict:
         """Genera el reporte completo"""
         # Ordenar archivos grandes por tamaño
@@ -837,9 +1127,10 @@ class DiskAnalyzer:
             'errors': self.errors[:10],  # Primeros 10 errores
             'delete_commands': self._generate_delete_commands(self.large_files[:50]),
             'disk_usage': self.disk_usage,
-            'skipped_volumes_size': getattr(self, 'skipped_volumes_size', 0)
+            'skipped_volumes_size': getattr(self, 'skipped_volumes_size', 0),
+            'duplicates': getattr(self, 'duplicates', [])
         }
-        
+
         return report
     
     def _generate_delete_commands(self, files: List[Dict]) -> Dict:
@@ -863,9 +1154,137 @@ class DiskAnalyzer:
             
             if f['size'] > GB:
                 commands['large_files'].append(cmd)
-        
+
         return commands
-    
+
+    # ── Scan History & Diff ──────────────────────────────────────
+
+    def _history_path(self) -> Path:
+        """Returns the path to the scan history JSON file."""
+        return Path.home() / '.disk-analyzer' / 'history.json'
+
+    def _load_history(self) -> List[Dict]:
+        """Load scan history from disk. Returns empty list on any error."""
+        path = self._history_path()
+        if not path.exists():
+            return []
+        try:
+            with open(path, 'r') as f:
+                data = json.load(f)
+            if isinstance(data, list):
+                return data
+            return []
+        except Exception:
+            return []
+
+    def _save_history(self, history: List[Dict]):
+        """Persist scan history to disk, creating the directory if needed."""
+        path = self._history_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, 'w') as f:
+            json.dump(history, f, indent=2, default=str)
+
+    def save_scan_history(self, report: Dict):
+        """Save a compact summary of the current scan to ~/.disk-analyzer/history.json.
+
+        Keeps at most 50 entries (newest last). Oldest entries are trimmed.
+        """
+        disk_usage = report.get('disk_usage') or {}
+        sorted_dirs = report.get('top_directories', [])
+
+        # Build category_sizes from top directories
+        category_sizes: Dict[str, int] = defaultdict(int)
+        for dir_path, size in sorted_dirs:
+            cat = self._categorize_path(dir_path)
+            category_sizes[cat] += size
+
+        entry = {
+            'timestamp': datetime.now().isoformat(),
+            'path': str(self.start_path),
+            'total_size': report['summary']['total_size'],
+            'disk_used': disk_usage.get('used', 0),
+            'disk_free': disk_usage.get('available', 0),
+            'top_dirs': [{'path': p, 'size': s} for p, s in sorted_dirs[:20]],
+            'category_sizes': dict(category_sizes),
+        }
+
+        history = self._load_history()
+        history.append(entry)
+
+        # Keep only the 50 most recent entries
+        if len(history) > 50:
+            history = history[-50:]
+
+        self._save_history(history)
+
+    def get_scan_diff(self, report: Dict) -> Optional[Dict]:
+        """Compare the current scan with the most recent previous scan of the same path.
+
+        Returns a dict with:
+          - days_ago: how many days since the previous scan
+          - total_change: change in total analysed size (bytes)
+          - disk_free_change: change in free disk space (bytes)
+          - dir_changes: list of dicts {path, change} sorted by absolute change descending
+          - new_dirs: directories present now but not in the previous scan
+        Returns None if no previous scan of the same path exists.
+        """
+        history = self._load_history()
+        scan_path = str(self.start_path)
+
+        # Find the most recent previous entry for the same path
+        previous = None
+        for entry in reversed(history):
+            if entry.get('path') == scan_path:
+                previous = entry
+                break
+
+        if previous is None:
+            return None
+
+        # Compute how many days ago
+        try:
+            prev_dt = datetime.fromisoformat(previous['timestamp'])
+            days_ago = (datetime.now() - prev_dt).days
+        except Exception:
+            days_ago = -1
+
+        total_change = report['summary']['total_size'] - previous.get('total_size', 0)
+
+        disk_usage = report.get('disk_usage') or {}
+        disk_free_change = disk_usage.get('available', 0) - previous.get('disk_free', 0)
+
+        # Directory-level changes
+        prev_dirs = {d['path']: d['size'] for d in previous.get('top_dirs', [])}
+        curr_dirs = {p: s for p, s in report.get('top_directories', [])[:20]}
+
+        dir_changes = []
+        all_paths = set(list(prev_dirs.keys()) + list(curr_dirs.keys()))
+        for p in all_paths:
+            old = prev_dirs.get(p, 0)
+            new = curr_dirs.get(p, 0)
+            change = new - old
+            if change != 0:
+                dir_changes.append({'path': p, 'change': change})
+
+        dir_changes.sort(key=lambda x: abs(x['change']), reverse=True)
+
+        new_dirs = [p for p in curr_dirs if p not in prev_dirs]
+
+        return {
+            'days_ago': days_ago,
+            'total_change': total_change,
+            'disk_free_change': disk_free_change,
+            'dir_changes': dir_changes,
+            'new_dirs': new_dirs,
+        }
+
+    def _format_change(self, change: int) -> str:
+        """Format a size change with a +/- prefix."""
+        prefix = '+' if change >= 0 else '-'
+        return f"{prefix}{self.format_size(abs(change))}"
+
+    # ── End Scan History & Diff ──────────────────────────────────
+
     def print_report(self, report: Dict):
         """Imprime el reporte de manera formateada"""
         print("\n" + "="*60)
@@ -879,7 +1298,27 @@ class DiskAnalyzer:
         print(f"   • Archivos escaneados: {summary['files_scanned']:,}")
         print(f"   • Archivos grandes encontrados: {summary['large_files_count']}")
         print(f"   • Espacio recuperable estimado: {self.format_size(summary['recoverable_space'])}")
-        
+
+        # Cambios desde el último análisis
+        scan_diff = report.get('scan_diff')
+        if scan_diff:
+            days = scan_diff['days_ago']
+            if days == 0:
+                time_label = "hoy"
+            elif days == 1:
+                time_label = "hace 1 día"
+            else:
+                time_label = f"hace {days} días"
+            print(f"\n📊 CAMBIOS DESDE EL ÚLTIMO ANÁLISIS ({time_label}):")
+            print(f"   Espacio total: {self._format_change(scan_diff['total_change'])}")
+            print(f"   Espacio libre: {self._format_change(scan_diff['disk_free_change'])}")
+            if scan_diff['dir_changes']:
+                print("   Mayores cambios:")
+                for dc in scan_diff['dir_changes'][:5]:
+                    home_str = str(Path.home())
+                    display_path = dc['path'].replace(home_str, '~', 1)
+                    print(f"     {self._format_change(dc['change'])} {display_path}")
+
         # Docker stats si está disponible
         if report['docker'] and report['docker']['available']:
             print(f"\n🐳 DOCKER:")
@@ -1017,6 +1456,28 @@ class DiskAnalyzer:
                 age_distribution[age_key]['count'] += 1
                 age_distribution[age_key]['size'] += f['size']
         
+        # Preparar datos para treemap/sunburst
+        treemap_data = {'ids': [], 'labels': [], 'parents': [], 'values': []}
+        root_path = str(Path(self.start_path).resolve())
+        root_name = Path(root_path).name or '/'
+        treemap_data['ids'].append(root_path)
+        treemap_data['labels'].append(root_name)
+        treemap_data['parents'].append('')
+        treemap_data['values'].append(0)
+        added_paths = {root_path}
+        for dir_path, size in sorted(self.directory_sizes.items(), key=lambda x: x[1], reverse=True)[:300]:
+            abs_path = str(Path(dir_path).resolve())
+            if abs_path == root_path or abs_path in added_paths:
+                continue
+            parent_path = str(Path(abs_path).parent)
+            if parent_path not in added_paths:
+                continue
+            treemap_data['ids'].append(abs_path)
+            treemap_data['labels'].append(Path(abs_path).name)
+            treemap_data['parents'].append(parent_path)
+            treemap_data['values'].append(size)
+            added_paths.add(abs_path)
+
         # Preparar archivos para la tabla interactiva
         files_data = []
         for i, f in enumerate(report['large_files'][:50]):
@@ -1689,7 +2150,136 @@ class DiskAnalyzer:
                 <div class="label">Archivos Grandes</div>
             </div>
         </div>
-        
+        '''
+
+        # ── Diff card (if a previous scan exists) ──
+        scan_diff = report.get('scan_diff')
+        if scan_diff:
+            days = scan_diff['days_ago']
+            if days == 0:
+                time_label = "hoy"
+            elif days == 1:
+                time_label = "hace 1 d\u00eda"
+            else:
+                time_label = f"hace {days} d\u00edas"
+
+            total_change = scan_diff['total_change']
+            free_change = scan_diff['disk_free_change']
+            total_arrow = "\u2191" if total_change >= 0 else "\u2193"
+            free_arrow = "\u2191" if free_change >= 0 else "\u2193"
+            total_color = "var(--danger)" if total_change > 0 else "var(--success)"
+            free_color = "var(--success)" if free_change > 0 else "var(--danger)"
+
+            # Build the top-5 directory changes bar chart data
+            top_changes = scan_diff.get('dir_changes', [])[:5]
+            bar_labels_json = json.dumps([Path(dc['path']).name or dc['path'] for dc in top_changes])
+            bar_values = [dc['change'] for dc in top_changes]
+            bar_values_json = json.dumps(bar_values)
+            bar_colors_json = json.dumps(
+                ["#ef4444" if v > 0 else "#10b981" for v in bar_values]
+            )
+
+            # Build rows for dir changes
+            dir_rows = ""
+            home_str = str(Path.home())
+            for dc in scan_diff.get('dir_changes', [])[:8]:
+                display_path = dc['path'].replace(home_str, '~', 1)
+                ch = dc['change']
+                ch_color = "var(--danger)" if ch > 0 else "var(--success)"
+                ch_prefix = "+" if ch >= 0 else "-"
+                ch_formatted = self.format_size(abs(ch))
+                dir_rows += (
+                    f'<tr>'
+                    f'<td style="font-size:0.85rem;padding:0.4rem 0.75rem;">{display_path}</td>'
+                    f'<td style="font-weight:600;color:{ch_color};text-align:right;padding:0.4rem 0.75rem;">'
+                    f'{ch_prefix}{ch_formatted}</td>'
+                    f'</tr>'
+                )
+
+            html += f'''
+        <div class="card" style="margin-bottom: 2rem; border-left: 4px solid var(--primary);">
+            <h2>📊 Cambios desde el último análisis <span style="font-weight:400;font-size:0.85rem;color:var(--gray);">({time_label})</span></h2>
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 2rem;">
+                <div>
+                    <div style="display: flex; gap: 1.5rem; margin-bottom: 1.5rem; flex-wrap: wrap;">
+                        <div style="flex:1; min-width:180px; padding:1rem; border-radius:12px; background:var(--hover-bg); border:1px solid var(--border);">
+                            <div style="font-size:0.8rem; color:var(--gray); margin-bottom:0.25rem;">Espacio analizado</div>
+                            <div style="font-size:1.4rem; font-weight:700; color:{total_color};">
+                                {total_arrow} {self._format_change(total_change)}
+                            </div>
+                        </div>
+                        <div style="flex:1; min-width:180px; padding:1rem; border-radius:12px; background:var(--hover-bg); border:1px solid var(--border);">
+                            <div style="font-size:0.8rem; color:var(--gray); margin-bottom:0.25rem;">Espacio libre</div>
+                            <div style="font-size:1.4rem; font-weight:700; color:{free_color};">
+                                {free_arrow} {self._format_change(free_change)}
+                            </div>
+                        </div>
+                    </div>
+                    <table style="width:100%; border-collapse:collapse;">
+                        <thead>
+                            <tr>
+                                <th style="text-align:left; padding:0.4rem 0.75rem; font-size:0.8rem; color:var(--gray); border-bottom:2px solid var(--border);">Directorio</th>
+                                <th style="text-align:right; padding:0.4rem 0.75rem; font-size:0.8rem; color:var(--gray); border-bottom:2px solid var(--border);">Cambio</th>
+                            </tr>
+                        </thead>
+                        <tbody>{dir_rows}</tbody>
+                    </table>
+                </div>
+                <div>
+                    <canvas id="diffBarChart" style="max-height:260px;"></canvas>
+                </div>
+            </div>
+        </div>
+        <script>
+        document.addEventListener('DOMContentLoaded', function() {{
+            const diffCtx = document.getElementById('diffBarChart');
+            if (diffCtx) {{
+                new Chart(diffCtx.getContext('2d'), {{
+                    type: 'bar',
+                    data: {{
+                        labels: {bar_labels_json},
+                        datasets: [{{
+                            label: 'Cambio',
+                            data: {bar_values_json},
+                            backgroundColor: {bar_colors_json},
+                            borderRadius: 6
+                        }}]
+                    }},
+                    options: {{
+                        indexAxis: 'y',
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        plugins: {{
+                            legend: {{ display: false }},
+                            tooltip: {{
+                                callbacks: {{
+                                    label: function(context) {{
+                                        var v = context.raw;
+                                        var prefix = v >= 0 ? '+' : '-';
+                                        return prefix + formatBytes(Math.abs(v));
+                                    }}
+                                }}
+                            }}
+                        }},
+                        scales: {{
+                            x: {{
+                                ticks: {{
+                                    callback: function(value) {{
+                                        var prefix = value >= 0 ? '+' : '-';
+                                        return prefix + formatBytes(Math.abs(value));
+                                    }}
+                                }},
+                                grid: {{ display: false }}
+                            }},
+                            y: {{ grid: {{ display: false }} }}
+                        }}
+                    }}
+                }});
+            }}
+        }});
+        </script>'''
+
+        html += f'''
         <div class="dashboard-grid">
             <div class="card col-span-12">
                 <h2>🌊 Distribución de Espacio</h2>
@@ -1785,14 +2375,24 @@ class DiskAnalyzer:
         
         html += '''
             </div>
-            
+
+            <div class="card col-span-12">
+                <h2>🗺️ Mapa de Espacio</h2>
+                <div style="display: flex; gap: 0.5rem; margin-bottom: 1rem;">
+                    <button class="tab-button active" onclick="showVizTab(\'treemap\', this)" style="padding: 0.5rem 1rem; border: none; background: var(--hover-bg); cursor: pointer; border-radius: 8px; font-weight: 600; color: var(--dark);">Treemap</button>
+                    <button class="tab-button" onclick="showVizTab(\'sunburst\', this)" style="padding: 0.5rem 1rem; border: none; background: var(--hover-bg); cursor: pointer; border-radius: 8px; font-weight: 600; color: var(--dark);">Sunburst</button>
+                </div>
+                <div id="treemap-panel" style="height: 500px;"></div>
+                <div id="sunburst-panel" style="height: 500px; display: none;"></div>
+            </div>
+
             <div class="card col-span-6">
                 <h2>📈 Tipos de Archivo</h2>
                 <div class="chart-container">
                     <canvas id="typeChart"></canvas>
                 </div>
             </div>
-            
+
             <div class="card col-span-6">
                 <h2>🕐 Archivos por Antigüedad</h2>
                 <div class="chart-container">
@@ -1986,7 +2586,110 @@ class DiskAnalyzer:
                 </div>
             </div>
         </div>
-        
+        '''
+
+        # --- Sección de archivos duplicados ---
+        duplicates = report.get('duplicates', [])
+        if duplicates:
+            total_wasted = sum(d['wasted'] for d in duplicates)
+            total_groups = len(duplicates)
+
+            html += f'''
+        <div class="dashboard-grid" style="margin-top: 0;">
+            <div class="card col-span-12">
+                <h2>📑 Archivos Duplicados</h2>
+                <p style="color: var(--gray); margin-bottom: 1rem;">
+                    Se encontraron <strong>{total_groups}</strong> grupos de archivos duplicados.
+                    Espacio total desperdiciado: <strong style="color: var(--danger);">{self.format_size(total_wasted)}</strong>
+                </p>
+                <button class="btn btn-primary" onclick="generateDuplicateScript()" style="margin-bottom: 1.5rem;">
+                    Generar script &ldquo;Conservar primero, borrar el resto&rdquo;
+                </button>
+                <div id="duplicateGroups">'''
+
+            for idx, group in enumerate(duplicates[:50]):  # Limit to top 50 groups
+                group_hash = group['hash'][:12]
+                group_size = self.format_size(group['size'])
+                group_wasted = self.format_size(group['wasted'])
+                file_count = len(group['files'])
+
+                html += f'''
+                    <div style="border: 1px solid var(--border); border-radius: 12px; margin-bottom: 0.75rem; overflow: hidden;">
+                        <div onclick="toggleDupGroup(this)" style="
+                            padding: 0.75rem 1rem;
+                            cursor: pointer;
+                            display: flex;
+                            align-items: center;
+                            justify-content: space-between;
+                            background: var(--hover-bg);
+                            user-select: none;
+                        ">
+                            <div style="display: flex; align-items: center; gap: 0.75rem;">
+                                <span class="dup-arrow" style="transition: transform .2s; display: inline-block;">&#9654;</span>
+                                <span style="font-weight: 600;">{file_count} copias</span>
+                                <span style="color: var(--gray);">&mdash; {group_size} cada una</span>
+                            </div>
+                            <span class="badge" style="background: rgba(239, 68, 68, 0.1); color: var(--danger);">
+                                -{group_wasted} desperdiciados
+                            </span>
+                        </div>
+                        <div class="dup-detail" style="display: none; padding: 0.5rem 1rem 0.75rem 2.5rem;">'''
+
+                for fi, fpath in enumerate(group['files']):
+                    label = '(conservar)' if fi == 0 else '(duplicado)'
+                    label_color = 'var(--success)' if fi == 0 else 'var(--danger)'
+                    html += f'''
+                            <div style="padding: 0.25rem 0; font-size: 0.85rem; display: flex; align-items: center; gap: 0.5rem;">
+                                <span style="color: {label_color}; font-weight: 600; font-size: 0.75rem;">{label}</span>
+                                <span style="color: var(--gray); word-break: break-all;">{fpath}</span>
+                            </div>'''
+
+                html += '''
+                        </div>
+                    </div>'''
+
+            if total_groups > 50:
+                html += f'''
+                    <p style="color: var(--gray); text-align: center; padding: 0.5rem;">
+                        ... y {total_groups - 50} grupos más
+                    </p>'''
+
+            html += '''
+                </div>
+            </div>
+        </div>
+        '''
+        # --- Fin sección duplicados ---
+
+        # Modal para script de duplicados
+        html += '''
+        <div class="modal" id="dupScriptModal">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h3>🗑️ Script de Borrado de Duplicados</h3>
+                    <p style="color: var(--danger); margin-top: 0.5rem;">
+                        Conserva la primera copia de cada grupo y borra el resto.
+                    </p>
+                </div>
+                <div class="command-box" id="dupScriptContent" style="max-height: 300px; overflow-y: auto; white-space: pre-wrap;">
+                    # Generando script...
+                </div>
+                <div style="margin-top: 1.5rem; display: flex; gap: 1rem; justify-content: flex-end;">
+                    <button class="btn" onclick="closeDupModal()" style="background: var(--gray); color: white;">
+                        Cerrar
+                    </button>
+                    <button class="btn btn-primary" onclick="copyDupScript()">
+                        Copiar Todo
+                    </button>
+                    <button class="btn btn-primary" onclick="downloadDupScript()" style="background: var(--success);">
+                        Descargar .sh
+                    </button>
+                </div>
+            </div>
+        </div>
+        '''
+
+        html += '''
         <div class="action-bar">
             <div>
                 <span id="selectedCount">0</span> archivos seleccionados 
@@ -2033,7 +2736,48 @@ class DiskAnalyzer:
         const fileTypeData = {json.dumps(file_type_data)};
         const ageData = {json.dumps([{"age": k, "size": v['size'], "count": v['count']} for k, v in age_distribution.items()])};
         const filesData = {json.dumps(files_data)};
-        
+        const duplicatesData = {json.dumps(report.get('duplicates', []))};
+        const treemapData = {json.dumps(treemap_data)};
+
+        // Render treemap
+        if (treemapData.ids.length > 1) {{
+            Plotly.newPlot('treemap-panel', [{{
+                type: 'treemap',
+                ids: treemapData.ids,
+                labels: treemapData.labels,
+                parents: treemapData.parents,
+                values: treemapData.values,
+                textinfo: 'label+value',
+                texttemplate: '%{{label}}<br>%{{value}}',
+                hovertemplate: '%{{label}}<br>%{{value}}<extra></extra>',
+                textfont: {{ size: 12 }},
+                marker: {{ colorscale: 'Blues', line: {{ width: 1, color: 'rgba(255,255,255,0.3)' }} }},
+                pathbar: {{ visible: true, textfont: {{ size: 13 }} }},
+                branchvalues: 'total'
+            }}], {{
+                margin: {{ l: 5, r: 5, t: 5, b: 5 }},
+                paper_bgcolor: 'rgba(0,0,0,0)',
+                height: 500
+            }}, {{ responsive: true, displayModeBar: false }});
+
+            // Pre-render sunburst (hidden)
+            Plotly.newPlot('sunburst-panel', [{{
+                type: 'sunburst',
+                ids: treemapData.ids,
+                labels: treemapData.labels,
+                parents: treemapData.parents,
+                values: treemapData.values,
+                textinfo: 'label',
+                hovertemplate: '%{{label}}<br>%{{value}}<extra></extra>',
+                marker: {{ colorscale: 'Viridis', line: {{ width: 1, color: 'rgba(255,255,255,0.3)' }} }},
+                branchvalues: 'total'
+            }}], {{
+                margin: {{ l: 5, r: 5, t: 5, b: 5 }},
+                paper_bgcolor: 'rgba(0,0,0,0)',
+                height: 500
+            }}, {{ responsive: true, displayModeBar: false }});
+        }}
+
         // Estado de los Sankeys renderizados
         const renderedSankeys = new Set();
         
@@ -2363,6 +3107,89 @@ class DiskAnalyzer:
             if (event.target === modal) {
                 closeModal();
             }
+            const dupModal = document.getElementById('dupScriptModal');
+            if (dupModal && event.target === dupModal) {
+                closeDupModal();
+            }
+        }
+
+        // --- Funciones de duplicados ---
+        function toggleDupGroup(header) {
+            const detail = header.nextElementSibling;
+            const arrow = header.querySelector('.dup-arrow');
+            if (detail.style.display === 'none') {
+                detail.style.display = 'block';
+                arrow.style.transform = 'rotate(90deg)';
+            } else {
+                detail.style.display = 'none';
+                arrow.style.transform = 'rotate(0deg)';
+            }
+        }
+
+        function generateDuplicateScript() {
+            const lines = [
+                '#!/bin/bash',
+                '# Script generado por Disk Analyzer - Eliminación de duplicados',
+                '# Fecha: ' + new Date().toLocaleString(),
+                '# Conserva la PRIMERA copia de cada grupo y borra el resto.',
+                '',
+                'set -e',
+                '',
+                'echo "Este script borrará los archivos duplicados."',
+                'echo "La primera copia de cada grupo será conservada."',
+                'read -p "¿Continuar? (s/n): " confirm',
+                'if [ "$confirm" != "s" ]; then echo "Cancelado."; exit 1; fi',
+                ''
+            ];
+
+            let totalWasted = 0;
+            duplicatesData.forEach(function(group, gi) {
+                lines.push('# Grupo ' + (gi + 1) + ' - ' + group.files.length + ' copias - ' + formatBytes(group.size) + ' cada una');
+                lines.push('# Conservar: ' + group.files[0]);
+                for (let i = 1; i < group.files.length; i++) {
+                    const escaped = group.files[i].replace(/'/g, "'\"'\"'");
+                    lines.push("rm -f '" + escaped + "'");
+                }
+                totalWasted += group.wasted;
+                lines.push('');
+            });
+
+            lines.push('echo "Limpieza completada. Espacio liberado: ' + formatBytes(totalWasted) + '"');
+
+            const script = lines.join('\n');
+            document.getElementById('dupScriptContent').textContent = script;
+            document.getElementById('dupScriptModal').style.display = 'flex';
+        }
+
+        function closeDupModal() {
+            document.getElementById('dupScriptModal').style.display = 'none';
+        }
+
+        function copyDupScript() {
+            const content = document.getElementById('dupScriptContent').textContent;
+            navigator.clipboard.writeText(content).then(function() {
+                alert('Script copiado al portapapeles');
+            });
+        }
+
+        function downloadDupScript() {
+            const content = document.getElementById('dupScriptContent').textContent;
+            const blob = new Blob([content], { type: 'text/plain' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = 'remove_duplicates.sh';
+            a.click();
+            URL.revokeObjectURL(url);
+        }
+
+        // Visualization tab switching (treemap/sunburst)
+        function showVizTab(viz, btn) {
+            document.getElementById('treemap-panel').style.display = viz === 'treemap' ? 'block' : 'none';
+            document.getElementById('sunburst-panel').style.display = viz === 'sunburst' ? 'block' : 'none';
+            btn.parentElement.querySelectorAll('.tab-button').forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+            Plotly.Plots.resize(document.getElementById(viz + '-panel'));
         }
 
         // Theme toggle
@@ -3388,20 +4215,34 @@ Ejemplos de uso:
     if not args.quick:
         # Ejecutar análisis
         stats = analyzer.analyze()
-        
+
         # Generar reporte
         report = analyzer.generate_report()
-        
+
+        # Compute diff against previous scan (before saving current)
+        scan_diff = analyzer.get_scan_diff(report)
+        report['scan_diff'] = scan_diff
+
         # Mostrar reporte en consola
         analyzer.print_report(report)
-        
+
+        # Save scan to history (after printing, so diff uses previous data)
+        analyzer.save_scan_history(report)
+
         # Mostrar estadísticas de ejecución
         print(f"\n⏱️  Tiempo de análisis: {stats['elapsed_time']:.2f} segundos")
     else:
         # Modo quick: solo generar reportes sin análisis
         print("📄 Generando reporte rápido...")
         report = analyzer.generate_report()
-    
+
+        # Compute diff against previous scan (before saving current)
+        scan_diff = analyzer.get_scan_diff(report)
+        report['scan_diff'] = scan_diff
+
+        # Save scan to history
+        analyzer.save_scan_history(report)
+
     # Exportar si se solicita
     if args.export:
         if args.html:
