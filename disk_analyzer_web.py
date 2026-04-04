@@ -15,7 +15,7 @@ from typing import Dict, List, Optional, Any
 from concurrent.futures import ThreadPoolExecutor
 import threading
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, BackgroundTasks
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, BackgroundTasks, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse, Response
@@ -46,6 +46,53 @@ analysis_sessions: Dict[str, Dict] = {}
 websocket_connections: Dict[str, List[WebSocket]] = {}
 executor = ThreadPoolExecutor(max_workers=4)
 
+# Session persistence
+SESSIONS_FILE = Path("sessions_metadata.json")
+
+def save_session_metadata():
+    """Save session metadata to disk"""
+    try:
+        metadata = []
+        for session_id, session in analysis_sessions.items():
+            # Only save basic metadata, not results
+            metadata.append({
+                "id": session_id,
+                "status": session["status"],
+                "paths": session["paths"],
+                "started_at": session["started_at"],
+                "completed_at": session.get("completed_at"),
+                "error": session.get("error")
+            })
+        
+        with open(SESSIONS_FILE, "w") as f:
+            json.dump(metadata, f)
+    except Exception as e:
+        print(f"Error saving session metadata: {e}")
+
+def load_session_metadata():
+    """Load session metadata from disk"""
+    try:
+        if SESSIONS_FILE.exists():
+            with open(SESSIONS_FILE, "r") as f:
+                metadata = json.load(f)
+                
+            for session_meta in metadata:
+                session_id = session_meta["id"]
+                # Restore session without results
+                analysis_sessions[session_id] = {
+                    "id": session_id,
+                    "status": session_meta["status"],
+                    "progress": 100 if session_meta["status"] == "completed" else 0,
+                    "current_path": "",
+                    "paths": session_meta["paths"],
+                    "started_at": session_meta["started_at"],
+                    "completed_at": session_meta.get("completed_at"),
+                    "results": None,  # Results not persisted
+                    "error": session_meta.get("error")
+                }
+    except Exception as e:
+        print(f"Error loading session metadata: {e}")
+
 # Pydantic models for API
 class AnalysisRequest(BaseModel):
     paths: List[str] = Field(..., description="Paths to analyze")
@@ -70,6 +117,9 @@ class CleanupRequest(BaseModel):
     paths: List[str]
     categories: List[str]
     dry_run: bool = True
+
+class DeleteFileRequest(BaseModel):
+    path: str = Field(..., description="Path of the file to delete")
 
 # Serve static files (frontend)
 static_dir = Path(__file__).parent / "static"
@@ -143,12 +193,14 @@ async def get_drives():
 
 @app.post("/api/analysis/start")
 async def start_analysis(
-    request: AnalysisRequest,
-    background_tasks: BackgroundTasks
+    request: AnalysisRequest
 ) -> AnalysisResponse:
     """Start a new disk analysis"""
     # Generate unique session ID
     session_id = str(uuid.uuid4())
+    
+    print(f"Starting analysis session: {session_id}")
+    print(f"Paths to analyze: {request.paths}")
     
     # Initialize session
     analysis_sessions[session_id] = {
@@ -162,14 +214,23 @@ async def start_analysis(
         "error": None
     }
     
-    # Start analysis in background
-    background_tasks.add_task(
-        run_analysis,
-        session_id,
-        request.paths,
-        request.min_size_mb,
-        request.categories
+    # Save session metadata
+    save_session_metadata()
+    
+    # Start analysis using asyncio.create_task
+    task = asyncio.create_task(
+        run_analysis(
+            session_id,
+            request.paths,
+            request.min_size_mb,
+            request.categories
+        )
     )
+    
+    # Store task reference (optional, for cancellation support)
+    analysis_sessions[session_id]["task"] = task
+    
+    print(f"Analysis task created for session: {session_id}")
     
     return AnalysisResponse(
         id=session_id,
@@ -184,11 +245,27 @@ async def run_analysis(
     categories: Dict[str, bool]
 ):
     """Run analysis in background thread"""
+    print(f"run_analysis started for session: {session_id}")
+    
     try:
+        # Send initial progress update
+        await notify_progress(session_id, {
+            "type": "progress",
+            "session_id": session_id,
+            "current_path": "Initializing analysis...",
+            "overall_progress": 0,
+            "path_index": 0,
+            "total_paths": len(paths)
+        })
+        
         all_results = []
         total_paths = len(paths)
         
+        print(f"Starting to analyze {total_paths} paths")
+        
         for idx, path in enumerate(paths):
+            print(f"Analyzing path {idx + 1}/{total_paths}: {path}")
+            
             # Update session progress
             analysis_sessions[session_id]["current_path"] = path
             analysis_sessions[session_id]["progress"] = (idx / total_paths) * 100
@@ -203,28 +280,145 @@ async def run_analysis(
                 "total_paths": total_paths
             })
             
-            # Create analyzer with progress callback
+            # Small delay to ensure WebSocket message is sent
+            await asyncio.sleep(0.1)
+            
+            # Create a queue for progress updates from the sync context
+            import queue
+            progress_queue = queue.Queue()
+            
+            # Create analyzer with progress callback that uses the queue
             def progress_callback(info):
-                asyncio.create_task(notify_progress(session_id, {
-                    "type": "file_progress",
-                    "session_id": session_id,
-                    **info
-                }))
+                progress_queue.put(info)
             
             analyzer = DiskAnalyzerCore(
                 path,
-                min_size_mb,
+                min_size_mb=min_size_mb,
                 progress_callback=progress_callback
             )
             
-            # Run analysis
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
+            # Start a task to process progress updates concurrently
+            async def process_progress_updates():
+                while True:
+                    try:
+                        # Process updates in batches
+                        batch = []
+                        for _ in range(5):  # Process up to 5 updates at a time
+                            try:
+                                info = progress_queue.get_nowait()
+                                batch.append(info)
+                            except queue.Empty:
+                                break
+                        
+                        if batch:
+                            for info in batch:
+                                await notify_progress(session_id, {
+                                    "type": "file_progress",
+                                    "session_id": session_id,
+                                    **info
+                                })
+                            # Small delay between batches
+                            await asyncio.sleep(0.05)
+                        else:
+                            # No updates, wait a bit
+                            await asyncio.sleep(0.1)
+                    except Exception as e:
+                        print(f"Error processing progress updates: {e}")
+                        break
             
+            # Start progress update task BEFORE running analysis
+            progress_task = asyncio.create_task(process_progress_updates())
+            
+            # Run analysis in executor
+            loop = asyncio.get_event_loop()
+            
+            # Run the blocking analysis in a thread
+            def run_blocking_analysis():
+                try:
+                    print(f"Starting blocking analysis for: {path}")
+                    # Run each phase separately to allow progress updates
+                    
+                    # Phase 1: Directory scan
+                    progress_queue.put({
+                        'message': 'Starting directory scan...',
+                        'phase': 'disk_scan',
+                        'percent': 5,
+                        'is_phase_update': True
+                    })
+                    analyzer.disk_usage = analyzer.get_disk_usage()
+                    
+                    # Set progress to 10% after disk usage
+                    progress_queue.put({
+                        'message': 'Scanning directories...',
+                        'phase': 'disk_scan',
+                        'percent': 10,
+                        'is_phase_update': True
+                    })
+                    
+                    total_size = analyzer.scan_directory(analyzer.start_path)
+                    analyzer.directory_sizes[str(analyzer.start_path)] = total_size
+                    
+                    # Phase 2: Cache locations
+                    progress_queue.put({
+                        'message': 'Searching for cache locations...',
+                        'phase': 'cache_scan',
+                        'percent': 70,
+                        'is_phase_update': True
+                    })
+                    analyzer.find_cache_locations()
+                    
+                    # Phase 3: Docker analysis
+                    progress_queue.put({
+                        'message': 'Analyzing Docker resources...',
+                        'phase': 'docker_analysis',
+                        'percent': 90,
+                        'is_phase_update': True
+                    })
+                    analyzer.analyze_docker()
+                    
+                    progress_queue.put({
+                        'message': 'Analysis complete!',
+                        'phase': 'completed',
+                        'percent': 100,
+                        'is_phase_update': True
+                    })
+                    
+                    return {
+                        'total_size': total_size,
+                        'files_scanned': analyzer.total_scanned,
+                        'errors': len(analyzer.errors)
+                    }
+                except Exception as e:
+                    print(f"Analysis error for {path}: {str(e)}")
+                    import traceback
+                    traceback.print_exc()
+                    return False
+            
+            print(f"Submitting analysis to executor for: {path}")
             result = await loop.run_in_executor(
                 executor,
-                analyzer.analyze
+                run_blocking_analysis
             )
+            print(f"Executor returned result for {path}: {result}")
+            
+            # Cancel progress task AFTER analysis completes
+            progress_task.cancel()
+            try:
+                await progress_task
+            except asyncio.CancelledError:
+                pass
+            
+            # Process any remaining updates
+            while not progress_queue.empty():
+                try:
+                    info = progress_queue.get_nowait()
+                    await notify_progress(session_id, {
+                        "type": "file_progress",
+                        "session_id": session_id,
+                        **info
+                    })
+                except queue.Empty:
+                    break
             
             if result:
                 report = analyzer.generate_report()
@@ -236,7 +430,9 @@ async def run_analysis(
                         "files_scanned": report["summary"]["files_scanned"],
                         "large_files": len(report["large_files"]),
                         "cache_size": report["summary"]["cache_size"],
-                        "recoverable": report["summary"]["recoverable_space"]
+                        "recoverable": report["summary"]["recoverable_space"],
+                        "docker_space": report["summary"].get("docker_space", 0),
+                        "docker_reclaimable": report["summary"].get("docker_reclaimable", 0)
                     }
                 })
         
@@ -245,6 +441,9 @@ async def run_analysis(
         analysis_sessions[session_id]["progress"] = 100
         analysis_sessions[session_id]["results"] = all_results
         analysis_sessions[session_id]["completed_at"] = datetime.now().isoformat()
+        
+        # Save session metadata
+        save_session_metadata()
         
         # Notify completion
         await notify_progress(session_id, {
@@ -258,8 +457,15 @@ async def run_analysis(
         })
         
     except Exception as e:
+        print(f"Analysis error: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        
         analysis_sessions[session_id]["status"] = "error"
         analysis_sessions[session_id]["error"] = str(e)
+        
+        # Save session metadata
+        save_session_metadata()
         
         await notify_progress(session_id, {
             "type": "error",
@@ -293,6 +499,13 @@ async def get_analysis_results(session_id: str):
     if session["status"] != "completed":
         raise HTTPException(status_code=400, detail="Analysis not completed")
     
+    # Check if results are available (might be None after server restart)
+    if session["results"] is None:
+        raise HTTPException(
+            status_code=410, 
+            detail="Session results no longer available. Please run a new analysis."
+        )
+    
     return {
         "id": session_id,
         "status": session["status"],
@@ -300,6 +513,25 @@ async def get_analysis_results(session_id: str):
         "started_at": session["started_at"],
         "completed_at": session["completed_at"]
     }
+
+@app.get("/api/sessions")
+async def get_sessions():
+    """Get list of analysis sessions"""
+    sessions_list = []
+    for session_id, session in analysis_sessions.items():
+        sessions_list.append({
+            "id": session_id,
+            "status": session["status"],
+            "paths": session["paths"],
+            "started_at": session["started_at"],
+            "completed_at": session.get("completed_at"),
+            "progress": session["progress"]
+        })
+    
+    # Sort by start time, newest first
+    sessions_list.sort(key=lambda x: x["started_at"], reverse=True)
+    
+    return {"sessions": sessions_list[:20]}  # Return last 20 sessions
 
 @app.websocket("/ws/{session_id}")
 async def websocket_endpoint(websocket: WebSocket, session_id: str):
@@ -312,11 +544,15 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
     websocket_connections[session_id].append(websocket)
     
     try:
-        # Send initial status
+        # Send initial status (filter out non-serializable fields)
         if session_id in analysis_sessions:
+            session_data = analysis_sessions[session_id].copy()
+            # Remove non-serializable fields
+            session_data.pop('task', None)
+            
             await websocket.send_json({
                 "type": "status",
-                "session": analysis_sessions[session_id]
+                "session": session_data
             })
         
         # Keep connection alive
@@ -340,6 +576,9 @@ async def notify_progress(session_id: str, message: Dict):
         for websocket in websocket_connections[session_id]:
             try:
                 await websocket.send_json(message)
+                # Force flush by sending a small keepalive message
+                # This helps prevent buffering in some network configurations
+                await asyncio.sleep(0.001)  # Tiny delay to ensure message is sent
             except:
                 disconnected.append(websocket)
         
@@ -432,6 +671,104 @@ async def export_results(session_id: str, format: str):
     else:
         raise HTTPException(status_code=400, detail="Unsupported format")
 
+@app.delete("/api/files/delete")
+async def delete_file(request: DeleteFileRequest):
+    """Delete a file from the filesystem"""
+    try:
+        file_path = Path(request.path)
+        
+        # Security validations
+        # 1. Check if path is absolute
+        if not file_path.is_absolute():
+            raise HTTPException(status_code=400, detail="Path must be absolute")
+        
+        # 2. Resolve path to prevent directory traversal
+        try:
+            resolved_path = file_path.resolve(strict=True)
+        except (OSError, RuntimeError):
+            raise HTTPException(status_code=404, detail="File not found")
+        
+        # 3. Check if file exists and is a file (not directory)
+        if not resolved_path.exists():
+            raise HTTPException(status_code=404, detail="File not found")
+        
+        if not resolved_path.is_file():
+            raise HTTPException(status_code=400, detail="Path is not a file")
+        
+        # 4. Prevent deletion of system files using shared protection logic
+        from disk_analyzer_core import DiskAnalyzerCore
+        checker = DiskAnalyzerCore.__new__(DiskAnalyzerCore)
+        path_str = str(resolved_path)
+        if checker.is_protected_path(path_str):
+            raise HTTPException(
+                status_code=403,
+                detail="Cannot delete system files"
+            )
+        
+        # Get file size before deletion
+        file_size = resolved_path.stat().st_size
+        
+        # Attempt to delete the file
+        try:
+            if IS_MACOS:
+                # Move to trash on macOS
+                import subprocess
+                result = subprocess.run(
+                    ['osascript', '-e', f'tell application "Finder" to delete POSIX file "{str(resolved_path)}"'],
+                    capture_output=True,
+                    text=True
+                )
+                if result.returncode != 0:
+                    # Fallback to permanent deletion
+                    resolved_path.unlink()
+            elif IS_WINDOWS:
+                # Use Windows recycle bin
+                import ctypes
+                from ctypes import wintypes
+                # Move to recycle bin using SHFileOperation
+                # For now, just delete permanently
+                resolved_path.unlink()
+            else:
+                # Linux: move to trash if available
+                trash_dir = Path.home() / '.local/share/Trash/files'
+                if trash_dir.exists():
+                    import shutil
+                    trash_dest = trash_dir / resolved_path.name
+                    # Add timestamp if file exists in trash
+                    if trash_dest.exists():
+                        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+                        trash_dest = trash_dir / f"{resolved_path.stem}_{timestamp}{resolved_path.suffix}"
+                    shutil.move(str(resolved_path), str(trash_dest))
+                else:
+                    # No trash, delete permanently
+                    resolved_path.unlink()
+            
+            return {
+                "success": True,
+                "message": f"File deleted successfully",
+                "path": str(resolved_path),
+                "size": file_size
+            }
+            
+        except PermissionError:
+            raise HTTPException(
+                status_code=403,
+                detail="Permission denied. Cannot delete this file."
+            )
+        except Exception as e:
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to delete file: {str(e)}"
+            )
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"An error occurred: {str(e)}"
+        )
+
 @app.on_event("startup")
 async def startup_event():
     """Initialize the application"""
@@ -444,6 +781,14 @@ async def startup_event():
     if not index_file.exists():
         # We'll create this in the next step
         pass
+    
+    # Load previous session metadata
+    load_session_metadata()
+    
+    print("✅ Web server started successfully")
+    print(f"📁 Static files served from: {static_dir}")
+    print(f"🔍 API endpoints available at /api/*")
+    print(f"📊 Loaded {len(analysis_sessions)} previous sessions")
 
 @app.on_event("shutdown")
 async def shutdown_event():
@@ -497,5 +842,9 @@ if __name__ == "__main__":
         host="0.0.0.0",
         port=8000,
         reload=True,
-        log_level="info"
+        log_level="info",
+        # WebSocket settings to reduce buffering
+        ws_ping_interval=20,
+        ws_ping_timeout=20,
+        ws_max_size=16777216  # 16MB
     )

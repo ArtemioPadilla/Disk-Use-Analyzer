@@ -456,10 +456,49 @@ body {
     text-align: center;
 }
 
+/* Phase Indicator */
+.phase-indicator {
+    background-color: var(--bg-color);
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    padding: 1rem;
+    margin-bottom: 1.5rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.75rem;
+    font-size: 1.1rem;
+    font-weight: 500;
+    color: var(--text-color);
+    animation: fadeIn 0.3s ease;
+}
+
+.phase-indicator i {
+    font-size: 1.5rem;
+    animation: pulse 2s ease-in-out infinite;
+}
+
 .progress-circle {
     position: relative;
     display: inline-block;
     margin-bottom: 2rem;
+    animation: pulse 2s ease-in-out infinite;
+}
+
+@keyframes pulse {
+    0%, 100% { transform: scale(1); }
+    50% { transform: scale(1.05); }
+}
+
+.progress-circle svg {
+    filter: drop-shadow(0 0 20px rgba(52, 152, 219, 0.3));
+}
+
+.progress-circle circle:last-child {
+    stroke-dasharray: 565.48;
+    stroke-dashoffset: 565.48;
+    transition: stroke-dashoffset 0.5s ease;
+    stroke: url(#progressGradient);
 }
 
 .progress-text {
@@ -470,6 +509,40 @@ body {
     font-size: 2rem;
     font-weight: bold;
     color: var(--primary-color);
+    animation: fadeInOut 1.5s ease-in-out infinite;
+}
+
+@keyframes fadeInOut {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.7; }
+}
+
+/* Current Path Display */
+.current-path-display {
+    background-color: var(--bg-color);
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    padding: 1rem;
+    margin-bottom: 1rem;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    min-height: 50px;
+}
+
+.current-path-display i {
+    color: var(--primary-color);
+    animation: spin 2s linear infinite;
+}
+
+.current-path-display span {
+    flex: 1;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    color: var(--text-muted);
+    font-family: monospace;
+    font-size: 0.9rem;
 }
 
 .progress-details {
@@ -484,6 +557,17 @@ body {
     padding: 1rem;
     border-radius: 6px;
     border: 1px solid var(--border-color);
+    transition: transform 0.3s ease;
+}
+
+.progress-stat.updated {
+    animation: statUpdate 0.5s ease;
+}
+
+@keyframes statUpdate {
+    0% { transform: scale(1); }
+    50% { transform: scale(1.1); }
+    100% { transform: scale(1); }
 }
 
 .progress-stat .label {
@@ -513,6 +597,23 @@ body {
     padding: 0.25rem 0;
     font-size: 0.9rem;
     color: var(--text-muted);
+    animation: slideIn 0.3s ease;
+}
+
+@keyframes slideIn {
+    from {
+        opacity: 0;
+        transform: translateX(-20px);
+    }
+    to {
+        opacity: 1;
+        transform: translateX(0);
+    }
+}
+
+.progress-message.subtle {
+    font-size: 0.85rem;
+    opacity: 0.7;
 }
 
 /* Results */
@@ -617,11 +718,21 @@ body {
     padding: 1.5rem;
     border-radius: 8px;
     border: 1px solid var(--border-color);
+    position: relative;
+    min-height: 450px;
+    display: flex;
+    flex-direction: column;
 }
 
 .chart-container h4 {
     margin-bottom: 1rem;
     color: var(--text-color);
+}
+
+.chart-container canvas {
+    max-height: 400px !important;
+    width: 100% !important;
+    height: auto !important;
 }
 
 /* Files List */
@@ -684,9 +795,24 @@ body {
     color: var(--text-muted);
 }
 
+.file-actions {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+}
+
 .file-size {
     font-weight: bold;
     color: var(--primary-color);
+}
+
+.btn-sm {
+    padding: 0.5rem 0.75rem;
+    font-size: 0.875rem;
+}
+
+.btn-sm i {
+    font-size: 0.875rem;
 }
 
 /* Recommendations */
@@ -834,10 +960,156 @@ body {
     }
 }
 
+/* Modal Styles */
+.modal {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background-color: rgba(0, 0, 0, 0.5);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1000;
+}
+
+.modal-content {
+    background-color: var(--card-bg);
+    border-radius: 10px;
+    width: 90%;
+    max-width: 600px;
+    max-height: 80vh;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    box-shadow: 0 10px 50px rgba(0, 0, 0, 0.3);
+}
+
+.modal-header {
+    padding: 1.5rem;
+    border-bottom: 1px solid var(--border-color);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.modal-header h2 {
+    margin: 0;
+    color: var(--text-color);
+}
+
+.close {
+    font-size: 1.5rem;
+    cursor: pointer;
+    color: var(--text-muted);
+    transition: color 0.3s ease;
+}
+
+.close:hover {
+    color: var(--text-color);
+}
+
+.modal-body {
+    padding: 1.5rem;
+    overflow-y: auto;
+    flex: 1;
+}
+
+.modal-footer {
+    padding: 1rem 1.5rem;
+    border-top: 1px solid var(--border-color);
+    display: flex;
+    justify-content: flex-end;
+    gap: 1rem;
+}
+
+.btn-danger {
+    background-color: var(--danger-color);
+    color: white;
+}
+
+.btn-danger:hover {
+    background-color: #c0392b;
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px rgba(231, 76, 60, 0.3);
+}
+
+.file-to-delete {
+    font-family: monospace;
+    font-size: 0.9rem;
+    color: var(--text-muted);
+    word-break: break-all;
+    background-color: var(--bg-color);
+    padding: 1rem;
+    border-radius: 6px;
+    margin-top: 1rem;
+}
+
+.cleanup-preview pre {
+    background-color: var(--bg-color);
+    padding: 1rem;
+    border-radius: 6px;
+    overflow-x: auto;
+    font-size: 0.9rem;
+    color: var(--text-muted);
+}
+
+.warning-box {
+    background-color: rgba(241, 196, 15, 0.1);
+    border: 1px solid var(--warning-color);
+    border-radius: 6px;
+    padding: 1rem;
+    margin: 1rem 0;
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+}
+
+.warning-box i {
+    color: var(--warning-color);
+    font-size: 1.5rem;
+}
+
+/* Docker Section */
+.docker-section {
+    background-color: var(--bg-color);
+    padding: 2rem;
+    border-radius: 8px;
+    border: 1px solid var(--border-color);
+    margin-top: 2rem;
+}
+
+.docker-section h3 {
+    color: var(--text-color);
+    margin-bottom: 1rem;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.docker-section h3 i {
+    color: #0db7ed;
+}
+
+.docker-details p {
+    margin-bottom: 1rem;
+    color: var(--text-muted);
+}
+
+.docker-details strong {
+    color: var(--text-color);
+}
+
 /* Utility Classes */
 .hidden {
     display: none !important;
 }
+
+.text-success { color: var(--secondary-color); }
+.text-primary { color: var(--primary-color); }
+.text-danger { color: var(--danger-color); }
+.text-warning { color: var(--warning-color); }
 
 .mt-1 { margin-top: 0.5rem; }
 .mt-2 { margin-top: 1rem; }

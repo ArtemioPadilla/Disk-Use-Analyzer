@@ -194,15 +194,28 @@ When modifying the code:
   - Lazy loading for Sankey diagrams
   - Limited directory depth to prevent timeouts
 
-### Bug Fixes
+### Bug Fixes (2026)
+
+- **APFS Double-Counting**: Skip firmlink mirrors (`/System/Volumes/Data`, `/VM`, `/Preboot`, etc.) that caused 2x inflated totals when scanning `/`
+- **Category Double-Counting**: Disk usage bar uses direct children of start_path with container expansion, preventing nested directory inflation
+- **Protected Path System**: System files, app internals (`.app/Contents/`, `.AppBundle/`), swap, sleepimage are marked with 🔒 Sistema badge and disabled checkboxes. Uses `startswith()` prefix matching (not substring) to avoid false positives
+- **Sankey Flow Conservation**: Residual "otros" nodes ensure inflow==outflow at every node; explicit x/y positioning eliminates line crossings
+- **System Volume Accounting**: Uses `diskutil apfs list` to precisely measure VM, Preboot, Recovery, System volumes. Remaining gap labeled "Sin permisos (sudo)" with actionable hint
+- **Disk Bar 100% Cap**: `segment_width = min(percent, remaining)` prevents CSS overflow
+- **macOS `du` Compatibility**: `du -sk` (POSIX) instead of `du -sb` (GNU-only), which was silently returning 0 for all cache locations
+- **`clean_cache` Dry-Run**: Now accumulates sizes correctly instead of always reporting "0 B"
+- **Select All / Delete Script**: `toggleAll` skips disabled checkboxes; `generateScript` skips empty commands
+- **Docker Double-Count in Bar**: Only adds Docker stats if not already covered by directory scan
+- **CLI Directory Paths**: Fixed `.replace(str(self.start_path), '.')` replacing all `/` with `.` when scanning `/`
+- **Sudo Hint**: Only shown when scanning root-level paths with real permission errors (not for `~/Documents`)
+- **Actionable Recommendations**: Detects Homebrew caches, Simulator caches with specific cleanup commands (`brew cleanup --prune=all`, `xcrun simctl delete unavailable`)
+
+### Older Bug Fixes
 
 - **Sankey Diagram Missing**: Fixed by removing a duplicate `generate_html_report` method that was overriding the correct implementation with Sankey support.
-- **Disk Usage Bar**: Fixed overflow issue when disk usage percentage exceeds 100%. Bar width is now capped at 100% visually.
-- **Sankey Organization**: Improved by grouping small directories (<2% of total) into "Otros" node and increasing minimum threshold to 1%.
 - **Disk Space Calculation**: Fixed major issue where analysis reported much more space than actually used:
   - Now uses `st_blocks * 512` to get real disk usage instead of logical file size
   - Excludes Docker.raw sparse files
   - Doesn't follow symbolic links to avoid counting files multiple times
-  - Shows warning when analyzed space exceeds reported disk usage
 - **APFS Disk Usage**: Fixed calculation to use `total - available` instead of reading used directly from df, as APFS reports purgeable space incorrectly
 - **Docker Size Parsing**: Fixed parsing of Docker sizes with 'kB' units and improved error handling

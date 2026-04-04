@@ -149,7 +149,7 @@
                                     </label>
                                     <label class="checkbox">
                                         <input type="checkbox" name="category" value="docker" checked>
-                                        <span>Docker Resources</span>
+                                        <span><i class="fab fa-docker"></i> Docker Resources</span>
                                     </label>
                                     <label class="checkbox">
                                         <input type="checkbox" name="category" value="media" checked>
@@ -184,8 +184,14 @@
                         <div class="progress-container">
                             <div class="progress-circle">
                                 <svg width="200" height="200">
+                                    <defs>
+                                        <linearGradient id="progressGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+                                            <stop offset="0%" style="stop-color:#3498db;stop-opacity:1" />
+                                            <stop offset="100%" style="stop-color:#2ecc71;stop-opacity:1" />
+                                        </linearGradient>
+                                    </defs>
                                     <circle cx="100" cy="100" r="90" stroke="#e0e0e0" stroke-width="10" fill="none"/>
-                                    <circle id="progress-arc" cx="100" cy="100" r="90" stroke="#3498db" stroke-width="10" fill="none"
+                                    <circle id="progress-arc" cx="100" cy="100" r="90" stroke="url(#progressGradient)" stroke-width="10" fill="none"
                                             stroke-dasharray="565.48" stroke-dashoffset="565.48"
                                             transform="rotate(-90 100 100)"/>
                                 </svg>
@@ -194,8 +200,13 @@
                                 </div>
                             </div>
 
+                            <div class="current-path-display">
+                                <i class="fas fa-folder-open"></i>
+                                <span id="current-path-text">Preparing to scan...</span>
+                            </div>
+
                             <div class="progress-details">
-                                <div class="progress-stat">
+                                <div class="progress-stat" id="stat-current-path" style="display: none;">
                                     <span class="label">Current Path:</span>
                                     <span id="current-path" class="value">-</span>
                                 </div>
@@ -334,6 +345,41 @@
     </div>
 
     <!-- JavaScript -->
+    <!-- Modal for cleanup preview -->
+    <div id="cleanup-modal" class="modal" style="display: none;">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>Cleanup Preview</h2>
+                <span class="close" onclick="closeCleanupModal()">&times;</span>
+            </div>
+            <div class="modal-body">
+                <div id="cleanup-details"></div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" onclick="closeCleanupModal()">Cancel</button>
+                <button class="btn btn-danger" onclick="executeCleanup()">Execute Cleanup</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal for file deletion confirmation -->
+    <div id="delete-modal" class="modal" style="display: none;">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>Confirm Deletion</h2>
+                <span class="close" onclick="closeDeleteModal()">&times;</span>
+            </div>
+            <div class="modal-body">
+                <p>Are you sure you want to delete this file?</p>
+                <p class="file-to-delete"></p>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" onclick="closeDeleteModal()">Cancel</button>
+                <button class="btn btn-danger" onclick="confirmDelete()">Delete</button>
+            </div>
+        </div>
+    </div>
+
     <script src="/static/js/app.js"></script>
 </body>
 </html>

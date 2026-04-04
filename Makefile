@@ -159,40 +159,27 @@ check:
 
 # Instalar dependencias (si es necesario)
 install:
-	@echo "$(GREEN)📦 Verificando Python...$(NC)"
+	@echo "$(GREEN)📦 Configurando entorno de desarrollo...$(NC)"
 	@if ! command -v python3 >/dev/null 2>&1; then \
 		echo "$(RED)Python 3 no está instalado. Instálalo con: brew install python3$(NC)"; \
 		exit 1; \
 	fi
-	@echo "$(BLUE)Verificando tkinter (interfaz gráfica base)...$(NC)"
-	@if ! $(PYTHON) -c "import tkinter" 2>/dev/null; then \
-		echo "$(RED)⚠️  tkinter no está instalado$(NC)"; \
-		echo "$(YELLOW)tkinter es necesario para la interfaz gráfica.$(NC)"; \
-		echo ""; \
-		if [ "$$(uname)" = "Linux" ]; then \
-			if [ -f /etc/debian_version ]; then \
-				echo "$(YELLOW)Ejecuta: sudo apt install python3-tk$(NC)"; \
-			elif [ -f /etc/fedora-release ]; then \
-				echo "$(YELLOW)Ejecuta: sudo dnf install python3-tkinter$(NC)"; \
-			elif [ -f /etc/arch-release ]; then \
-				echo "$(YELLOW)Ejecuta: sudo pacman -S tk$(NC)"; \
-			elif [ -f /etc/SuSE-release ] || [ -f /etc/SUSE-brand ]; then \
-				echo "$(YELLOW)Ejecuta: sudo zypper install python3-tk$(NC)"; \
-			else \
-				echo "$(YELLOW)Instala python3-tk o python3-tkinter según tu distribución$(NC)"; \
-			fi; \
-		elif [ "$$(uname)" = "Darwin" ]; then \
-			echo "$(YELLOW)Ejecuta: brew install python-tk$(NC)"; \
-		fi; \
-		echo ""; \
-		echo "$(YELLOW)Después de instalar tkinter, ejecuta 'make install' nuevamente$(NC)"; \
-		echo ""; \
+	@echo "$(GREEN)✅ Python 3 instalado: $(shell python3 --version)$(NC)"
+	@if [ ! -d "venv" ]; then \
+		echo "$(BLUE)Creando entorno virtual...$(NC)"; \
+		$(PYTHON) -m venv venv; \
 	else \
-		echo "$(GREEN)✅ tkinter está instalado$(NC)"; \
+		echo "$(BLUE)Usando entorno virtual existente...$(NC)"; \
 	fi
-	@echo "$(GREEN)📦 Instalando dependencias para GUI...$(NC)"
-	@$(PYTHON) -m pip install -r requirements.txt 2>/dev/null || pip install -r requirements.txt
-	@echo "$(GREEN)✅ Todo listo para usar (CLI y GUI)$(NC)"
+	@echo "$(GREEN)✅ Entorno virtual configurado$(NC)"
+	@echo ""
+	@echo "$(BLUE)La herramienta de análisis CLI está lista para usar.$(NC)"
+	@echo ""
+	@echo "$(YELLOW)Interfaces opcionales disponibles:$(NC)"
+	@echo "  - $(BLUE)Interfaz Web$(NC): ejecuta 'make install-web' y luego 'make web'"
+	@echo "  - $(BLUE)Interfaz GUI$(NC): ejecuta 'make install-gui' y luego 'make gui'"
+	@echo ""
+	@echo "$(GREEN)✅ Instalación básica completada$(NC)"
 
 # Abrir último reporte
 open:
@@ -229,22 +216,43 @@ stats:
 # GUI Commands
 install-gui:
 	@echo "$(GREEN)📦 Instalando dependencias para la interfaz gráfica...$(NC)"
-	@echo "$(BLUE)Usando Python: $(PYTHON)$(NC)"
-	@$(PYTHON) -m pip install -r requirements.txt || echo "$(RED)Error al instalar con $(PYTHON)$(NC)"
-	@echo "$(GREEN)✅ Dependencias GUI instaladas$(NC)"
-	@echo "$(BLUE)Verificando instalación...$(NC)"
-	@$(PYTHON) -c "import customtkinter; print('✅ CustomTkinter instalado correctamente')" || echo "$(RED)❌ CustomTkinter NO se instaló correctamente$(NC)"
+	@echo "$(BLUE)Verificando tkinter (interfaz gráfica base)...$(NC)"
+	@if ! $(PYTHON) -c "import tkinter" 2>/dev/null; then \
+		echo "$(RED)⚠️  tkinter no está instalado$(NC)"; \
+		echo "$(YELLOW)tkinter es necesario para la interfaz gráfica.$(NC)"; \
+		echo ""; \
+		if [ "$$(uname)" = "Darwin" ]; then \
+			echo "$(YELLOW)Ejecuta: brew install python-tk$(NC)"; \
+		elif [ "$$(uname)" = "Linux" ]; then \
+			echo "$(YELLOW)Instala python3-tk o python3-tkinter según tu distribución$(NC)"; \
+		fi; \
+		echo ""; \
+		exit 1; \
+	fi
+	@if [ ! -d "venv-gui" ]; then \
+		echo "$(BLUE)Creando entorno virtual para GUI...$(NC)"; \
+		$(PYTHON) -m venv venv-gui; \
+	fi
+	@echo "$(BLUE)Activando entorno virtual e instalando dependencias...$(NC)"
+	@. venv-gui/bin/activate && pip install --upgrade pip >/dev/null 2>&1
+	@. venv-gui/bin/activate && pip install -r requirements.txt
+	@echo "$(GREEN)✅ Interfaz GUI instalada correctamente$(NC)"
+	@echo ""
+	@echo "$(YELLOW)Para usar la interfaz GUI:$(NC)"
+	@echo "  Ejecuta: $(BLUE)make gui$(NC)"
 
 gui:
 	@echo "$(GREEN)🎨 Iniciando interfaz gráfica...$(NC)"
-	@echo "$(BLUE)Verificando CustomTkinter con $(PYTHON)...$(NC)"
-	@if ! $(PYTHON) -c "import customtkinter" 2>&1; then \
-		echo "$(RED)Error: CustomTkinter no está instalado$(NC)"; \
-		echo "$(YELLOW)Intenta ejecutar: $(PYTHON) -m pip install customtkinter$(NC)"; \
-		echo "$(YELLOW)O verifica tu instalación con: make check-gui$(NC)"; \
+	@if [ ! -d "venv-gui" ]; then \
+		echo "$(YELLOW)No se encontró entorno virtual. Ejecuta primero: make install-gui$(NC)"; \
 		exit 1; \
 	fi
-	@$(PYTHON) disk_analyzer_gui.py
+	@echo "$(BLUE)Verificando dependencias...$(NC)"
+	@if ! . venv-gui/bin/activate && python -c "import customtkinter" 2>/dev/null; then \
+		echo "$(YELLOW)Las dependencias no están instaladas. Ejecuta: make install-gui$(NC)"; \
+		exit 1; \
+	fi
+	@. venv-gui/bin/activate && python disk_analyzer_gui.py
 
 # Verificar instalación de GUI
 check-gui:
@@ -271,17 +279,35 @@ check-gui:
 # Web Interface Commands
 install-web:
 	@echo "$(GREEN)🌐 Instalando dependencias para interfaz web...$(NC)"
-	@$(PYTHON) -m pip install -r requirements-web.txt || pip install -r requirements-web.txt
-	@echo "$(GREEN)✅ Servidor web listo para usar$(NC)"
+	@if [ ! -d "venv-web" ]; then \
+		echo "$(BLUE)Creando entorno virtual para web...$(NC)"; \
+		$(PYTHON) -m venv venv-web; \
+	fi
+	@echo "$(BLUE)Activando entorno virtual e instalando dependencias...$(NC)"
+	@. venv-web/bin/activate && pip install --upgrade pip >/dev/null 2>&1
+	@. venv-web/bin/activate && pip install -r requirements-web.txt
+	@echo "$(GREEN)✅ Servidor web instalado correctamente$(NC)"
+	@echo ""
+	@echo "$(YELLOW)Para usar la interfaz web:$(NC)"
+	@echo "  1. Ejecuta: $(BLUE)make web$(NC)"
+	@echo "  2. Abre tu navegador en: $(BLUE)http://localhost:8000$(NC)"
 
 web:
 	@echo "$(GREEN)🌐 Iniciando servidor web...$(NC)"
+	@if [ ! -d "venv-web" ]; then \
+		echo "$(YELLOW)No se encontró entorno virtual. Ejecuta primero: make install-web$(NC)"; \
+		exit 1; \
+	fi
 	@echo "$(BLUE)Verificando dependencias...$(NC)"
-	@$(PYTHON) -c "import fastapi" 2>/dev/null || (echo "$(YELLOW)Instalando dependencias web...$(NC)" && $(PYTHON) -m pip install -r requirements-web.txt)
+	@if ! . venv-web/bin/activate && python -c "import fastapi" 2>/dev/null; then \
+		echo "$(YELLOW)Las dependencias no están instaladas. Ejecuta: make install-web$(NC)"; \
+		exit 1; \
+	fi
 	@echo "$(GREEN)✅ Servidor iniciando en http://localhost:8000$(NC)"
 	@echo "$(BLUE)📚 API Docs en http://localhost:8000/docs$(NC)"
+	@echo "$(YELLOW)Presiona Ctrl+C para detener el servidor$(NC)"
 	@echo ""
-	@$(PYTHON) disk_analyzer_web.py
+	@. venv-web/bin/activate && python disk_analyzer_web.py
 
 # Comando por defecto
 .DEFAULT_GOAL := help

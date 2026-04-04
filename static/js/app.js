@@ -4,6 +4,7 @@ let currentSession = null;
 let selectedPaths = [];
 let ws = null;
 let analysisResults = null;
+let lastProgressPercent = 0;  // Track last progress to prevent going backwards
 
 // Initialize app
 document.addEventListener('DOMContentLoaded', () => {
@@ -66,7 +67,22 @@ async function loadSystemInfo() {
 }
 
 // Session Management
-function checkSavedSessions() {
+async function checkSavedSessions() {
+    try {
+        // First check API for server sessions
+        const response = await fetch(`${API_BASE}/sessions`);
+        if (response.ok) {
+            const data = await response.json();
+            if (data.sessions && data.sessions.length > 0) {
+                displayRecentAnalyses(data.sessions);
+                return;
+            }
+        }
+    } catch (error) {
+        console.error('Failed to fetch sessions from API:', error);
+    }
+    
+    // Fall back to localStorage
     const sessions = JSON.parse(localStorage.getItem('analysis_sessions') || '[]');
     if (sessions.length > 0) {
         displayRecentAnalyses(sessions);
@@ -77,15 +93,106 @@ function displayRecentAnalyses(sessions) {
     const container = document.getElementById('recent-analyses');
     const list = document.getElementById('recent-list');
     
-    list.innerHTML = sessions.slice(0, 5).map(session => `
+    list.innerHTML = sessions.slice(0, 5).map(session => {
+        const date = new Date(session.started_at || session.date);
+        const status = session.status || 'completed';
+        const hasResults = session.results !== null && session.results !== undefined;
+        
+        let statusIcon, statusClass, statusText;
+        if (status === 'completed') {
+            if (hasResults) {
+                statusIcon = '✓';
+                statusClass = 'text-success';
+                statusText = 'Complete';
+            } else {
+                statusIcon = '⚠';
+                statusClass = 'text-warning';
+                statusText = 'No data';
+            }
+        } else if (status === 'running') {
+            statusIcon = '⟳';
+            statusClass = 'text-primary';
+            statusText = 'Running';
+        } else {
+            statusIcon = '✗';
+            statusClass = 'text-danger';
+            statusText = 'Failed';
+        }
+        
+        return `
         <div class="recent-item">
-            <span>${new Date(session.date).toLocaleDateString()}</span>
+            <span>${date.toLocaleDateString()}</span>
             <span>${session.paths.join(', ')}</span>
+            <span class="${statusClass}" title="${statusText}">${statusIcon}</span>
             <button class="btn btn-sm" onclick="loadSession('${session.id}')">View</button>
         </div>
-    `).join('');
+        `;
+    }).join('');
     
     container.style.display = 'block';
+}
+
+// Load a previous session
+async function loadSession(sessionId) {
+    try {
+        // First check if session results are available
+        const response = await fetch(`${API_BASE}/analysis/${sessionId}/results`);
+        
+        if (response.ok) {
+            currentSession = sessionId;
+            analysisResults = await response.json();
+            
+            // Show results view
+            showView('results-view');
+            displayResults();
+        } else if (response.status === 410) {
+            // Results no longer available (server restarted)
+            const errorData = await response.json();
+            alert(errorData.detail || 'Session results no longer available. Please run a new analysis.');
+        } else if (response.status === 400) {
+            // Analysis not completed, check progress
+            const progressResponse = await fetch(`${API_BASE}/analysis/${sessionId}/progress`);
+            if (progressResponse.ok) {
+                const progress = await progressResponse.json();
+                
+                if (progress.status === 'running') {
+                    // Analysis still running, reconnect to WebSocket
+                    currentSession = sessionId;
+                    showView('wizard-view');
+                    
+                    // Move to progress step
+                    document.querySelectorAll('.wizard-content').forEach(content => {
+                        content.style.display = 'none';
+                    });
+                    document.querySelectorAll('.step').forEach(step => {
+                        step.classList.remove('active');
+                        step.classList.remove('completed');
+                    });
+                    
+                    const step3 = document.querySelector('.step[data-step="3"]');
+                    step3.classList.add('active');
+                    document.getElementById('step-3').style.display = 'block';
+                    
+                    // Connect WebSocket to resume progress updates
+                    connectWebSocket(sessionId);
+                } else if (progress.status === 'error') {
+                    alert('Analysis failed: ' + (progress.error || 'Unknown error'));
+                } else {
+                    alert('Analysis status: ' + progress.status);
+                }
+            } else {
+                alert('Unable to check analysis progress.');
+            }
+        } else if (response.status === 404) {
+            alert('Session not found.');
+        } else {
+            const errorData = await response.json();
+            alert(errorData.detail || 'Failed to load session.');
+        }
+    } catch (error) {
+        console.error('Failed to load session:', error);
+        alert('Failed to load session. Please try again.');
+    }
 }
 
 // Analysis Wizard
@@ -230,8 +337,14 @@ async function startAnalysisRun() {
         categories[cb.value] = true;
     });
     
+    // Reset progress tracking
+    lastProgressPercent = 0;
+    
     // Move to progress step
     nextStep();
+    
+    // Connect WebSocket first, before starting analysis
+    const tempSessionId = 'pending-' + Date.now();
     
     // Start analysis
     try {
@@ -251,7 +364,12 @@ async function startAnalysisRun() {
         currentSession = data.id;
         
         // Connect WebSocket for progress
-        connectWebSocket(currentSession);
+        console.log('Starting analysis with session:', currentSession);
+        
+        // Small delay to ensure backend is ready
+        setTimeout(() => {
+            connectWebSocket(currentSession);
+        }, 100);
         
         // Save session
         saveSession(currentSession, selectedPaths);
@@ -265,13 +383,15 @@ async function startAnalysisRun() {
 // WebSocket Connection
 function connectWebSocket(sessionId) {
     const wsUrl = `ws://${window.location.host}/ws/${sessionId}`;
+    console.log('Connecting to WebSocket:', wsUrl);
     ws = new WebSocket(wsUrl);
     
     ws.onopen = () => {
-        console.log('WebSocket connected');
+        console.log('WebSocket connected successfully');
     };
     
     ws.onmessage = (event) => {
+        console.log('Raw WebSocket message:', event.data);
         const data = JSON.parse(event.data);
         handleProgressUpdate(data);
     };
@@ -287,34 +407,74 @@ function connectWebSocket(sessionId) {
 
 // Progress Updates
 function handleProgressUpdate(data) {
+    console.log('Received WebSocket message:', data);
+    
     switch (data.type) {
+        case 'status':
+            console.log('Initial status received:', data.session);
+            break;
         case 'progress':
+            console.log('Progress update:', data.overall_progress + '%');
             updateOverallProgress(data);
             break;
         case 'file_progress':
+            console.log('File progress:', data);
             updateFileProgress(data);
+            // Also check for phase in message
+            if (data.message && data.phase) {
+                // Update the current path text with the message for non-disk-scan phases
+                if (data.phase !== 'disk_scan') {
+                    const currentPathText = document.getElementById('current-path-text');
+                    currentPathText.textContent = data.message;
+                }
+            }
             break;
         case 'completed':
+            console.log('Analysis completed');
             analysisCompleted(data);
             break;
         case 'error':
+            console.error('Analysis error:', data);
             analysisError(data);
             break;
+        default:
+            console.log('Unknown message type:', data.type);
     }
 }
 
 function updateOverallProgress(data) {
-    const percent = Math.round(data.overall_progress);
-    document.getElementById('progress-percent').textContent = `${percent}%`;
+    // Only update percentage if it's explicitly provided and not going backwards
+    if (data.overall_progress !== undefined && data.overall_progress !== null) {
+        const percent = Math.round(data.overall_progress);
+        if (percent >= lastProgressPercent) {
+            lastProgressPercent = percent;
+            document.getElementById('progress-percent').textContent = `${percent}%`;
+            
+            // Update SVG arc
+            const arc = document.getElementById('progress-arc');
+            const circumference = 2 * Math.PI * 90;
+            const offset = circumference - (percent / 100) * circumference;
+            arc.style.strokeDashoffset = offset;
+        }
+    }
     
-    // Update SVG arc
-    const arc = document.getElementById('progress-arc');
-    const circumference = 2 * Math.PI * 90;
-    const offset = circumference - (percent / 100) * circumference;
-    arc.style.strokeDashoffset = offset;
+    // Update current path with animation
+    const currentPathText = document.getElementById('current-path-text');
+    const pathDisplay = data.current_path || 'Preparing to scan...';
     
-    // Update current path
-    document.getElementById('current-path').textContent = data.current_path || '-';
+    // Truncate long paths
+    if (pathDisplay.length > 60) {
+        currentPathText.textContent = '...' + pathDisplay.substring(pathDisplay.length - 57);
+    } else {
+        currentPathText.textContent = pathDisplay;
+    }
+    
+    // Add subtle animation to stats
+    const stats = document.querySelectorAll('.progress-stat');
+    stats.forEach(stat => {
+        stat.classList.add('updated');
+        setTimeout(() => stat.classList.remove('updated'), 500);
+    });
     
     // Add progress message
     addProgressMessage(`Analyzing ${data.path_index} of ${data.total_paths}: ${data.current_path}`);
@@ -322,17 +482,61 @@ function updateOverallProgress(data) {
 
 function updateFileProgress(data) {
     if (data.files_scanned !== undefined) {
-        document.getElementById('files-scanned').textContent = data.files_scanned.toLocaleString();
+        const filesScanned = document.getElementById('files-scanned');
+        filesScanned.textContent = data.files_scanned.toLocaleString();
+        filesScanned.parentElement.classList.add('updated');
+        setTimeout(() => filesScanned.parentElement.classList.remove('updated'), 500);
     }
     if (data.large_files_found !== undefined) {
-        document.getElementById('large-files').textContent = data.large_files_found.toLocaleString();
+        const largeFiles = document.getElementById('large-files');
+        largeFiles.textContent = data.large_files_found.toLocaleString();
+        largeFiles.parentElement.classList.add('updated');
+        setTimeout(() => largeFiles.parentElement.classList.remove('updated'), 500);
     }
     if (data.errors !== undefined) {
-        document.getElementById('errors-count').textContent = data.errors.toLocaleString();
+        const errors = document.getElementById('errors-count');
+        errors.textContent = data.errors.toLocaleString();
+        if (data.errors > 0) {
+            errors.parentElement.classList.add('updated');
+            setTimeout(() => errors.parentElement.classList.remove('updated'), 500);
+        }
+    }
+    
+    // Update phase indicator
+    if (data.phase) {
+        updateAnalysisPhase(data.phase);
     }
     
     if (data.current_file) {
+        // Update current path display with the file being scanned
+        const currentPathText = document.getElementById('current-path-text');
+        const pathDisplay = data.current_file;
+        
+        // Truncate long paths
+        if (pathDisplay.length > 60) {
+            currentPathText.textContent = '...' + pathDisplay.substring(pathDisplay.length - 57);
+        } else {
+            currentPathText.textContent = pathDisplay;
+        }
+        
+        // Add to progress log
         addProgressMessage(data.current_file, true);
+    }
+    
+    // Update progress bar only if percent is provided and it's not going backwards
+    if (data.percent !== undefined && data.percent !== null) {
+        const percent = Math.round(data.percent);
+        // Only update if percentage is increasing or it's a phase update
+        if (percent >= lastProgressPercent || data.is_phase_update) {
+            lastProgressPercent = percent;
+            document.getElementById('progress-percent').textContent = `${percent}%`;
+            
+            // Update SVG arc
+            const arc = document.getElementById('progress-arc');
+            const circumference = 2 * Math.PI * 90;
+            const offset = circumference - (percent / 100) * circumference;
+            arc.style.strokeDashoffset = offset;
+        }
     }
 }
 
@@ -351,23 +555,28 @@ function addProgressMessage(message, subtle = false) {
 }
 
 async function analysisCompleted(data) {
-    // Close WebSocket
-    if (ws) {
-        ws.close();
-    }
+    console.log('Analysis completed, waiting before showing results...');
     
-    // Fetch full results
-    try {
-        const response = await fetch(`${API_BASE}/analysis/${currentSession}/results`);
-        analysisResults = await response.json();
+    // Add a small delay to ensure final progress updates are visible
+    setTimeout(async () => {
+        // Close WebSocket
+        if (ws) {
+            ws.close();
+        }
         
-        // Show results view
-        showView('results-view');
-        displayResults();
-        
-    } catch (error) {
-        console.error('Failed to fetch results:', error);
-    }
+        // Fetch full results
+        try {
+            const response = await fetch(`${API_BASE}/analysis/${currentSession}/results`);
+            analysisResults = await response.json();
+            
+            // Show results view
+            showView('results-view');
+            displayResults();
+            
+        } catch (error) {
+            console.error('Failed to fetch results:', error);
+        }
+    }, 1000); // 1 second delay to show final progress
 }
 
 function analysisError(data) {
@@ -384,12 +593,20 @@ function displayResults() {
     let totalFiles = 0;
     let totalLargeFiles = 0;
     let recoverableSpace = 0;
+    let dockerSpace = 0;
+    let dockerReclaimable = 0;
     
     analysisResults.results.forEach(result => {
         totalSize += result.summary.total_size;
         totalFiles += result.summary.files_scanned;
         totalLargeFiles += result.summary.large_files;
         recoverableSpace += result.summary.recoverable;
+        
+        // Check for Docker data
+        if (result.report && result.report.docker && result.report.docker.available) {
+            dockerSpace += result.report.docker.total_size;
+            dockerReclaimable += result.report.docker.reclaimable;
+        }
     });
     
     // Update summary cards
@@ -407,11 +624,28 @@ function displayResults() {
     
     // Display recommendations
     displayRecommendations();
+    
+    // Display Docker info if available
+    if (dockerSpace > 0) {
+        displayDockerInfo(dockerSpace, dockerReclaimable);
+    }
 }
+
+// Chart instances storage
+let chartInstances = {
+    fileTypeChart: null,
+    directoryChart: null
+};
 
 // Charts
 function createFileTypeChart() {
     const ctx = document.getElementById('file-type-chart').getContext('2d');
+    
+    // Destroy existing chart if it exists
+    if (chartInstances.fileTypeChart) {
+        chartInstances.fileTypeChart.destroy();
+        chartInstances.fileTypeChart = null;
+    }
     
     // Aggregate file types
     const fileTypes = {};
@@ -429,7 +663,7 @@ function createFileTypeChart() {
         .sort((a, b) => b[1] - a[1])
         .slice(0, 10);
     
-    new Chart(ctx, {
+    chartInstances.fileTypeChart = new Chart(ctx, {
         type: 'doughnut',
         data: {
             labels: sorted.map(([ext, _]) => ext || 'No Extension'),
@@ -443,7 +677,8 @@ function createFileTypeChart() {
         },
         options: {
             responsive: true,
-            maintainAspectRatio: false,
+            maintainAspectRatio: true,
+            aspectRatio: 2,
             plugins: {
                 legend: {
                     position: 'right'
@@ -465,6 +700,12 @@ function createFileTypeChart() {
 function createDirectoryChart() {
     const ctx = document.getElementById('directory-chart').getContext('2d');
     
+    // Destroy existing chart if it exists
+    if (chartInstances.directoryChart) {
+        chartInstances.directoryChart.destroy();
+        chartInstances.directoryChart = null;
+    }
+    
     // Get top directories
     const dirs = [];
     analysisResults.results.forEach(result => {
@@ -477,7 +718,7 @@ function createDirectoryChart() {
     dirs.sort((a, b) => b.size - a.size);
     const topDirs = dirs.slice(0, 10);
     
-    new Chart(ctx, {
+    chartInstances.directoryChart = new Chart(ctx, {
         type: 'bar',
         data: {
             labels: topDirs.map(d => d.path),
@@ -489,7 +730,8 @@ function createDirectoryChart() {
         },
         options: {
             responsive: true,
-            maintainAspectRatio: false,
+            maintainAspectRatio: true,
+            aspectRatio: 2,
             scales: {
                 y: {
                     beginAtZero: true,
@@ -539,7 +781,15 @@ function displayLargeFiles() {
                     ${file.is_cache ? ' • Cache file' : ''}
                 </div>
             </div>
-            <div class="file-size">${formatSize(file.size)}</div>
+            <div class="file-actions">
+                <span class="file-size">${formatSize(file.size)}</span>
+                ${file.is_protected
+                    ? '<span class="badge badge-danger" title="System file - cannot delete">🔒</span>'
+                    : `<button class="btn btn-sm btn-danger" onclick="deleteFile('${file.path.replace(/'/g, "\\'")}', ${file.size})" title="Delete file">
+                        <i class="fas fa-trash"></i>
+                    </button>`
+                }
+            </div>
         </div>
     `).join('');
 }
@@ -633,8 +883,121 @@ function saveSession(sessionId, paths) {
     localStorage.setItem('analysis_sessions', JSON.stringify(sessions.slice(0, 10)));
 }
 
+// Cleanup Modal Functions
+let currentCleanupCommand = null;
+
 function previewCleanup(command) {
-    alert(`Cleanup command:\n\n${command}\n\nThis would be executed in the actual implementation.`);
+    currentCleanupCommand = command;
+    
+    // Show loading state
+    document.getElementById('cleanup-details').innerHTML = '<p>Loading cleanup preview...</p>';
+    document.getElementById('cleanup-modal').style.display = 'flex';
+    
+    // For now, show the command details
+    // TODO: Make API call to get actual files that would be affected
+    const details = `
+        <div class="cleanup-preview">
+            <h3>Command to Execute:</h3>
+            <pre>${command}</pre>
+            
+            <div class="warning-box">
+                <i class="fas fa-exclamation-triangle"></i>
+                <p>This action will permanently delete files. Make sure you have backups if needed.</p>
+            </div>
+            
+            <p class="mt-2">This cleanup operation will help recover disk space by removing temporary and cache files.</p>
+        </div>
+    `;
+    
+    document.getElementById('cleanup-details').innerHTML = details;
+}
+
+function closeCleanupModal() {
+    document.getElementById('cleanup-modal').style.display = 'none';
+    currentCleanupCommand = null;
+}
+
+function executeCleanup() {
+    if (!currentCleanupCommand) return;
+    
+    // TODO: Implement actual cleanup execution via API
+    alert('Cleanup execution not yet implemented. Command: ' + currentCleanupCommand);
+    closeCleanupModal();
+}
+
+// File Deletion Functions
+let fileToDelete = null;
+let fileSize = 0;
+
+function deleteFile(filePath, size) {
+    fileToDelete = filePath;
+    fileSize = size;
+    
+    document.querySelector('.file-to-delete').textContent = filePath;
+    document.getElementById('delete-modal').style.display = 'flex';
+}
+
+function closeDeleteModal() {
+    document.getElementById('delete-modal').style.display = 'none';
+    fileToDelete = null;
+    fileSize = 0;
+}
+
+async function confirmDelete() {
+    if (!fileToDelete) return;
+    
+    try {
+        const response = await fetch('/api/files/delete', {
+            method: 'DELETE',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ path: fileToDelete })
+        });
+        
+        const data = await response.json();
+        
+        if (response.ok) {
+            // Show success message
+            alert(`File deleted successfully. Freed ${formatSize(data.size)} of space.`);
+            
+            // Remove the file from the display without reloading
+            const fileElements = document.querySelectorAll('.file-item');
+            fileElements.forEach(element => {
+                if (element.querySelector('.file-path').textContent === fileToDelete) {
+                    element.remove();
+                }
+            });
+            
+            // Update recoverable space if visible
+            const recoverableElement = document.getElementById('recoverable-space');
+            if (recoverableElement && fileSize) {
+                const currentText = recoverableElement.textContent;
+                // This is a simplified update - in production, you'd recalculate properly
+                recoverableElement.parentElement.classList.add('updated');
+                setTimeout(() => recoverableElement.parentElement.classList.remove('updated'), 1000);
+            }
+        } else {
+            // Show specific error message
+            alert(data.detail || 'Failed to delete file.');
+        }
+    } catch (error) {
+        console.error('Delete error:', error);
+        alert('Error deleting file: ' + error.message);
+    }
+    
+    closeDeleteModal();
+}
+
+// Click outside modal to close
+window.onclick = function(event) {
+    if (event.target.classList.contains('modal')) {
+        if (event.target.id === 'cleanup-modal') {
+            closeCleanupModal();
+        } else if (event.target.id === 'delete-modal') {
+            closeDeleteModal();
+        }
+    }
 }
 
 function cancelAnalysis() {
@@ -642,4 +1005,112 @@ function cancelAnalysis() {
         ws.close();
     }
     showView('home-view');
+}
+
+// Update analysis phase display
+function updateAnalysisPhase(phase) {
+    const phaseInfo = {
+        'disk_scan': {
+            icon: 'fa-folder-open',
+            text: 'Scanning files and directories',
+            color: '#3498db'
+        },
+        'cache_scan': {
+            icon: 'fa-database',
+            text: 'Searching cache locations',
+            color: '#f39c12'
+        },
+        'docker_analysis': {
+            icon: 'fab fa-docker',
+            text: 'Analyzing Docker resources',
+            color: '#0db7ed'
+        },
+        'completed': {
+            icon: 'fa-check-circle',
+            text: 'Analysis complete!',
+            color: '#2ecc71'
+        }
+    };
+    
+    const info = phaseInfo[phase] || phaseInfo['disk_scan'];
+    
+    // Update phase indicator
+    let phaseIndicator = document.getElementById('phase-indicator');
+    if (!phaseIndicator) {
+        // Create phase indicator if it doesn't exist
+        const progressContainer = document.querySelector('.progress-container');
+        const phaseDiv = document.createElement('div');
+        phaseDiv.id = 'phase-indicator';
+        phaseDiv.className = 'phase-indicator';
+        phaseDiv.innerHTML = `
+            <i class="fas ${info.icon}" style="color: ${info.color};"></i>
+            <span>${info.text}</span>
+        `;
+        progressContainer.insertBefore(phaseDiv, progressContainer.querySelector('.current-path-display'));
+        phaseIndicator = phaseDiv;
+    } else {
+        // Update existing indicator
+        phaseIndicator.innerHTML = `
+            <i class="fas ${info.icon}" style="color: ${info.color};"></i>
+            <span>${info.text}</span>
+        `;
+    }
+    
+    // Add phase change to progress log
+    if (phase !== 'disk_scan') {
+        addProgressMessage(`➤ ${info.text}`, false);
+    }
+}
+
+// Display Docker Information
+function displayDockerInfo(totalSize, reclaimable) {
+    // Add Docker card to overview if not already present
+    const summaryCards = document.querySelector('.summary-cards');
+    let dockerCard = document.getElementById('docker-summary-card');
+    
+    if (!dockerCard) {
+        dockerCard = document.createElement('div');
+        dockerCard.id = 'docker-summary-card';
+        dockerCard.className = 'summary-card';
+        dockerCard.innerHTML = `
+            <i class="fab fa-docker" style="color: #0db7ed;"></i>
+            <h4>Docker Usage</h4>
+            <p id="docker-size">-</p>
+        `;
+        summaryCards.appendChild(dockerCard);
+    }
+    
+    document.getElementById('docker-size').textContent = formatSize(totalSize);
+    
+    // Add Docker section to overview tab if significant
+    if (totalSize > 100 * 1024 * 1024) { // More than 100MB
+        const overviewTab = document.getElementById('overview-tab');
+        let dockerSection = document.getElementById('docker-section');
+        
+        if (!dockerSection) {
+            dockerSection = document.createElement('div');
+            dockerSection.id = 'docker-section';
+            dockerSection.className = 'docker-section mt-3';
+            dockerSection.innerHTML = `
+                <h3><i class="fab fa-docker"></i> Docker Resources</h3>
+                <div class="docker-details">
+                    <p>Docker is using <strong>${formatSize(totalSize)}</strong> of disk space.</p>
+                    <p>You can reclaim <strong>${formatSize(reclaimable)}</strong> by cleaning unused resources.</p>
+                    <button class="btn btn-secondary" onclick="previewCleanup('docker system prune -a --volumes -f')">
+                        <i class="fas fa-broom"></i> Clean Docker Resources
+                    </button>
+                </div>
+            `;
+            overviewTab.appendChild(dockerSection);
+        } else {
+            // Update existing section
+            dockerSection.querySelector('.docker-details').innerHTML = `
+                <p>Docker is using <strong>${formatSize(totalSize)}</strong> of disk space.</p>
+                <p>You can reclaim <strong>${formatSize(reclaimable)}</strong> by cleaning unused resources.</p>
+                <button class="btn btn-secondary" onclick="previewCleanup('docker system prune -a --volumes -f')">
+                    <i class="fas fa-broom"></i> Clean Docker Resources
+                </button>
+            `;
+        }
+    }
 }

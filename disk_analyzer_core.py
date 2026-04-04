@@ -93,6 +93,27 @@ IGNORE_PATTERNS = {
     '.git/objects', 'venv', 'env', '.virtualenv', 'Docker.raw'
 }
 
+# Volúmenes APFS a excluir en macOS para evitar doble conteo por firmlinks
+MACOS_APFS_SKIP_DIRS = {
+    '/System/Volumes/Data',
+    '/System/Volumes/VM',
+    '/System/Volumes/Preboot',
+    '/System/Volumes/Update',
+    '/System/Volumes/xarts',
+    '/System/Volumes/iSCPreboot',
+    '/System/Volumes/Hardware',
+}
+
+# Protección de archivos del sistema
+PROTECTED_PATH_PREFIXES = [
+    '/System/Volumes/', '/private/var/vm/', '/var/vm/',
+    '/System/Library/', '/usr/lib/', '/usr/bin/', '/usr/sbin/',
+    '/Library/Updates/', '/private/var/folders/',
+]
+PROTECTED_APP_MARKERS = ['.app/', '.AppBundle/']
+PROTECTED_FILENAMES = {'sleepimage', 'swapfile'}
+PROTECTED_ROOT_DIRS = {'/bin', '/sbin'}
+
 class DiskAnalyzerCore:
     """Core disk analysis functionality with progress callback support"""
     
@@ -120,7 +141,7 @@ class DiskAnalyzerCore:
         self._cancel_flag = True
         
     def _update_progress(self, message: str, percent: float = None, 
-                        current_file: str = None):
+                        current_file: str = None, phase: str = None):
         """Update progress through callback if provided"""
         if self.progress_callback and not self._cancel_flag:
             self.progress_callback({
@@ -129,7 +150,8 @@ class DiskAnalyzerCore:
                 'current_file': current_file,
                 'files_scanned': self.total_scanned,
                 'large_files_found': len(self.large_files),
-                'errors': len(self.errors)
+                'errors': len(self.errors),
+                'phase': phase or 'disk_scan'
             })
     
     def format_size(self, size: int) -> str:
@@ -158,11 +180,26 @@ class DiskAnalyzerCore:
     def should_ignore(self, path: Path) -> bool:
         """Determina si el path debe ser ignorado"""
         path_str = str(path)
-        # En Windows, ignorar también archivos del sistema
         if self.is_windows:
             if path.name in ['pagefile.sys', 'hiberfil.sys', 'swapfile.sys']:
                 return True
+        if self.is_macos:
+            if path_str in MACOS_APFS_SKIP_DIRS:
+                return True
         return any(pattern in path_str for pattern in IGNORE_PATTERNS)
+
+    def is_protected_path(self, file_path: str) -> bool:
+        """Determina si un archivo es del sistema y no debe borrarse"""
+        if any(file_path.startswith(prefix) for prefix in PROTECTED_PATH_PREFIXES):
+            return True
+        parts = Path(file_path).parts
+        if len(parts) >= 2 and '/' + parts[1] in PROTECTED_ROOT_DIRS:
+            return True
+        if '/Contents/' in file_path and any(m in file_path for m in PROTECTED_APP_MARKERS):
+            return True
+        if Path(file_path).name in PROTECTED_FILENAMES:
+            return True
+        return False
     
     def get_home_dir(self) -> Path:
         """Obtiene el directorio home según el sistema"""
@@ -234,6 +271,13 @@ class DiskAnalyzerCore:
             items = list(directory.iterdir())
             total_items = len(items)
             
+            # Always update progress with current directory
+            self._update_progress(
+                f"Scanning: {str(directory)}",
+                None,  # No percentage during scan
+                current_file=str(directory)
+            )
+            
             for idx, item in enumerate(items):
                 if self._cancel_flag:
                     break
@@ -241,12 +285,11 @@ class DiskAnalyzerCore:
                 if self.should_ignore(item):
                     continue
                 
-                # Update progress
-                if depth <= 2:  # Only show progress for top-level directories
-                    percent = (idx / total_items * 100) if total_items > 0 else 0
+                # Update progress more frequently
+                if idx % 5 == 0 or depth <= 3 or total_items < 50:  # Update every 5 items, for top directories, or small dirs
                     self._update_progress(
                         f"Scanning: {directory.name}",
-                        percent,
+                        None,  # Don't send percentage during directory scan
                         str(item)
                     )
                     
@@ -296,25 +339,49 @@ class DiskAnalyzerCore:
     
     def find_cache_locations(self):
         """Busca ubicaciones de cache conocidas"""
-        self._update_progress("Searching for cache locations...", None)
+        self._update_progress("Searching for cache locations...", 70, phase="cache_scan")
         
+        total_cache_dirs = len(CACHE_DIRS)
         for idx, cache_dir in enumerate(CACHE_DIRS):
             if self._cancel_flag:
                 break
                 
-            percent = (idx / len(CACHE_DIRS) * 100) if CACHE_DIRS else 0
-            self._update_progress(f"Checking cache: {cache_dir}", percent)
+            # Only update percentage at major milestones
+            if idx % 5 == 0 or idx == total_cache_dirs - 1:
+                percent = 70 + (idx / total_cache_dirs * 20) if total_cache_dirs else 70
+            else:
+                percent = None
+                
+            self._update_progress(
+                f"Checking cache: {cache_dir}", 
+                percent,
+                current_file=cache_dir,
+                phase="cache_scan"
+            )
             
             path = Path(cache_dir).expanduser()
             if path.exists():
                 try:
+                    self._update_progress(
+                        f"Calculating size of: {path.name}",
+                        None,  # No percentage during size calculation
+                        current_file=str(path),
+                        phase="cache_scan"
+                    )
                     size = self.get_directory_size(path)
                     if size > 0:
+                        cache_type = self.categorize_cache(path)
                         self.cache_locations.append({
                             'path': str(path),
                             'size': size,
-                            'type': self.categorize_cache(path)
+                            'type': cache_type
                         })
+                        self._update_progress(
+                            f"Found {cache_type}: {self.format_size(size)}",
+                            None,  # No percentage for individual finds
+                            current_file=str(path),
+                            phase="cache_scan"
+                        )
                 except:
                     pass
     
@@ -402,7 +469,7 @@ class DiskAnalyzerCore:
     
     def analyze_docker(self):
         """Analiza el uso de espacio de Docker"""
-        self._update_progress("Analyzing Docker resources...", None)
+        self._update_progress("Checking Docker availability...", 90, phase="docker_analysis")
         
         docker_stats = {
             'available': False,
@@ -425,15 +492,20 @@ class DiskAnalyzerCore:
                     if os.path.exists(docker_desktop_path):
                         docker_cmd = docker_desktop_path
                     else:
+                        self._update_progress("Docker not found", 95, phase="docker_analysis")
                         return docker_stats
             
+            self._update_progress("Connecting to Docker daemon...", 91, phase="docker_analysis")
             result = subprocess.run([docker_cmd, 'version'], capture_output=True, text=True)
             if result.returncode != 0:
+                self._update_progress("Docker daemon not running", 95, phase="docker_analysis")
                 return docker_stats
                 
             docker_stats['available'] = True
+            self._update_progress("Docker connected, analyzing resources...", 92, phase="docker_analysis")
             
             # Obtener información del sistema Docker
+            self._update_progress("Analyzing Docker resources...", 93, phase="docker_analysis")
             result = subprocess.run([docker_cmd, 'system', 'df'], capture_output=True, text=True)
             if result.returncode == 0:
                 lines = result.stdout.strip().split('\n')
@@ -442,15 +514,35 @@ class DiskAnalyzerCore:
                     if parts and parts[0] == 'Images':
                         docker_stats['images']['size'] = self.parse_docker_size(parts[3])
                         docker_stats['images']['reclaimable'] = self.parse_docker_size(parts[4])
+                        self._update_progress(
+                            f"Docker images: {parts[3]} (reclaimable: {parts[4]})",
+                            None,  # No percentage for individual items
+                            phase="docker_analysis"
+                        )
                     elif parts and parts[0] == 'Containers':
                         docker_stats['containers']['size'] = self.parse_docker_size(parts[3])
                         docker_stats['containers']['reclaimable'] = self.parse_docker_size(parts[4])
+                        self._update_progress(
+                            f"Docker containers: {parts[3]} (reclaimable: {parts[4]})",
+                            None,  # No percentage for individual items
+                            phase="docker_analysis"
+                        )
                     elif parts and parts[0] == 'Local' and parts[1] == 'Volumes':
                         docker_stats['volumes']['size'] = self.parse_docker_size(parts[4])
                         docker_stats['volumes']['reclaimable'] = self.parse_docker_size(parts[5])
+                        self._update_progress(
+                            f"Docker volumes: {parts[4]} (reclaimable: {parts[5]})",
+                            None,  # No percentage for individual items
+                            phase="docker_analysis"
+                        )
                     elif parts and parts[0] == 'Build' and parts[1] == 'Cache':
                         docker_stats['build_cache']['size'] = self.parse_docker_size(parts[3])
                         docker_stats['build_cache']['reclaimable'] = self.parse_docker_size(parts[4])
+                        self._update_progress(
+                            f"Docker build cache: {parts[3]} (reclaimable: {parts[4]})",
+                            None,  # No percentage for individual items
+                            phase="docker_analysis"
+                        )
             
             # Calcular totales
             docker_stats['total_size'] = (
@@ -465,6 +557,12 @@ class DiskAnalyzerCore:
                 docker_stats['containers'].get('reclaimable', 0) +
                 docker_stats['volumes'].get('reclaimable', 0) +
                 docker_stats['build_cache'].get('reclaimable', 0)
+            )
+            
+            self._update_progress(
+                f"Docker total: {self.format_size(docker_stats['total_size'])} (reclaimable: {self.format_size(docker_stats['reclaimable'])})",
+                95,  # Final Docker percentage
+                phase="docker_analysis"
             )
             
         except Exception as e:
@@ -590,7 +688,10 @@ class DiskAnalyzerCore:
                 'docker_space': self.docker_stats['total_size'] if self.docker_stats else 0,
                 'docker_reclaimable': self.docker_stats['reclaimable'] if self.docker_stats else 0
             },
-            'large_files': self.large_files[:100],  # Top 100 archivos
+            'large_files': [
+                {**f, 'is_protected': self.is_protected_path(f['path'])}
+                for f in self.large_files[:100]
+            ],
             'cache_locations': self.cache_locations,
             'top_directories': top_dirs,
             'file_types': top_extensions,
