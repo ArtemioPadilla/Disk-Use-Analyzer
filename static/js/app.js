@@ -5,6 +5,7 @@ let selectedPaths = [];
 let ws = null;
 let analysisResults = null;
 let lastProgressPercent = 0;  // Track last progress to prevent going backwards
+let allLargeFiles = [];  // Cached large files for search/sort
 
 // Initialize app
 document.addEventListener('DOMContentLoaded', () => {
@@ -27,6 +28,23 @@ function initializeEventListeners() {
     if (slider) {
         slider.addEventListener('input', (e) => {
             document.getElementById('min-size-value').textContent = `${e.target.value} MB`;
+        });
+    }
+
+    // File search
+    const fileSearch = document.getElementById('file-search');
+    if (fileSearch) {
+        fileSearch.addEventListener('input', () => {
+            renderFilteredFiles();
+        });
+    }
+
+    // File sort
+    const fileSort = document.getElementById('file-sort');
+    if (fileSort) {
+        fileSort.addEventListener('change', () => {
+            sortLargeFiles();
+            renderFilteredFiles();
         });
     }
 }
@@ -757,26 +775,66 @@ function createDirectoryChart() {
 
 // Display Large Files
 function displayLargeFiles() {
-    const filesList = document.getElementById('files-list');
-    
     // Aggregate all large files
-    const allFiles = [];
+    allLargeFiles = [];
     analysisResults.results.forEach(result => {
         result.report.large_files.forEach(file => {
-            allFiles.push(file);
+            allLargeFiles.push(file);
         });
     });
-    
-    // Sort by size
-    allFiles.sort((a, b) => b.size - a.size);
-    
+
+    // Apply current sort (default: size descending)
+    sortLargeFiles();
+
+    // Reset search field
+    const searchInput = document.getElementById('file-search');
+    if (searchInput) searchInput.value = '';
+
+    renderFilteredFiles();
+}
+
+function sortLargeFiles() {
+    const sortSelect = document.getElementById('file-sort');
+    const sortBy = sortSelect ? sortSelect.value : 'size';
+
+    if (sortBy === 'size') {
+        allLargeFiles.sort((a, b) => b.size - a.size);
+    } else if (sortBy === 'name') {
+        allLargeFiles.sort((a, b) => {
+            const nameA = (a.path || '').toLowerCase();
+            const nameB = (b.path || '').toLowerCase();
+            return nameA.localeCompare(nameB);
+        });
+    } else if (sortBy === 'age') {
+        allLargeFiles.sort((a, b) => {
+            const ageA = a.age_days >= 0 ? a.age_days : -1;
+            const ageB = b.age_days >= 0 ? b.age_days : -1;
+            return ageB - ageA;
+        });
+    }
+}
+
+function renderFilteredFiles() {
+    const filesList = document.getElementById('files-list');
+    const searchInput = document.getElementById('file-search');
+    const query = (searchInput ? searchInput.value : '').toLowerCase().trim();
+
+    let filtered = allLargeFiles;
+    if (query) {
+        filtered = allLargeFiles.filter(file => {
+            const filePath = (file.path || '').toLowerCase();
+            const fileName = filePath.split('/').pop();
+            return filePath.includes(query) || fileName.includes(query);
+        });
+    }
+
     // Display top 100
-    filesList.innerHTML = allFiles.slice(0, 100).map(file => `
+    filesList.innerHTML = filtered.slice(0, 100).map(file => `
         <div class="file-item">
             <div class="file-info">
                 <div class="file-path">${file.path}</div>
                 <div class="file-meta">
-                    ${file.extension || 'No extension'} • 
+                    ${file.extension || 'No extension'} •
                     ${file.age_days >= 0 ? `${file.age_days} days old` : 'Unknown age'}
                     ${file.is_cache ? ' • Cache file' : ''}
                 </div>
@@ -797,7 +855,7 @@ function displayLargeFiles() {
 // Display Recommendations
 function displayRecommendations() {
     const recList = document.getElementById('recommendations-list');
-    
+
     // Aggregate recommendations
     const allRecs = [];
     analysisResults.results.forEach(result => {
@@ -805,33 +863,91 @@ function displayRecommendations() {
             allRecs.push(rec);
         });
     });
-    
-    // Sort by space
-    allRecs.sort((a, b) => b.space - a.space);
-    
-    recList.innerHTML = allRecs.map(rec => `
-        <div class="recommendation-item">
-            <span class="recommendation-priority priority-${rec.priority.toLowerCase()}">${rec.priority}</span>
-            <div class="recommendation-info">
-                <div class="recommendation-type">${rec.type}</div>
-                <div class="recommendation-description">${rec.description}</div>
+
+    // Sort by tier then size
+    allRecs.sort((a, b) => (a.tier || 9) - (b.tier || 9) || b.space - a.space);
+
+    const tierMeta = {
+        1: { icon: '🟢', name: 'Seguro', desc: 'Sin riesgo, se regenera automáticamente', color: 'var(--success)' },
+        2: { icon: '🟡', name: 'Moderado', desc: 'Revisar antes de ejecutar', color: 'var(--warning)' },
+        3: { icon: '🟠', name: 'Agresivo', desc: 'Puede requerir re-descargas', color: '#f97316' },
+        4: { icon: '🔴', name: 'Máximo', desc: 'Requiere decisiones del usuario', color: 'var(--danger)' }
+    };
+
+    // Group by tier
+    const tiers = {};
+    allRecs.forEach(rec => {
+        const t = rec.tier || 9;
+        if (!tiers[t]) tiers[t] = [];
+        tiers[t].push(rec);
+    });
+
+    let cumulative = 0;
+    let html = '';
+    Object.keys(tiers).sort().forEach(tierNum => {
+        const recs = tiers[tierNum];
+        const info = tierMeta[tierNum] || { icon: '⚪', name: `Nivel ${tierNum}`, desc: '', color: 'var(--gray)' };
+        const tierTotal = recs.reduce((sum, r) => sum + r.space, 0);
+        cumulative += tierTotal;
+
+        html += `
+        <div style="margin-bottom: 1rem; border: 1px solid var(--border); border-radius: 12px; overflow: hidden;">
+            <div style="padding: 0.75rem 1rem; background: var(--bg-secondary); border-bottom: 1px solid var(--border);
+                        display: flex; justify-content: space-between; align-items: center; cursor: pointer;"
+                 onclick="this.parentElement.querySelector('.tier-body').style.display = this.parentElement.querySelector('.tier-body').style.display === 'none' ? 'block' : 'none'">
+                <div>
+                    <span style="font-size: 1.1rem;">${info.icon}</span>
+                    <strong style="margin-left: 0.5rem;">Nivel ${tierNum}: ${info.name}</strong>
+                    <span style="color: var(--text-secondary); margin-left: 0.5rem; font-size: 0.85rem;">— ${info.desc}</span>
+                </div>
+                <div style="text-align: right;">
+                    <span style="font-weight: 700; color: ${info.color}; font-size: 1.05rem;">${formatSize(tierTotal)}</span>
+                    <div style="font-size: 0.7rem; color: var(--text-secondary);">Acumulado: ${formatSize(cumulative)}</div>
+                </div>
             </div>
-            <span class="recommendation-space">${formatSize(rec.space)}</span>
-            <button class="btn btn-secondary" onclick="previewCleanup('${rec.command}')">
-                Preview
-            </button>
-        </div>
-    `).join('');
+            <div class="tier-body" style="padding: 0.75rem 1rem;">
+                ${recs.map(rec => `
+                    <div class="recommendation-item" style="border-bottom: 1px solid var(--border); padding: 0.5rem 0;">
+                        <div style="display: flex; justify-content: space-between; align-items: center;">
+                            <div>
+                                <div class="recommendation-type">${rec.type}</div>
+                                <div class="recommendation-description">${rec.description}</div>
+                            </div>
+                            <span class="recommendation-space">${formatSize(rec.space)}</span>
+                        </div>
+                        ${rec.command && !rec.command.startsWith('#') ? `
+                            <div style="margin-top: 0.5rem; background: var(--bg-tertiary, #1e293b); color: #e2e8f0;
+                                        padding: 0.5rem 0.75rem; border-radius: 6px; font-family: monospace; font-size: 0.8rem;
+                                        cursor: pointer;" onclick="navigator.clipboard.writeText(this.textContent.trim())" title="Click to copy">
+                                ${rec.command}
+                            </div>` : ''}
+                    </div>
+                `).join('')}
+            </div>
+        </div>`;
+    });
+
+    recList.innerHTML = html || '<p style="text-align: center; color: var(--text-secondary);">No hay recomendaciones disponibles</p>';
 }
 
 // Tab Management
-function showTab(tabName) {
+function showTab(tabName, evt) {
     // Update buttons
     document.querySelectorAll('.tab-button').forEach(btn => {
         btn.classList.remove('active');
     });
-    event.target.classList.add('active');
-    
+    // Use the event if provided; otherwise find the button whose onclick matches
+    if (evt && evt.currentTarget) {
+        evt.currentTarget.classList.add('active');
+    } else {
+        // Fallback: mark the button whose tab matches
+        document.querySelectorAll('.tab-button').forEach(btn => {
+            if (btn.getAttribute('onclick') && btn.getAttribute('onclick').includes(`'${tabName}'`)) {
+                btn.classList.add('active');
+            }
+        });
+    }
+
     // Update content
     document.querySelectorAll('.tab-content').forEach(content => {
         content.style.display = 'none';

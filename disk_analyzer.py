@@ -226,8 +226,10 @@ class DiskAnalyzer:
             ])
         return [d for d in temp_dirs if d and d.exists()]
     
-    def scan_directory(self, directory: Path) -> int:
+    def scan_directory(self, directory: Path, _depth: int = 0) -> int:
         """Escanea un directorio y retorna su tamaño total"""
+        if _depth > 200:
+            return 0
         total_size = 0
         
         try:
@@ -262,7 +264,7 @@ class DiskAnalyzer:
                     elif item.is_dir(follow_symlinks=False):
                         # No seguir enlaces simbólicos a directorios
                         if not item.is_symlink():
-                            dir_size = self.scan_directory(item)
+                            dir_size = self.scan_directory(item, _depth + 1)
                             total_size += dir_size
                             self.directory_sizes[str(item)] = dir_size
                         
@@ -717,7 +719,7 @@ class DiskAnalyzer:
                 'type': 'Docker',
                 'description': f'Docker: {self.format_size(self.docker_stats["reclaimable"])} recuperable de {self.format_size(self.docker_stats["total_size"])} total',
                 'space': self.docker_stats['reclaimable'],
-                'command': 'docker system prune -a --volumes -f'
+                'command': 'docker system prune -a -f'
             })
 
         # ── TIER 3: Agresivo (puede requerir re-descargas) ──
@@ -1040,7 +1042,7 @@ class DiskAnalyzer:
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Disk Analyzer Dashboard - {timestamp}</title>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-    <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+    <script src="https://cdn.plot.ly/plotly-2.35.0.min.js"></script>
     <style>
         :root {{
             --primary: #6366f1;
@@ -1912,7 +1914,7 @@ class DiskAnalyzer:
                         </div>
                         
                         <div class="command-box" style="margin-top: 1rem;">
-                            docker system prune -a --volumes -f
+                            docker system prune -a -f
                             <button class="copy-btn" onclick="copyCommand(this)">Copiar</button>
                         </div>
                     </div>
@@ -2198,8 +2200,8 @@ class DiskAnalyzer:
             data: {{
                 labels: ageData.map(d => d.age),
                 datasets: [{{
-                    label: 'Archivos',
-                    data: ageData.map(d => d.count),
+                    label: 'Espacio',
+                    data: ageData.map(d => d.size),
                     backgroundColor: '#8b5cf6',
                     borderRadius: 6
                 }}]
@@ -2211,7 +2213,9 @@ class DiskAnalyzer:
                 scales: {{
                     y: {{
                         beginAtZero: true,
-                        ticks: {{ stepSize: 1 }}
+                        ticks: {{
+                            callback: function(value) {{ return formatBytes(value); }}
+                        }}
                     }}
                 }}
             }}
@@ -3205,11 +3209,12 @@ class DiskAnalyzer:
         for cache_loc in self.cache_locations:
             path = Path(cache_loc['path'])
             
-            # Solo limpiar ciertos tipos de cache automáticamente
-            safe_to_clean = any(safe in cache_loc['type'] for safe in [
-                'Cache General', 'Logs del Sistema', 'Downloads'
-            ])
-            
+            # Solo limpiar caches seguros — NUNCA Downloads ni Cache General
+            safe_to_clean = cache_loc['type'] in {
+                'Logs del Sistema', 'VS Code', 'Node.js/npm',
+                'Xcode Development', 'Python Cache'
+            }
+
             if safe_to_clean and path.exists():
                 if dry_run:
                     print(f"   • Limpiaría: {cache_loc['type']} - {self.format_size(cache_loc['size'])}")
@@ -3217,9 +3222,14 @@ class DiskAnalyzer:
                 else:
                     try:
                         if path.is_file():
-                            path.unlink()
+                            # Mover a Trash en macOS, borrar en otros OS
+                            if self.is_macos:
+                                subprocess.run(['osascript', '-e',
+                                    f'tell application "Finder" to delete POSIX file "{str(path)}"'],
+                                    capture_output=True, timeout=10)
+                            else:
+                                path.unlink()
                         else:
-                            # Para directorios, solo limpiar contenido, no el directorio mismo
                             for item in path.rglob('*'):
                                 if item.is_file():
                                     item.unlink()

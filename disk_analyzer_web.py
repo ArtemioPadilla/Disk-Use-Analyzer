@@ -23,7 +23,7 @@ from pydantic import BaseModel, Field
 import uvicorn
 
 # Import our core analyzer
-from disk_analyzer_core import DiskAnalyzerCore, MB, GB
+from disk_analyzer_core import DiskAnalyzerCore, MB, GB, IS_MACOS, IS_WINDOWS
 
 # Create FastAPI app
 app = FastAPI(
@@ -36,7 +36,7 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],  # In production, specify your domain
-    allow_credentials=True,
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -619,10 +619,39 @@ async def execute_cleanup(request: CleanupRequest):
     if request.dry_run:
         return await preview_cleanup(request)
     
-    # In production, implement actual cleanup with safety checks
+    # Safety: always preview first so callers see what would be deleted
+    preview = await preview_cleanup(
+        CleanupRequest(categories=request.categories, dry_run=True)
+    )
+
+    # Perform actual cleanup
+    analyzer = DiskAnalyzerCore()
+    deleted: list[dict] = []
+    errors: list[dict] = []
+    freed_size = 0
+
+    for action in preview.get("actions", []):
+        target = Path(action["path"])
+        try:
+            if target.is_file():
+                size = target.stat().st_size
+                target.unlink()
+                deleted.append({"path": str(target), "size": size})
+                freed_size += size
+            elif target.is_dir():
+                import shutil
+                size = action.get("size", 0)
+                shutil.rmtree(str(target))
+                deleted.append({"path": str(target), "size": size})
+                freed_size += size
+        except Exception as e:
+            errors.append({"path": str(target), "error": str(e)})
+
     return {
-        "message": "Cleanup execution not implemented in demo",
-        "dry_run": request.dry_run
+        "deleted": deleted,
+        "errors": errors,
+        "freed_size": freed_size,
+        "dry_run": False
     }
 
 @app.get("/api/export/{session_id}/{format}")
