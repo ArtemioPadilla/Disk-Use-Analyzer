@@ -627,116 +627,169 @@ class DiskAnalyzer:
         return f"rm -f '{escaped_path}'"
     
     def generate_recommendations(self) -> List[Dict]:
-        """Genera recomendaciones basadas en el análisis"""
+        """Genera recomendaciones agrupadas por nivel de agresividad.
+        Cada recomendación tiene un 'tier' (1-4) de conservador a agresivo."""
         recommendations = []
-        
-        # Recomendación de Docker
-        if self.docker_stats and self.docker_stats['available'] and self.docker_stats['reclaimable'] > 100 * MB:
-            recommendations.append({
-                'priority': 'Alta',
-                'type': 'Docker',
-                'description': f'Docker está usando {self.format_size(self.docker_stats["total_size"])} con {self.format_size(self.docker_stats["reclaimable"])} recuperable',
-                'action': 'Ejecuta "docker system prune -a" para limpiar imágenes, contenedores y volúmenes no utilizados',
-                'space': self.docker_stats['reclaimable'],
-                'command': 'docker system prune -a --volumes -f'
-            })
-        
-        # Recomendación de cache — solo caches verdaderamente seguros de limpiar
-        # Excluir Docker (tiene su propia recomendación), Cache General (puede ser
-        # ~/.cache con modelos ML o CoreSimulator/Devices que no son caches)
-        safe_cache_types = {'Logs del Sistema', 'VS Code', 'Xcode Development',
-                            'Node.js/npm', 'Papelera'}
-        safe_caches = [loc for loc in self.cache_locations if loc['type'] in safe_cache_types]
 
-        safe_cache_size = sum(loc['size'] for loc in safe_caches)
-        if safe_cache_size > 100 * MB:
-            cache_commands = [f"rm -rf '{loc['path']}/*'" for loc in safe_caches[:3]]
-            recommendations.append({
-                'priority': 'Media',
-                'type': 'Cache del Sistema',
-                'description': f'Puedes liberar {self.format_size(safe_cache_size)} de cache seguro de limpiar',
-                'action': 'Ejecuta el script con --clean-cache para limpiar automáticamente',
-                'space': safe_cache_size,
-                'command': ' && '.join(cache_commands) if cache_commands else 'make clean-cache'
-            })
-        
-        # Downloads antiguos
-        old_downloads = [
-            f for f in self.large_files
-            if 'downloads' in f['path'].lower() and f['age_days'] > 30
-        ]
-        if old_downloads:
-            size = sum(f['size'] for f in old_downloads)
-            recommendations.append({
-                'priority': 'Media',
-                'type': 'Descargas Antiguas',
-                'description': f'Tienes {len(old_downloads)} archivos en Downloads con más de 30 días',
-                'action': 'Revisa y elimina descargas que ya no necesites',
-                'space': size,
-                'command': f"# Listar primero: find ~/Downloads -mtime +30 -size +{int(self.min_size/MB)}M -type f -ls"
-            })
-        
-        # Archivos muy grandes
-        huge_files = [f for f in self.large_files if f['size'] > GB]
-        if huge_files:
-            recommendations.append({
-                'priority': 'Media',
-                'type': 'Archivos Gigantes',
-                'description': f'Encontré {len(huge_files)} archivos de más de 1GB',
-                'action': 'Considera mover estos archivos a un disco externo',
-                'space': sum(f['size'] for f in huge_files),
-                'command': '# Revisa manualmente estos archivos antes de borrar'
-            })
-        
-        # Archivos de desarrollo
-        dev_files = [
-            f for f in self.large_files
-            if any(ext in f['extension'] for ext in ['.vmdk', '.vdi', '.qcow2'])
-        ]
-        if dev_files:
-            size = sum(f['size'] for f in dev_files)
-            recommendations.append({
-                'priority': 'Baja',
-                'type': 'Máquinas Virtuales',
-                'description': f'Tienes {len(dev_files)} archivos de máquinas virtuales',
-                'action': 'Elimina VMs que ya no uses o muévelas a almacenamiento externo',
-                'space': size,
-                'command': '# Lista VMs: find . -name "*.vmdk" -o -name "*.vdi" -size +1G'
-            })
+        # ── TIER 1: Seguro (auto-limpiable, sin revisión) ──
+        # Logs del sistema
+        log_locs = [l for l in self.cache_locations if l['type'] == 'Logs del Sistema']
+        if log_locs:
+            size = sum(l['size'] for l in log_locs)
+            if size > 10 * MB:
+                recommendations.append({
+                    'tier': 1, 'priority': 'Seguro',
+                    'type': 'Logs del Sistema',
+                    'description': f'{self.format_size(size)} en logs del sistema',
+                    'space': size,
+                    'command': ' && '.join(f"rm -rf '{l['path']}/*'" for l in log_locs)
+                })
 
         # Homebrew caches
-        brew_files = [
-            f for f in self.large_files
-            if 'Homebrew/downloads' in f['path']
-        ]
+        brew_files = [f for f in self.large_files if 'Homebrew/downloads' in f['path']]
         if brew_files:
             size = sum(f['size'] for f in brew_files)
             recommendations.append({
-                'priority': 'Alta',
+                'tier': 1, 'priority': 'Seguro',
                 'type': 'Cache de Homebrew',
-                'description': f'{len(brew_files)} descargas de Homebrew ocupan {self.format_size(size)}',
-                'action': 'Limpia el cache de Homebrew de forma segura',
+                'description': f'{len(brew_files)} descargas de Homebrew ({self.format_size(size)})',
                 'space': size,
                 'command': 'brew cleanup --prune=all'
             })
 
+        # VS Code caches
+        vscode_locs = [l for l in self.cache_locations if l['type'] == 'VS Code']
+        if vscode_locs:
+            size = sum(l['size'] for l in vscode_locs)
+            if size > 10 * MB:
+                recommendations.append({
+                    'tier': 1, 'priority': 'Seguro',
+                    'type': 'Cache de VS Code',
+                    'description': f'{self.format_size(size)} en cache de VS Code',
+                    'space': size,
+                    'command': ' && '.join(f"rm -rf '{l['path']}/*'" for l in vscode_locs)
+                })
+
+        # npm cache
+        npm_locs = [l for l in self.cache_locations if l['type'] == 'Node.js/npm']
+        if npm_locs:
+            size = sum(l['size'] for l in npm_locs)
+            if size > 50 * MB:
+                recommendations.append({
+                    'tier': 1, 'priority': 'Seguro',
+                    'type': 'Cache de npm',
+                    'description': f'{self.format_size(size)} en cache de npm (se regenera con npm install)',
+                    'space': size,
+                    'command': 'npm cache clean --force'
+                })
+
+        # ── TIER 2: Moderado (requiere revisión rápida) ──
         # Simulator caches
-        sim_files = [
-            f for f in self.large_files
-            if 'CoreSimulator' in f['path'] and not self.is_protected_path(f['path'])
-        ]
+        sim_files = [f for f in self.large_files
+                     if 'CoreSimulator' in f['path'] and not self.is_protected_path(f['path'])]
         if sim_files:
             size = sum(f['size'] for f in sim_files)
             recommendations.append({
-                'priority': 'Media',
+                'tier': 2, 'priority': 'Moderado',
                 'type': 'Cache de Simuladores iOS',
                 'description': f'{len(sim_files)} archivos de cache de simuladores ({self.format_size(size)})',
-                'action': 'Limpia caches de simuladores antiguos (se regeneran al usar Xcode)',
                 'space': size,
                 'command': 'xcrun simctl delete unavailable && rm -rf ~/Library/Developer/CoreSimulator/Caches/'
             })
 
-        return sorted(recommendations, key=lambda x: x['space'], reverse=True)
+        # Old downloads
+        old_downloads = [f for f in self.large_files
+                         if '/Downloads/' in f['path'] and f['age_days'] > 30]
+        if old_downloads:
+            size = sum(f['size'] for f in old_downloads)
+            recommendations.append({
+                'tier': 2, 'priority': 'Moderado',
+                'type': 'Descargas Antiguas',
+                'description': f'{len(old_downloads)} archivos en Downloads con más de 30 días ({self.format_size(size)})',
+                'space': size,
+                'command': f"find ~/Downloads -mtime +30 -size +{int(self.min_size/MB)}M -type f -ls"
+            })
+
+        # Docker
+        if self.docker_stats and self.docker_stats['available'] and self.docker_stats['reclaimable'] > 100 * MB:
+            recommendations.append({
+                'tier': 2, 'priority': 'Moderado',
+                'type': 'Docker',
+                'description': f'Docker: {self.format_size(self.docker_stats["reclaimable"])} recuperable de {self.format_size(self.docker_stats["total_size"])} total',
+                'space': self.docker_stats['reclaimable'],
+                'command': 'docker system prune -a --volumes -f'
+            })
+
+        # ── TIER 3: Agresivo (puede requerir re-descargas) ──
+        # ~/.cache (huggingface, pip, etc.)
+        cache_general = [l for l in self.cache_locations
+                         if l['type'] == 'Cache General' and '/.cache' in l['path']]
+        if cache_general:
+            size = sum(l['size'] for l in cache_general)
+            if size > 100 * MB:
+                recommendations.append({
+                    'tier': 3, 'priority': 'Agresivo',
+                    'type': 'Cache General (~/.cache)',
+                    'description': f'{self.format_size(size)} en ~/.cache (modelos ML, pip, etc. — se re-descargan)',
+                    'space': size,
+                    'command': 'du -sh ~/.cache/*/ | sort -hr | head -20'
+                })
+
+        # Xcode DerivedData
+        xcode_locs = [l for l in self.cache_locations if l['type'] == 'Xcode Development']
+        if xcode_locs:
+            size = sum(l['size'] for l in xcode_locs)
+            if size > 100 * MB:
+                recommendations.append({
+                    'tier': 3, 'priority': 'Agresivo',
+                    'type': 'Xcode DerivedData',
+                    'description': f'{self.format_size(size)} en datos de compilación (se regeneran al compilar)',
+                    'space': size,
+                    'command': 'rm -rf ~/Library/Developer/Xcode/DerivedData/*'
+                })
+
+        # Old Simulator runtimes (the protected DMGs — user can remove via Xcode)
+        sim_runtimes = [f for f in self.large_files
+                        if 'iOSSimulatorRuntime' in f['path'] or 'SimRuntime' in f['path']]
+        if sim_runtimes:
+            size = sum(f['size'] for f in sim_runtimes)
+            if size > 1 * GB:
+                recommendations.append({
+                    'tier': 3, 'priority': 'Agresivo',
+                    'type': 'Runtimes de Simuladores',
+                    'description': f'{self.format_size(size)} en runtimes de iOS Simulator (eliminar desde Xcode > Settings > Platforms)',
+                    'space': size,
+                    'command': 'xcrun simctl runtime list'
+                })
+
+        # ── TIER 4: Máximo (requiere decisiones del usuario) ──
+        # Large files > 1GB that are not protected
+        huge_deletable = [f for f in self.large_files
+                          if f['size'] > GB and not self.is_protected_path(f['path'])]
+        if huge_deletable:
+            size = sum(f['size'] for f in huge_deletable)
+            recommendations.append({
+                'tier': 4, 'priority': 'Máximo',
+                'type': 'Archivos Gigantes',
+                'description': f'{len(huge_deletable)} archivos de más de 1GB que puedes revisar ({self.format_size(size)})',
+                'space': size,
+                'command': '# Revisa la tabla de archivos grandes arriba'
+            })
+
+        # VMs
+        dev_files = [f for f in self.large_files
+                     if any(ext in f['extension'] for ext in ['.vmdk', '.vdi', '.qcow2'])]
+        if dev_files:
+            size = sum(f['size'] for f in dev_files)
+            recommendations.append({
+                'tier': 4, 'priority': 'Máximo',
+                'type': 'Máquinas Virtuales',
+                'description': f'{len(dev_files)} archivos de VMs ({self.format_size(size)})',
+                'space': size,
+                'command': 'find / -name "*.vmdk" -o -name "*.vdi" -o -name "*.qcow2" 2>/dev/null | head -20'
+            })
+
+        return sorted(recommendations, key=lambda x: (x['tier'], -x['space']))
     
     def generate_report(self) -> Dict:
         """Genera el reporte completo"""
@@ -757,32 +810,10 @@ class DiskAnalyzer:
             reverse=True
         )[:15]  # Top 15 tipos
         
-        # Calcular espacio recuperable — solo caches seguros de limpiar
-        # No incluir Docker (requiere docker prune), ni Cache General (puede ser ~/.cache con modelos ML)
-        safe_recovery_types = {'Logs del Sistema', 'VS Code', 'Xcode Development',
-                               'Node.js/npm', 'Papelera', 'Downloads'}
-        recoverable_space = sum(
-            loc['size'] for loc in self.cache_locations
-            if loc['type'] in safe_recovery_types
-        )
-        old_downloads = sum(
-            f['size'] for f in self.large_files
-            if 'downloads' in f['path'].lower() and f['age_days'] > 30
-        )
-        # Homebrew caches
-        recoverable_space += sum(
-            f['size'] for f in self.large_files
-            if 'Homebrew/downloads' in f['path']
-        )
-        # Simulator caches (non-protected)
-        recoverable_space += sum(
-            f['size'] for f in self.large_files
-            if 'CoreSimulator' in f['path'] and not self.is_protected_path(f['path'])
-        )
-
-        # Agregar espacio recuperable de Docker
-        if self.docker_stats and self.docker_stats['available']:
-            recoverable_space += self.docker_stats['reclaimable']
+        # Calcular espacio recuperable como suma de todas las recomendaciones
+        recommendations = self.generate_recommendations()
+        recoverable_space = sum(r['space'] for r in recommendations)
+        old_downloads = 0  # Ya incluido en recomendaciones
         
         report = {
             'summary': {
@@ -800,7 +831,7 @@ class DiskAnalyzer:
             'large_files': self.large_files[:50],  # Top 50 archivos
             'cache_locations': sorted(self.cache_locations, key=lambda x: x['size'], reverse=True),
             'docker': self.docker_stats,
-            'recommendations': self.generate_recommendations(),
+            'recommendations': recommendations,
             'errors': self.errors[:10],  # Primeros 10 errores
             'delete_commands': self._generate_delete_commands(self.large_files[:50]),
             'disk_usage': self.disk_usage,
@@ -860,14 +891,19 @@ class DiskAnalyzer:
         
         # Recomendaciones
         if report['recommendations']:
-            print(f"\n💡 RECOMENDACIONES PRINCIPALES:")
-            for i, rec in enumerate(report['recommendations'][:5], 1):
-                print(f"\n   {i}. [{rec['priority']}] {rec['type']}")
-                print(f"      {rec['description']}")
-                print(f"      → {rec['action']}")
-                print(f"      Espacio recuperable: {self.format_size(rec['space'])}")
-                if 'command' in rec and rec['command']:
-                    print(f"      📝 Comando: {rec['command']}")
+            print(f"\n💡 PLAN DE LIMPIEZA:")
+            tier_names = {1: '🟢 Seguro', 2: '🟡 Moderado', 3: '🟠 Agresivo', 4: '🔴 Máximo'}
+            from itertools import groupby
+            cumulative = 0
+            for tier_num, tier_recs in groupby(report['recommendations'], key=lambda r: r['tier']):
+                tier_recs = list(tier_recs)
+                tier_total = sum(r['space'] for r in tier_recs)
+                cumulative += tier_total
+                print(f"\n   ─── {tier_names.get(tier_num, f'Nivel {tier_num}')} ({self.format_size(tier_total)}) ─── acumulado: {self.format_size(cumulative)}")
+                for rec in tier_recs:
+                    print(f"      • {rec['type']}: {rec['description']}")
+                    if rec.get('command') and not rec['command'].startswith('#'):
+                        print(f"        📝 {rec['command']}")
         
         # Top directorios
         print(f"\n📁 TOP 10 DIRECTORIOS MÁS GRANDES:")
@@ -1763,33 +1799,65 @@ class DiskAnalyzer:
             </div>
             
             <div class="card col-span-12">
-                <h2>💡 Recomendaciones</h2>
-                <div id="recommendations">'''
-        
-        # Agregar recomendaciones
-        for rec in report['recommendations'][:5]:
-            priority_class = rec['priority'].lower()
-            command = rec.get('command', '')
+                <h2>💡 Plan de Limpieza</h2>'''
+
+        tier_meta = {
+            1: {'icon': '🟢', 'name': 'Seguro', 'desc': 'Sin riesgo, se regenera automáticamente', 'color': 'var(--success)'},
+            2: {'icon': '🟡', 'name': 'Moderado', 'desc': 'Revisar antes de ejecutar', 'color': 'var(--warning)'},
+            3: {'icon': '🟠', 'name': 'Agresivo', 'desc': 'Puede requerir re-descargas', 'color': '#f97316'},
+            4: {'icon': '🔴', 'name': 'Máximo', 'desc': 'Requiere decisiones del usuario', 'color': 'var(--danger)'},
+        }
+
+        # Group recommendations by tier
+        from itertools import groupby
+        recs = report['recommendations']
+        cumulative = 0
+
+        for tier_num, tier_recs in groupby(recs, key=lambda r: r['tier']):
+            tier_recs = list(tier_recs)
+            tier_info = tier_meta.get(tier_num, tier_meta[4])
+            tier_total = sum(r['space'] for r in tier_recs)
+            cumulative += tier_total
+
             html += f'''
-                    <div class="recommendation">
-                        <div class="header">
-                            <div>
-                                <span class="priority {priority_class}">{rec['priority']}</span>
-                                <strong>{rec['type']}</strong>
-                            </div>
-                            <span style="color: var(--primary); font-weight: 600;">{self.format_size(rec['space'])}</span>
+                <div style="margin-bottom: 1.5rem; border: 1px solid var(--border); border-radius: 12px; overflow: hidden;">
+                    <div style="padding: 1rem 1.25rem; background: var(--hover-bg); border-bottom: 1px solid var(--border);
+                                display: flex; justify-content: space-between; align-items: center; cursor: pointer;"
+                         onclick="this.parentElement.querySelector('.tier-content').style.display = this.parentElement.querySelector('.tier-content').style.display === 'none' ? 'block' : 'none'">
+                        <div>
+                            <span style="font-size: 1.2rem;">{tier_info['icon']}</span>
+                            <strong style="margin-left: 0.5rem; color: var(--dark);">Nivel {tier_num}: {tier_info['name']}</strong>
+                            <span style="color: var(--gray); margin-left: 0.5rem; font-size: 0.85rem;">— {tier_info['desc']}</span>
                         </div>
-                        <p style="margin: 0.5rem 0; color: var(--gray);">{rec['description']}</p>'''
-            
-            if command and not command.startswith('#'):
+                        <div style="text-align: right;">
+                            <span style="font-weight: 700; color: {tier_info['color']}; font-size: 1.1rem;">{self.format_size(tier_total)}</span>
+                            <div style="font-size: 0.75rem; color: var(--gray);">Acumulado: {self.format_size(cumulative)}</div>
+                        </div>
+                    </div>
+                    <div class="tier-content" style="padding: 1rem 1.25rem;">'''
+
+            for rec in tier_recs:
+                command = rec.get('command', '')
                 html += f'''
-                        <div class="command-box">{command}<button class="copy-btn" onclick="copyCommand(this)">Copiar</button></div>'''
-            
+                        <div style="padding: 0.75rem 0; border-bottom: 1px solid var(--border);">
+                            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.25rem;">
+                                <strong style="color: var(--dark); font-size: 0.9rem;">{rec['type']}</strong>
+                                <span style="color: var(--primary); font-weight: 600;">{self.format_size(rec['space'])}</span>
+                            </div>
+                            <p style="margin: 0.25rem 0 0.5rem; color: var(--gray); font-size: 0.85rem;">{rec['description']}</p>'''
+
+                if command and not command.startswith('#'):
+                    html += f'''
+                            <div class="command-box">{command}<button class="copy-btn" onclick="copyCommand(this)">Copiar</button></div>'''
+
+                html += '''
+                        </div>'''
+
             html += '''
-                    </div>'''
-        
+                    </div>
+                </div>'''
+
         html += '''
-                </div>
             </div>'''
         
         # Sección de Docker si está disponible
