@@ -640,26 +640,28 @@ class DiskAnalyzer:
                 'command': 'docker system prune -a --volumes -f'
             })
         
-        # Recomendación de cache
-        cache_size = sum(loc['size'] for loc in self.cache_locations)
-        if cache_size > 500 * MB:
-            cache_commands = []
-            for loc in self.cache_locations:
-                if any(safe in loc['type'] for safe in ['Cache General', 'Logs del Sistema']):
-                    cache_commands.append(f"rm -rf '{loc['path']}/*'")
-            
+        # Recomendación de cache — solo caches verdaderamente seguros de limpiar
+        # Excluir Docker (tiene su propia recomendación), Cache General (puede ser
+        # ~/.cache con modelos ML o CoreSimulator/Devices que no son caches)
+        safe_cache_types = {'Logs del Sistema', 'VS Code', 'Xcode Development',
+                            'Node.js/npm', 'Papelera'}
+        safe_caches = [loc for loc in self.cache_locations if loc['type'] in safe_cache_types]
+
+        safe_cache_size = sum(loc['size'] for loc in safe_caches)
+        if safe_cache_size > 100 * MB:
+            cache_commands = [f"rm -rf '{loc['path']}/*'" for loc in safe_caches[:3]]
             recommendations.append({
-                'priority': 'Alta',
+                'priority': 'Media',
                 'type': 'Cache del Sistema',
-                'description': f'Puedes liberar {self.format_size(cache_size)} eliminando archivos de cache',
+                'description': f'Puedes liberar {self.format_size(safe_cache_size)} de cache seguro de limpiar',
                 'action': 'Ejecuta el script con --clean-cache para limpiar automáticamente',
-                'space': cache_size,
-                'command': ' && '.join(cache_commands[:3]) if cache_commands else 'make clean-cache'
+                'space': safe_cache_size,
+                'command': ' && '.join(cache_commands) if cache_commands else 'make clean-cache'
             })
         
         # Downloads antiguos
         old_downloads = [
-            f for f in self.large_files 
+            f for f in self.large_files
             if 'downloads' in f['path'].lower() and f['age_days'] > 30
         ]
         if old_downloads:
@@ -670,7 +672,7 @@ class DiskAnalyzer:
                 'description': f'Tienes {len(old_downloads)} archivos en Downloads con más de 30 días',
                 'action': 'Revisa y elimina descargas que ya no necesites',
                 'space': size,
-                'command': f"find ~/Downloads -mtime +30 -size +{int(self.min_size/MB)}M -type f -delete"
+                'command': f"# Listar primero: find ~/Downloads -mtime +30 -size +{int(self.min_size/MB)}M -type f -ls"
             })
         
         # Archivos muy grandes
@@ -754,8 +756,14 @@ class DiskAnalyzer:
             reverse=True
         )[:15]  # Top 15 tipos
         
-        # Calcular espacio recuperable desde archivos detectados como cache/temp
-        recoverable_space = sum(loc['size'] for loc in self.cache_locations)
+        # Calcular espacio recuperable — solo caches seguros de limpiar
+        # No incluir Docker (requiere docker prune), ni Cache General (puede ser ~/.cache con modelos ML)
+        safe_recovery_types = {'Logs del Sistema', 'VS Code', 'Xcode Development',
+                               'Node.js/npm', 'Papelera', 'Downloads'}
+        recoverable_space = sum(
+            loc['size'] for loc in self.cache_locations
+            if loc['type'] in safe_recovery_types
+        )
         old_downloads = sum(
             f['size'] for f in self.large_files
             if 'downloads' in f['path'].lower() and f['age_days'] > 30
@@ -919,7 +927,7 @@ class DiskAnalyzer:
             scan_coverage = accounted / self.disk_usage['used'] if self.disk_usage['used'] > 0 else 0
             if gap > 10 * GB and scan_coverage > 0.25:
                 print(f"\n💡 {self.format_size(int(gap))} no se pudieron analizar por falta de permisos.")
-                print("   Para un análisis completo: sudo make full path=/ min_size=250")
+                print("   Para un análisis completo: sudo make full path=/ min_size={int(self.min_size/MB)}")
     
     def export_json(self, report: Dict, filename: str):
         """Exporta el reporte a JSON"""
@@ -1544,7 +1552,7 @@ class DiskAnalyzer:
             <div style="margin-top: 0.75rem; padding: 0.75rem 1rem; background: #fef3c7; border: 1px solid #f59e0b;
                         border-radius: 8px; font-size: 0.8rem; color: #92400e;">
                 <strong>💡 Tip:</strong> {self.format_size(int(permission_gap))} del disco no se pudieron analizar por falta de permisos.
-                Para un análisis completo ejecuta: <code style="background: #fde68a; padding: 2px 6px; border-radius: 4px;">sudo make full path=/ min_size=250</code>
+                Para un análisis completo ejecuta: <code style="background: #fde68a; padding: 2px 6px; border-radius: 4px;">sudo make full path=/ min_size={int(self.min_size/MB)}</code>
             </div>'''
 
             html += '''
