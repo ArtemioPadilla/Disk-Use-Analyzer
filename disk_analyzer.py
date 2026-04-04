@@ -134,7 +134,8 @@ PROTECTED_ROOT_DIRS = {'/bin', '/sbin'}
 class DiskAnalyzer:
     def __init__(self, start_path: str, min_size_mb: float = 10):
         self.start_path = Path(start_path).expanduser()
-        self.min_size = min_size_mb * MB
+        # Floor at 1 MB to prevent every file being treated as "large"
+        self.min_size = max(min_size_mb, 1) * MB
         self.total_scanned = 0
         self.errors = []
         self.cache_locations = []
@@ -1421,12 +1422,17 @@ class DiskAnalyzer:
                     'color': '#94a3b8'
                 })
 
-            # Espacio sin permisos de lectura (requiere sudo para acceder)
+            # Espacio no contabilizado
             accounted = analyzed_total + skipped_size
             unanalyzed = disk_usage['used'] - accounted
             if unanalyzed > 0:
+                # Elegir etiqueta según si estamos como root o no
+                if os.geteuid() == 0:
+                    gap_label = 'APFS purgeable'
+                else:
+                    gap_label = 'Sin permisos (sudo)'
                 categories.append({
-                    'name': 'Sin permisos (sudo)',
+                    'name': gap_label,
                     'size': unanalyzed,
                     'percent': (unanalyzed / disk_usage['total']) * 100,
                     'color': colors['Sin analizar']
@@ -1496,8 +1502,9 @@ class DiskAnalyzer:
             
             <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 0.75rem; margin-bottom: 1rem;">'''
             
-            # Leyenda de categorías - excluir "Libre" y "Sin permisos" de la leyenda principal
-            display_categories = [cat for cat in categories if cat['name'] not in ['Libre', 'Sin permisos (sudo)']][:10]
+            # Leyenda de categorías - excluir Libre y gaps de la leyenda principal
+            exclude_from_legend = {'Libre', 'Sin permisos (sudo)', 'APFS purgeable'}
+            display_categories = [cat for cat in categories if cat['name'] not in exclude_from_legend][:10]
             
             for cat in display_categories:
                 # Determinar icono según categoría
