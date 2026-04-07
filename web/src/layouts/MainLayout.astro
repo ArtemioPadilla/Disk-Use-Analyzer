@@ -1,6 +1,7 @@
 ---
 import Sidebar from '../components/Sidebar.astro';
 import TopBar from '../components/TopBar.astro';
+import ProgressBar from '../components/ProgressBar.tsx';
 import FloatingTerminal from '../components/FloatingTerminal.tsx';
 import NewAnalysisModal from '../components/NewAnalysisModal.tsx';
 import AnalysisManager from '../components/AnalysisManager.tsx';
@@ -22,6 +23,7 @@ const { title, currentPath } = Astro.props;
       <Sidebar currentPath={currentPath} />
       <div class="main-area">
         <TopBar title={title} />
+        <ProgressBar client:load />
         <main class="page-content">
           <slot />
         </main>
