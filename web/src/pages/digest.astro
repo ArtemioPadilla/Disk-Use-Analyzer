@@ -1,0 +1,8 @@
+---
+import MainLayout from '../layouts/MainLayout.astro';
+import WeeklyDigest from '../components/WeeklyDigest.tsx';
+---
+
+<MainLayout title="Weekly Digest" currentPath="/digest">
+  <WeeklyDigest client:load />
+</MainLayout>

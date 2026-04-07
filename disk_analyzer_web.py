@@ -26,6 +26,7 @@ import uvicorn
 # Import our core analyzer
 from disk_analyzer_core import DiskAnalyzerCore, MB, GB, IS_MACOS, IS_WINDOWS
 from pty_manager import PTYManager
+from agents_manager import AgentsManager
 
 # Create FastAPI app
 app = FastAPI(
@@ -50,6 +51,9 @@ executor = ThreadPoolExecutor(max_workers=4)
 
 # Terminal management
 pty_manager = PTYManager(max_sessions=3, idle_timeout=600)
+
+# Background agents
+agents_manager = AgentsManager()
 
 # Session persistence
 SESSIONS_FILE = Path("sessions_metadata.json")
@@ -633,6 +637,69 @@ async def get_sessions():
     
     return {"sessions": sessions_list[:20]}  # Return last 20 sessions
 
+@app.get("/api/digest")
+async def get_digest():
+    """Generate a weekly digest from session history."""
+    from datetime import timedelta
+
+    now = datetime.now()
+    week_ago = now - timedelta(days=7)
+
+    # Get all sessions
+    all_sessions = list(analysis_sessions.values())
+
+    # Recent sessions (this week)
+    recent = [s for s in all_sessions
+              if s.get("completed_at") and datetime.fromisoformat(s["completed_at"]) > week_ago]
+
+    # Find oldest and newest with disk data
+    with_disk = [s for s in all_sessions if s.get("disk_used")]
+    with_disk.sort(key=lambda s: s.get("started_at", ""))
+
+    disk_growth = 0
+    if len(with_disk) >= 2:
+        disk_growth = (with_disk[-1].get("disk_used", 0) - with_disk[0].get("disk_used", 0))
+
+    # Current disk state
+    usage = shutil.disk_usage("/")
+    days_until_full = 0
+    if disk_growth > 0 and len(with_disk) >= 2:
+        first_date = datetime.fromisoformat(with_disk[0]["started_at"])
+        last_date = datetime.fromisoformat(with_disk[-1]["started_at"])
+        days_span = max((last_date - first_date).days, 1)
+        daily_growth = disk_growth / days_span
+        if daily_growth > 0:
+            days_until_full = int(usage.free / daily_growth)
+
+    # Agent activity
+    agents_log: list[str] = []
+    log_path = Path.home() / ".disk-analyzer" / "agents.log"
+    if log_path.exists():
+        try:
+            lines = log_path.read_text().strip().split('\n')[-20:]  # Last 20 lines
+            agents_log = [l for l in lines if l.strip()]
+        except Exception:
+            pass
+
+    return {
+        "generated_at": now.isoformat(),
+        "period": {"start": week_ago.isoformat(), "end": now.isoformat()},
+        "scans_this_week": len(recent),
+        "total_scans": len(all_sessions),
+        "disk": {
+            "used": usage.used,
+            "total": usage.total,
+            "free": usage.free,
+            "percent": round((usage.used / usage.total) * 100, 1) if usage.total > 0 else 0,
+        },
+        "growth": {
+            "bytes": disk_growth,
+            "direction": "up" if disk_growth > 0 else "down" if disk_growth < 0 else "stable",
+            "days_until_full": days_until_full if days_until_full > 0 else None,
+        },
+        "agents_log": agents_log[-10:],
+    }
+
 @app.get("/api/analysis/latest")
 async def get_latest_results():
     """Get the most recent completed analysis results."""
@@ -1013,6 +1080,29 @@ async def terminal_websocket(websocket: WebSocket, pty_id: str):
         output_task.cancel()
 
 
+# ── Background Agents API ──────────────────────────────────────────────
+
+@app.get("/api/agents")
+async def list_agents():
+    return agents_manager.get_agents()
+
+@app.post("/api/agents/{agent_id}/toggle")
+async def toggle_agent(agent_id: str, enabled: bool = True):
+    try:
+        agents_manager.toggle_agent(agent_id, enabled)
+        return {"status": "ok", "agent_id": agent_id, "enabled": enabled}
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+@app.post("/api/agents/{agent_id}/run")
+async def run_agent(agent_id: str):
+    try:
+        result = agents_manager.run_agent(agent_id)
+        return result
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
 @app.on_event("startup")
 async def startup_event():
     """Initialize the application"""
@@ -1033,6 +1123,9 @@ async def startup_event():
                 session["results"] = results
                 print(f"  Loaded cached results for session {sid}")
 
+    # Start background agents scheduler
+    agents_manager.start()
+
     print("✅ Web server started successfully")
     if astro_dist.exists():
         print(f"📁 Astro frontend served from: {astro_dist}")
@@ -1051,6 +1144,9 @@ async def shutdown_event():
                 await ws.close()
             except:
                 pass
+
+    # Stop background agents
+    agents_manager.stop()
 
     # Cleanup PTY sessions
     pty_manager.cleanup_all()

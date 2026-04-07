@@ -1,8 +1,12 @@
 ---
 import MainLayout from '../layouts/MainLayout.astro';
 import Settings from '../components/Settings.tsx';
+import AgentsPanel from '../components/AgentsPanel.tsx';
 ---
 
 <MainLayout title="Settings" currentPath="/settings">
   <Settings client:load />
+  <div style="margin-top: 1.5rem;">
+    <AgentsPanel client:load />
+  </div>
 </MainLayout>
