@@ -1996,7 +1996,7 @@ class DiskAnalyzer:
             # Top 3 apps
             _apps = report.get('app_usage', [])[:3]
             _top_apps_parts = [
-                f"{a['name']} ({self.format_size(a['size'])})" for a in _apps
+                f"{a['app']} ({self.format_size(a['size'])})" for a in _apps
             ]
             _top_apps_str = ', '.join(_top_apps_parts) if _top_apps_parts else 'N/A'
 
