@@ -1,0 +1,44 @@
+---
+const { title } = Astro.props;
+---
+
+<header class="topbar">
+  <h1 class="topbar-title">{title}</h1>
+  <div class="topbar-actions">
+    <a href="/" class="btn btn-primary" id="newAnalysisBtn">+ New Analysis</a>
+    <button class="btn btn-dark" id="terminalToggleBtn">⚡ Terminal</button>
+    <button class="btn btn-ghost" id="themeToggleBtn" aria-label="Toggle theme">🌙</button>
+  </div>
+</header>
+
+<style>
+  .topbar { height: var(--topbar-height); padding: 0 1.5rem; display: flex; align-items: center; justify-content: space-between; background: var(--card-bg); border-bottom: 1px solid var(--border); flex-shrink: 0; }
+  .topbar-title { font-size: 1.15rem; font-weight: 600; }
+  .topbar-actions { display: flex; gap: 0.5rem; align-items: center; }
+</style>
+
+<script>
+  const themeBtn = document.getElementById('themeToggleBtn');
+  function applyTheme() {
+    const saved = localStorage.getItem('disk-analyzer-theme');
+    const isDarkSystem = window.matchMedia('(prefers-color-scheme: dark)').matches;
+    const isDark = saved === 'dark' || (!saved && isDarkSystem);
+    document.documentElement.setAttribute('data-theme', isDark ? 'dark' : 'light');
+    if (themeBtn) themeBtn.textContent = isDark ? '☀️' : '🌙';
+  }
+  applyTheme();
+  themeBtn?.addEventListener('click', () => {
+    const current = document.documentElement.getAttribute('data-theme');
+    const next = current === 'dark' ? 'light' : 'dark';
+    localStorage.setItem('disk-analyzer-theme', next);
+    document.documentElement.setAttribute('data-theme', next);
+    themeBtn.textContent = next === 'dark' ? '☀️' : '🌙';
+  });
+  document.getElementById('terminalToggleBtn')?.addEventListener('click', () => {
+    window.dispatchEvent(new CustomEvent('terminal:toggle'));
+  });
+  document.getElementById('newAnalysisBtn')?.addEventListener('click', (e) => {
+    e.preventDefault();
+    window.dispatchEvent(new CustomEvent('analysis:new'));
+  });
+</script>

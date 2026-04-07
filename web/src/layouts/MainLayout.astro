@@ -1,0 +1,29 @@
+---
+import Sidebar from '../components/Sidebar.astro';
+import TopBar from '../components/TopBar.astro';
+import '../layouts/global.css';
+
+const { title, currentPath } = Astro.props;
+---
+
+<!DOCTYPE html>
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>{title} — Disk Analyzer</title>
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <Sidebar currentPath={currentPath} />
+      <div class="main-area">
+        <TopBar title={title} />
+        <main class="page-content">
+          <slot />
+        </main>
+      </div>
+    </div>
+    <div id="terminal-root"></div>
+  </body>
+</html>
