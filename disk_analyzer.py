@@ -775,6 +775,18 @@ class DiskAnalyzer:
         escaped_path = file_path.replace("'", "'\"'\"'")
         return f"rm -f '{escaped_path}'"
 
+    def _get_file_group(self, path: str) -> Optional[str]:
+        """Returns a logical group name for a file path, or None if ungrouped."""
+        if '/StarCraft II/' in path:
+            return 'StarCraft II'
+        if '/Homebrew/' in path and ('/downloads/' in path.lower() or '/cache' in path.lower()):
+            return 'Homebrew Cache'
+        if '/CoreSimulator/' in path:
+            return 'iOS Simulator'
+        if '/Downloads/' in path:
+            return 'Downloads'
+        return None
+
     def detect_smart_recommendations(self) -> List[Dict]:
         """Detecta patrones avanzados en directory_sizes y large_files para
         generar recomendaciones inteligentes de limpieza.  Cada deteccion
@@ -1564,7 +1576,8 @@ class DiskAnalyzer:
                 'extension': f['extension'],
                 'is_cache': f['is_cache'],
                 'is_protected': protected,
-                'delete_cmd': self.generate_delete_command(f['path'])
+                'delete_cmd': self.generate_delete_command(f['path']),
+                'group': self._get_file_group(f['path'])
             })
         
         # Generar HTML
@@ -1978,6 +1991,29 @@ class DiskAnalyzer:
             <p style="font-size: 0.95rem; margin: 0; opacity: 0.9;">
                 Mayores consumidores: {_top_apps_str}
             </p>
+        </div>'''
+
+        # ── Cleanup Wizard Card ──────────────────────────────────────────
+        _wizard_recs = report.get('recommendations', [])
+        if _wizard_recs:
+            html += '''
+        <div id="wizardCard" class="card" style="margin-bottom: 2rem; border: 2px solid var(--primary);">
+            <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 1rem;">
+                <h2 style="margin: 0;">🧹 Asistente de Limpieza</h2>
+                <span id="wizardProgress" style="font-size: 0.875rem; color: var(--gray);"></span>
+            </div>
+            <div id="wizardBody" style="min-height: 120px;"></div>
+            <div style="margin-top: 1rem; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 0.5rem;">
+                <div>
+                    <button class="btn" onclick="wizardPrev()" id="wizardPrevBtn"
+                            style="background: var(--border); color: var(--dark);">◀ Anterior</button>
+                    <button class="btn" onclick="wizardSkip()" id="wizardSkipBtn"
+                            style="background: var(--gray); color: white; margin-left: 0.5rem;">Omitir</button>
+                    <button class="btn btn-primary" onclick="wizardApply()" id="wizardApplyBtn"
+                            style="margin-left: 0.5rem;">✓ Limpiar</button>
+                </div>
+                <div id="wizardSaved" style="font-weight: 700; color: var(--success); font-size: 0.95rem;"></div>
+            </div>
         </div>'''
 
         # Agregar barra de uso del disco si está disponible
@@ -2701,9 +2737,23 @@ class DiskAnalyzer:
             </div>'''
         
         # Tabla de archivos
-        html += '''
+        _total_files = len(files_data)
+        _deletable_files = sum(1 for f in files_data if not f.get('is_protected', False))
+        html += f'''
             <div class="card col-span-12">
-                <h2>🗂️ Archivos Grandes</h2>
+                <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 0.75rem; margin-bottom: 1.25rem;">
+                    <h2 style="margin: 0;">🗂️ Archivos Grandes</h2>
+                    <div style="display: flex; gap: 0.5rem;">
+                        <button id="filterAllBtn" class="tab-button active" onclick="filterFiles('all')"
+                                style="padding: 0.4rem 1rem; font-size: 0.875rem;">
+                            Todos ({_total_files})
+                        </button>
+                        <button id="filterDeletableBtn" class="tab-button" onclick="filterFiles('deletable')"
+                                style="padding: 0.4rem 1rem; font-size: 0.875rem;">
+                            🗑️ ¿Qué puedo borrar? ({_deletable_files})
+                        </button>
+                    </div>
+                </div>
                 <div style="overflow-x: auto;">
                     <table class="file-table">
                         <thead>
@@ -2744,8 +2794,10 @@ class DiskAnalyzer:
                                            onchange="updateSelection()">'''
                 row_style = ''
 
+            _group_attr = f'data-group="{file_data["group"]}"' if file_data.get('group') else ''
+            _protected_attr = 'data-protected="true"' if is_protected else 'data-protected="false"'
             html += f'''
-                            <tr style="{row_style}">
+                            <tr style="{row_style}" {_protected_attr} {_group_attr}>
                                 <td>
                                     {checkbox_html}
                                 </td>
@@ -2918,6 +2970,7 @@ class DiskAnalyzer:
         const duplicatesData = {json.dumps(report.get('duplicates', []))};
         const treemapData = {json.dumps(treemap_data)};
         const appUsageData = {json.dumps(report.get('app_usage', [])[:15])};
+        const wizardRecs = {json.dumps(report.get('recommendations', [])[:8])};
 
         // Render treemap
         if (treemapData.ids.length > 1) {{
@@ -3187,11 +3240,160 @@ class DiskAnalyzer:
         }});'''
         
         html += '''
-        
-        // Funciones de selección de archivos
+
+        // ── Filtro de archivos ───────────────────────────────────────────
+        let _currentFileFilter = 'all';
+
+        function filterFiles(mode) {
+            _currentFileFilter = mode;
+            const tbody = document.getElementById('fileTableBody');
+            if (!tbody) return;
+
+            // Remove any existing group header rows
+            tbody.querySelectorAll('tr.group-header-row').forEach(r => r.remove());
+
+            const rows = Array.from(tbody.querySelectorAll('tr[data-protected]'));
+
+            if (mode === 'all') {
+                rows.forEach(r => { r.style.display = ''; });
+                document.getElementById('filterAllBtn').classList.add('active');
+                document.getElementById('filterDeletableBtn').classList.remove('active');
+            } else {
+                // Show only non-protected
+                rows.forEach(r => {
+                    r.style.display = r.dataset.protected === 'true' ? 'none' : '';
+                });
+                document.getElementById('filterAllBtn').classList.remove('active');
+                document.getElementById('filterDeletableBtn').classList.add('active');
+
+                // Smart grouping: insert group header rows for groups with > 2 visible rows
+                const visibleRows = rows.filter(r => r.style.display !== 'none' && r.dataset.group);
+                const groupMap = {};
+                visibleRows.forEach(r => {
+                    const g = r.dataset.group;
+                    if (!groupMap[g]) groupMap[g] = [];
+                    groupMap[g].push(r);
+                });
+
+                Object.entries(groupMap).forEach(([groupName, groupRows]) => {
+                    if (groupRows.length > 2) {
+                        const firstRow = groupRows[0];
+                        const headerRow = document.createElement('tr');
+                        headerRow.className = 'group-header-row';
+                        headerRow.style.cssText = 'background: rgba(99,102,241,0.08);';
+                        headerRow.innerHTML = '<td colspan="6" style="padding: 0.4rem 0.75rem; font-size: 0.8rem; font-weight: 700; color: var(--primary); letter-spacing: 0.05em;">'
+                            + '📁 ' + groupName + ' <span style="font-weight: 400; color: var(--gray);">(' + groupRows.length + ' archivos)</span></td>';
+                        tbody.insertBefore(headerRow, firstRow);
+                    }
+                });
+            }
+        }
+
+        // ── Wizard de limpieza ───────────────────────────────────────────
+        let wizardStep = 0;
+        let wizardApplied = new Set();
+        let wizardSavedBytes = 0;
+
+        const tierIcons = { 1: '🟢', 2: '🟡', 3: '🟠', 4: '🔴' };
+
+        function renderWizardStep() {
+            const card = document.getElementById('wizardCard');
+            if (!card || wizardRecs.length === 0) return;
+
+            // Skip already-applied steps
+            while (wizardStep < wizardRecs.length && wizardApplied.has(wizardStep)) {
+                wizardStep++;
+            }
+
+            const body = document.getElementById('wizardBody');
+            const progress = document.getElementById('wizardProgress');
+            const saved = document.getElementById('wizardSaved');
+            const applyBtn = document.getElementById('wizardApplyBtn');
+            const skipBtn = document.getElementById('wizardSkipBtn');
+            const prevBtn = document.getElementById('wizardPrevBtn');
+
+            if (wizardStep >= wizardRecs.length) {
+                body.innerHTML = '<div style="text-align: center; padding: 1.5rem 0; color: var(--success); font-size: 1.1rem; font-weight: 600;">✅ ¡Revisión completa!</div>';
+                progress.textContent = 'Paso ' + wizardRecs.length + ' de ' + wizardRecs.length;
+                if (applyBtn) applyBtn.style.display = 'none';
+                if (skipBtn) skipBtn.style.display = 'none';
+                if (saved && wizardSavedBytes > 0) {
+                    saved.textContent = 'Espacio liberado: ' + formatBytes(wizardSavedBytes);
+                }
+                return;
+            }
+
+            const rec = wizardRecs[wizardStep];
+            const icon = tierIcons[rec.tier] || '⚪';
+            const sizeStr = formatBytes(rec.space);
+            const cmdEscaped = rec.command.replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+            body.innerHTML = `
+                <div style="display: flex; align-items: flex-start; gap: 1rem;">
+                    <div style="font-size: 2rem; line-height: 1;">${icon}</div>
+                    <div style="flex: 1;">
+                        <div style="font-size: 0.75rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; color: var(--gray); margin-bottom: 0.25rem;">
+                            ${rec.type} · ${rec.priority || ''}
+                        </div>
+                        <div style="font-size: 1rem; font-weight: 600; color: var(--dark); margin-bottom: 0.5rem;">${rec.description}</div>
+                        <div style="font-size: 0.875rem; color: var(--success); font-weight: 700; margin-bottom: 0.75rem;">
+                            Liberar: ${sizeStr}
+                        </div>
+                        <div class="command-box" style="font-size: 0.8rem; margin: 0;">
+                            ${cmdEscaped}
+                            <button class="copy-btn" onclick="copyCommand(this)">Copiar</button>
+                        </div>
+                    </div>
+                </div>`;
+
+            progress.textContent = 'Paso ' + (wizardStep + 1) + ' de ' + wizardRecs.length;
+            if (applyBtn) applyBtn.style.display = '';
+            if (skipBtn) skipBtn.style.display = '';
+            if (prevBtn) prevBtn.style.display = wizardStep > 0 ? '' : 'none';
+
+            if (saved) {
+                saved.textContent = wizardSavedBytes > 0 ? 'Espacio liberado: ' + formatBytes(wizardSavedBytes) : '';
+            }
+        }
+
+        function wizardApply() {
+            if (wizardStep >= wizardRecs.length) return;
+            const rec = wizardRecs[wizardStep];
+            wizardApplied.add(wizardStep);
+            wizardSavedBytes += (rec.space || 0);
+            wizardStep++;
+            renderWizardStep();
+        }
+
+        function wizardSkip() {
+            if (wizardStep < wizardRecs.length) {
+                wizardStep++;
+                renderWizardStep();
+            }
+        }
+
+        function wizardNext() {
+            wizardSkip();
+        }
+
+        function wizardPrev() {
+            if (wizardStep > 0) {
+                wizardStep--;
+                // Un-skip to find a non-applied step going backwards
+                while (wizardStep > 0 && wizardApplied.has(wizardStep)) {
+                    wizardStep--;
+                }
+                renderWizardStep();
+            }
+        }
+
+        // Initialize wizard on load
+        if (wizardRecs.length > 0) renderWizardStep();
+
+        // ── Funciones de selección de archivos ───────────────────────────
         let selectedFiles = new Set();
         let totalSelectedSize = 0;
-        
+
         function toggleAll(checkbox) {
             const checkboxes = document.querySelectorAll('.file-checkbox');
             checkboxes.forEach(cb => {
