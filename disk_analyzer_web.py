@@ -52,6 +52,9 @@ pty_manager = PTYManager(max_sessions=3, idle_timeout=600)
 
 # Session persistence
 SESSIONS_FILE = Path("sessions_metadata.json")
+RESULTS_DIR = Path.home() / ".disk-analyzer" / "results"
+RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+MAX_STORED_RESULTS = 10
 
 def save_session_metadata():
     """Save session metadata to disk"""
@@ -79,7 +82,7 @@ def load_session_metadata():
         if SESSIONS_FILE.exists():
             with open(SESSIONS_FILE, "r") as f:
                 metadata = json.load(f)
-                
+
             for session_meta in metadata:
                 session_id = session_meta["id"]
                 # Restore session without results
@@ -91,11 +94,37 @@ def load_session_metadata():
                     "paths": session_meta["paths"],
                     "started_at": session_meta["started_at"],
                     "completed_at": session_meta.get("completed_at"),
-                    "results": None,  # Results not persisted
+                    "results": None,  # Results loaded on demand
                     "error": session_meta.get("error")
                 }
     except Exception as e:
         print(f"Error loading session metadata: {e}")
+
+
+def save_analysis_results(session_id: str, results: list):
+    """Save full analysis results to disk."""
+    try:
+        result_file = RESULTS_DIR / f"{session_id}.json"
+        with open(result_file, 'w') as f:
+            json.dump(results, f)
+        # Prune old results
+        result_files = sorted(RESULTS_DIR.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True)
+        for old_file in result_files[MAX_STORED_RESULTS:]:
+            old_file.unlink()
+    except Exception as e:
+        print(f"Warning: Could not save results for {session_id}: {e}")
+
+
+def load_analysis_results(session_id: str) -> list | None:
+    """Load analysis results from disk."""
+    try:
+        result_file = RESULTS_DIR / f"{session_id}.json"
+        if result_file.exists():
+            with open(result_file, 'r') as f:
+                return json.load(f)
+    except Exception as e:
+        print(f"Warning: Could not load results for {session_id}: {e}")
+    return None
 
 # Pydantic models for API
 class AnalysisRequest(BaseModel):
@@ -460,9 +489,10 @@ async def run_analysis(
         analysis_sessions[session_id]["progress"] = 100
         analysis_sessions[session_id]["results"] = all_results
         analysis_sessions[session_id]["completed_at"] = datetime.now().isoformat()
-        
-        # Save session metadata
+
+        # Save session metadata and full results to disk
         save_session_metadata()
+        save_analysis_results(session_id, all_results)
         
         # Notify completion
         await notify_progress(session_id, {
@@ -518,10 +548,12 @@ async def get_analysis_results(session_id: str):
     if session["status"] != "completed":
         raise HTTPException(status_code=400, detail="Analysis not completed")
     
-    # Check if results are available (might be None after server restart)
-    if session["results"] is None:
+    # Try loading results from disk if not in memory
+    if not session.get("results"):
+        session["results"] = load_analysis_results(session_id)
+    if not session.get("results"):
         raise HTTPException(
-            status_code=410, 
+            status_code=410,
             detail="Session results no longer available. Please run a new analysis."
         )
     
@@ -551,6 +583,25 @@ async def get_sessions():
     sessions_list.sort(key=lambda x: x["started_at"], reverse=True)
     
     return {"sessions": sessions_list[:20]}  # Return last 20 sessions
+
+@app.get("/api/analysis/latest")
+async def get_latest_results():
+    """Get the most recent completed analysis results."""
+    # Check in-memory first
+    completed = [s for s in analysis_sessions.values() if s.get("status") == "completed" and s.get("results")]
+    if completed:
+        latest = max(completed, key=lambda s: s.get("completed_at", s.get("started_at", "")))
+        return {"id": latest["id"], "status": latest["status"], "results": latest["results"]}
+
+    # Try loading from disk
+    result_files = sorted(RESULTS_DIR.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True)
+    if result_files:
+        sid = result_files[0].stem
+        results = load_analysis_results(sid)
+        if results:
+            return {"id": sid, "status": "completed", "results": results}
+
+    raise HTTPException(status_code=404, detail="No completed analysis found")
 
 @app.websocket("/ws/{session_id}")
 async def websocket_endpoint(websocket: WebSocket, session_id: str):
@@ -924,6 +975,14 @@ async def startup_event():
 
     # Load previous session metadata
     load_session_metadata()
+
+    # Load results for completed sessions
+    for sid, session in analysis_sessions.items():
+        if session.get("status") == "completed" and not session.get("results"):
+            results = load_analysis_results(sid)
+            if results:
+                session["results"] = results
+                print(f"  Loaded cached results for session {sid}")
 
     print("✅ Web server started successfully")
     if astro_dist.exists():
