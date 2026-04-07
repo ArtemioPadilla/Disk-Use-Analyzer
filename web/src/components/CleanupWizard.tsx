@@ -15,6 +15,7 @@ export default function CleanupWizard() {
   const [expanded, setExpanded] = useState<Set<number>>(new Set([1]));
   const [running, setRunning] = useState<Set<string>>(new Set());
   const [showCommands, setShowCommands] = useState(false);
+  const [ptyCommands, setPtyCommands] = useState<Record<string, string>>({});
 
   // Load running (completed commands) state from localStorage
   useEffect(() => {
@@ -40,6 +41,18 @@ export default function CleanupWizard() {
     return off;
   }, []);
 
+  // Listen for terminal exit events to mark commands as finished
+  useEffect(() => {
+    const off = on('terminal:exited', (data: any) => {
+      const cmd = ptyCommands[data.pty_id];
+      if (cmd) {
+        setRunning(prev => { const n = new Set(prev); n.delete(cmd); return n; });
+        setPtyCommands(prev => { const n = { ...prev }; delete n[data.pty_id]; return n; });
+      }
+    });
+    return off;
+  }, [ptyCommands]);
+
   const toggleTier = (tier: number) => {
     setExpanded(prev => {
       const next = new Set(prev);
@@ -53,6 +66,7 @@ export default function CleanupWizard() {
     if (rec.command && !rec.command.startsWith('#')) {
       try {
         const { pty_id } = await api.createTerminal(rec.command);
+        setPtyCommands(prev => ({ ...prev, [pty_id]: rec.command }));
         emit('terminal:open', { pty_id, command: rec.command });
         emit('terminal:started', { pty_id, command: rec.command });
         setRunning(prev => new Set(prev).add(rec.command));
@@ -70,6 +84,8 @@ export default function CleanupWizard() {
     for (const rec of safeRecs) {
       try {
         const { pty_id } = await api.createTerminal(rec.command);
+        setPtyCommands(prev => ({ ...prev, [pty_id]: rec.command }));
+        emit('terminal:open', { pty_id, command: rec.command });
         emit('terminal:started', { pty_id, command: rec.command });
         setRunning(prev => new Set(prev).add(rec.command));
       } catch (e) { console.error('Failed:', e); }

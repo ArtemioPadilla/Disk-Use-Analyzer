@@ -7,6 +7,7 @@ export default function QuickActions() {
   const [recs, setRecs] = useState<Recommendation[]>([]);
   const [cleaned, setCleaned] = useState<Set<string>>(new Set());
   const [running, setRunning] = useState<Set<string>>(new Set());
+  const [ptyCommands, setPtyCommands] = useState<Record<string, { command: string; space: number }>>({});
 
   // Load cleaned state from localStorage
   useEffect(() => {
@@ -36,18 +37,34 @@ export default function QuickActions() {
     return off;
   }, []);
 
+  // Listen for terminal exit events to mark commands as cleaned
+  useEffect(() => {
+    const off = on('terminal:exited', (data: any) => {
+      const mapping = ptyCommands[data.pty_id];
+      if (mapping) {
+        if (data.code === 0) {
+          setCleaned(prev => {
+            const n = new Set(prev).add(mapping.command);
+            localStorage.setItem('disk-analyzer-cleaned', JSON.stringify([...n]));
+            return n;
+          });
+          emit('cleanup:completed', { command: mapping.command, space: mapping.space });
+        }
+        setRunning(prev => { const n = new Set(prev); n.delete(mapping.command); return n; });
+        setPtyCommands(prev => { const n = { ...prev }; delete n[data.pty_id]; return n; });
+      }
+    });
+    return off;
+  }, [ptyCommands]);
+
   const runClean = async (rec: Recommendation) => {
     if (running.has(rec.command) || cleaned.has(rec.command)) return;
     setRunning(prev => new Set(prev).add(rec.command));
     try {
       const { pty_id } = await api.createTerminal(rec.command);
+      setPtyCommands(prev => ({ ...prev, [pty_id]: { command: rec.command, space: rec.space } }));
+      emit('terminal:open', { pty_id, command: rec.command });
       emit('terminal:started', { pty_id, command: rec.command });
-      // Mark as cleaned after a delay (command runs in background)
-      setTimeout(() => {
-        setCleaned(prev => new Set(prev).add(rec.command));
-        setRunning(prev => { const n = new Set(prev); n.delete(rec.command); return n; });
-        emit('cleanup:completed', { command: rec.command, space: rec.space });
-      }, 3000);
     } catch (e) {
       setRunning(prev => { const n = new Set(prev); n.delete(rec.command); return n; });
       console.error('Failed:', e);
