@@ -1,0 +1,8 @@
+---
+import MainLayout from '../layouts/MainLayout.astro';
+import Settings from '../components/Settings.tsx';
+---
+
+<MainLayout title="Settings" currentPath="/settings">
+  <Settings client:load />
+</MainLayout>

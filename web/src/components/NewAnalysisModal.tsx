@@ -12,16 +12,28 @@ export default function NewAnalysisModal() {
   const defaultLoaded = useRef(false);
   const { startAnalysis } = useAnalysis();
 
-  // Load server default min_size on first mount
+  // Load min_size: localStorage (UI setting) > server CLI flag > 10
   useEffect(() => {
     if (!defaultLoaded.current) {
-      api.getSystemInfo().then((info: any) => {
-        if (info.default_min_size_mb !== undefined) {
-          setMinSize(info.default_min_size_mb);
-        }
+      const local = localStorage.getItem('disk-analyzer-min-size');
+      if (local !== null) {
+        setMinSize(Number(local));
         defaultLoaded.current = true;
-      }).catch(console.error);
+      } else {
+        api.getSystemInfo().then((info: any) => {
+          if (info.default_min_size_mb !== undefined) {
+            setMinSize(info.default_min_size_mb);
+          }
+          defaultLoaded.current = true;
+        }).catch(console.error);
+      }
     }
+
+    // Listen for settings changes
+    const off = on('settings:updated', (data: any) => {
+      if (data?.minSize !== undefined) setMinSize(data.minSize);
+    });
+    return off;
   }, []);
 
   useEffect(() => {
