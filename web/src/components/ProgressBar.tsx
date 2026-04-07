@@ -6,6 +6,8 @@ export default function ProgressBar() {
   const [progress, setProgress] = useState(0);
   const [message, setMessage] = useState('');
   const [filesScanned, setFilesScanned] = useState(0);
+  const [startTime, setStartTime] = useState<number | null>(null);
+  const [eta, setEta] = useState<string>('');
 
   useEffect(() => {
     const offs = [
@@ -14,19 +16,39 @@ export default function ProgressBar() {
         setProgress(0);
         setMessage('Starting analysis...');
         setFilesScanned(0);
+        setStartTime(Date.now());
+        setEta('');
       }),
       on('analysis:progress', (data: any) => {
-        if (data.progress !== undefined) setProgress(data.progress);
+        if (data.progress !== undefined) {
+          setProgress(data.progress);
+          // Calculate ETA once we have enough progress data
+          if (data.progress > 5) {
+            setStartTime(prev => {
+              if (prev) {
+                const elapsed = (Date.now() - prev) / 1000;
+                const rate = data.progress / elapsed;
+                const remaining = (100 - data.progress) / rate;
+                if (remaining < 60) setEta(`~${Math.ceil(remaining)}s remaining`);
+                else if (remaining < 3600) setEta(`~${Math.ceil(remaining / 60)}min remaining`);
+                else setEta(`~${(remaining / 3600).toFixed(1)}h remaining`);
+              }
+              return prev;
+            });
+          }
+        }
         if (data.current_path) setMessage(data.current_path);
         if (data.files_scanned) setFilesScanned(data.files_scanned);
       }),
       on('analysis:completed', () => {
         setProgress(100);
         setMessage('Analysis complete!');
+        setEta('');
         setTimeout(() => setActive(false), 2000);
       }),
       on('analysis:error', () => {
         setMessage('Analysis failed');
+        setEta('');
         setTimeout(() => setActive(false), 3000);
       }),
     ];
@@ -66,7 +88,7 @@ export default function ProgressBar() {
           {message}
         </span>
         <span>
-          {progress.toFixed(0)}% &middot; {filesScanned.toLocaleString()} files
+          {progress.toFixed(0)}% &middot; {filesScanned.toLocaleString()} files{eta && ` \u00b7 ${eta}`}
         </span>
       </div>
     </div>

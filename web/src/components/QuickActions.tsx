@@ -8,6 +8,19 @@ export default function QuickActions() {
   const [cleaned, setCleaned] = useState<Set<string>>(new Set());
   const [running, setRunning] = useState<Set<string>>(new Set());
 
+  // Load cleaned state from localStorage
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem('disk-analyzer-cleaned');
+      if (saved) setCleaned(new Set(JSON.parse(saved)));
+    } catch {}
+  }, []);
+
+  // Save cleaned state
+  useEffect(() => {
+    localStorage.setItem('disk-analyzer-cleaned', JSON.stringify([...cleaned]));
+  }, [cleaned]);
+
   useEffect(() => {
     const off = on('analysis:completed', (data: SessionResults) => {
       const safeRecs = data.results
@@ -16,7 +29,9 @@ export default function QuickActions() {
         .sort((a, b) => b.space - a.space)
         .slice(0, 3);
       setRecs(safeRecs);
+      // New scan = fresh data, clear cleaned state
       setCleaned(new Set());
+      localStorage.removeItem('disk-analyzer-cleaned');
     });
     return off;
   }, []);

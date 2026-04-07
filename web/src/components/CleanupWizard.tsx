@@ -16,10 +16,26 @@ export default function CleanupWizard() {
   const [running, setRunning] = useState<Set<string>>(new Set());
   const [showCommands, setShowCommands] = useState(false);
 
+  // Load running (completed commands) state from localStorage
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem('disk-analyzer-wizard-running');
+      if (saved) setRunning(new Set(JSON.parse(saved)));
+    } catch {}
+  }, []);
+
+  // Save running state
+  useEffect(() => {
+    localStorage.setItem('disk-analyzer-wizard-running', JSON.stringify([...running]));
+  }, [running]);
+
   useEffect(() => {
     const off = on('analysis:completed', (data: SessionResults) => {
       const allRecs = data.results.flatMap(r => r.report.recommendations);
       setRecs(allRecs);
+      // New scan = fresh data, clear completed commands
+      setRunning(new Set());
+      localStorage.removeItem('disk-analyzer-wizard-running');
     });
     return off;
   }, []);

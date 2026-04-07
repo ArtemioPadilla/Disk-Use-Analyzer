@@ -9,6 +9,7 @@ import sys
 import uuid
 import asyncio
 import json
+import shutil
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Any
@@ -62,14 +63,19 @@ def save_session_metadata():
         metadata = []
         for session_id, session in analysis_sessions.items():
             # Only save basic metadata, not results
-            metadata.append({
+            meta_entry = {
                 "id": session_id,
                 "status": session["status"],
                 "paths": session["paths"],
                 "started_at": session["started_at"],
                 "completed_at": session.get("completed_at"),
                 "error": session.get("error")
-            })
+            }
+            if session.get("disk_used") is not None:
+                meta_entry["disk_used"] = session["disk_used"]
+            if session.get("disk_total") is not None:
+                meta_entry["disk_total"] = session["disk_total"]
+            metadata.append(meta_entry)
         
         with open(SESSIONS_FILE, "w") as f:
             json.dump(metadata, f)
@@ -95,7 +101,9 @@ def load_session_metadata():
                     "started_at": session_meta["started_at"],
                     "completed_at": session_meta.get("completed_at"),
                     "results": None,  # Results loaded on demand
-                    "error": session_meta.get("error")
+                    "error": session_meta.get("error"),
+                    "disk_used": session_meta.get("disk_used"),
+                    "disk_total": session_meta.get("disk_total")
                 }
     except Exception as e:
         print(f"Error loading session metadata: {e}")
@@ -490,6 +498,14 @@ async def run_analysis(
         analysis_sessions[session_id]["results"] = all_results
         analysis_sessions[session_id]["completed_at"] = datetime.now().isoformat()
 
+        # Store disk usage snapshot for trend tracking
+        try:
+            usage = shutil.disk_usage("/")
+            analysis_sessions[session_id]["disk_used"] = usage.used
+            analysis_sessions[session_id]["disk_total"] = usage.total
+        except Exception:
+            pass
+
         # Save session metadata and full results to disk
         save_session_metadata()
         save_analysis_results(session_id, all_results)
@@ -570,14 +586,19 @@ async def get_sessions():
     """Get list of analysis sessions"""
     sessions_list = []
     for session_id, session in analysis_sessions.items():
-        sessions_list.append({
+        session_entry = {
             "id": session_id,
             "status": session["status"],
             "paths": session["paths"],
             "started_at": session["started_at"],
             "completed_at": session.get("completed_at"),
-            "progress": session["progress"]
-        })
+            "progress": session["progress"],
+        }
+        if session.get("disk_used") is not None:
+            session_entry["disk_used"] = session["disk_used"]
+        if session.get("disk_total") is not None:
+            session_entry["disk_total"] = session["disk_total"]
+        sessions_list.append(session_entry)
     
     # Sort by start time, newest first
     sessions_list.sort(key=lambda x: x["started_at"], reverse=True)

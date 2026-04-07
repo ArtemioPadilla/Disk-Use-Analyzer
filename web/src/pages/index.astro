@@ -7,6 +7,7 @@ import DiskDonut from '../components/DiskDonut.tsx';
 import TaskList from '../components/TaskList.tsx';
 import QuickActions from '../components/QuickActions.tsx';
 import DockerPanel from '../components/DockerPanel.tsx';
+import TrendChart from '../components/TrendChart.tsx';
 ---
 
 <MainLayout title="Dashboard" currentPath="/">
@@ -17,6 +18,7 @@ import DockerPanel from '../components/DockerPanel.tsx';
     <CategoryChart client:idle />
     <DiskDonut client:idle />
   </div>
+  <TrendChart client:load />
   <DockerPanel client:load />
   <TaskList client:load />
 </MainLayout>
