@@ -1973,6 +1973,14 @@ class DiskAnalyzer:
             const saved = localStorage.getItem('disk-analyzer-theme');
             if (saved) document.documentElement.setAttribute('data-theme', saved);
         }})();
+        // Utility function needed by inline chart scripts
+        function formatBytes(bytes) {{
+            const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
+            if (bytes === 0 || bytes < 0) return '0 B';
+            if (!isFinite(bytes)) return '0 B';
+            const i = Math.floor(Math.log(Math.abs(bytes)) / Math.log(1024));
+            return (Math.abs(bytes) / Math.pow(1024, i)).toFixed(2) + ' ' + sizes[i];
+        }}
     </script>
 </head>
 <body>
@@ -3717,7 +3725,7 @@ class DiskAnalyzer:
                 lines.push('# Grupo ' + (gi + 1) + ' - ' + group.files.length + ' copias - ' + formatBytes(group.size) + ' cada una');
                 lines.push('# Conservar: ' + group.files[0]);
                 for (let i = 1; i < group.files.length; i++) {
-                    const escaped = group.files[i].replace(/'/g, "'\"'\"'");
+                    const escaped = group.files[i].replace(/'/g, "'\\''");
                     lines.push("rm -f '" + escaped + "'");
                 }
                 totalWasted += group.wasted;
