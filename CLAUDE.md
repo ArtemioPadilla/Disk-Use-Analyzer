@@ -25,6 +25,15 @@ make clean-preview
 
 # Test on a specific small directory
 make custom path=./test min_size=1
+
+# Web interface
+make install-web    # Install Python + Node dependencies, build frontend
+make web            # Start server (auto-builds frontend if needed)
+make web-dev        # Dev mode with hot-reload
+make web-build      # Just build the Astro frontend
+
+# Backend tests
+python -m pytest tests/ -v
 ```
 
 ## Project Overview
@@ -37,15 +46,27 @@ This is a **macOS Disk Usage Analyzer** - a powerful standalone Python tool for 
 ├── disk_analyzer.py        # Main CLI tool (~2,600 lines, no dependencies)
 ├── disk_analyzer_core.py   # Core analysis logic (shared module)
 ├── disk_analyzer_gui.py    # GUI interface (CustomTkinter)
-├── disk_analyzer_web.py    # Web interface (FastAPI)
+├── disk_analyzer_web.py    # Web interface (FastAPI backend + serves Astro frontend)
+├── pty_manager.py          # PTY session manager for web terminal feature
 ├── Makefile                # User-friendly command interface
 ├── Makefile.cross-platform # Cross-platform Makefile variant
 ├── requirements.txt        # GUI dependencies
 ├── requirements-web.txt    # Web interface dependencies
+├── web/                    # Astro + React frontend (new)
+│   ├── astro.config.mjs    # Astro config with React integration
+│   ├── package.json        # Node.js dependencies
+│   ├── src/
+│   │   ├── layouts/        # MainLayout.astro, global CSS
+│   │   ├── pages/          # 5 pages: index, files, cleanup, export, history
+│   │   ├── components/     # React islands (StatsCards, FileTable, FloatingTerminal, etc.)
+│   │   ├── hooks/          # useWebSocket, useAnalysis, useTerminal
+│   │   └── lib/            # api.ts, events.ts, format.ts
+│   └── dist/               # Built static files (served by FastAPI)
+├── tests/                  # Backend tests (PTY manager + terminal API)
+├── static/                 # Legacy web static assets (fallback)
 ├── docs/                   # Documentation
 │   ├── FAQ.md              # Frequently Asked Questions
 │   └── examples/           # Usage examples
-├── static/                 # Web static assets
 └── utils/                  # Helper scripts
 ```
 
@@ -106,11 +127,27 @@ make documents   # ~/Documents
 
 ## Architecture
 
-This is a single-file Python application with no external dependencies:
+The project has three interfaces: CLI, GUI, and Web.
 
-- **`disk_analyzer.py`** (2,644 lines) - Contains all analysis logic in a single `DiskAnalyzer` class
-- **`Makefile`** - Provides user-friendly command interface
-- **No external Python packages** - Uses only Python standard library
+### CLI (no dependencies)
+- **`disk_analyzer.py`** (2,644 lines) - Standalone analysis + HTML report generation
+- **`Makefile`** - User-friendly command interface
+
+### Web Interface (Astro + React + FastAPI)
+- **`disk_analyzer_web.py`** - FastAPI backend: REST API, WebSocket progress streaming, terminal PTY endpoints, serves the Astro build from `web/dist/`
+- **`disk_analyzer_core.py`** - Shared analysis engine used by the web backend
+- **`pty_manager.py`** - Manages pseudo-terminal sessions for the floating terminal feature (spawns shells via `pty.openpty()`, streams I/O over WebSocket)
+- **`web/`** - Astro 4 + React 18 frontend with islands architecture:
+  - Static Astro pages for layout/navigation (Sidebar, TopBar)
+  - React islands for interactive components (charts, file table, terminal)
+  - `@xterm/xterm` for the floating terminal emulator
+  - `plotly.js` for treemap/donut charts
+  - `@tanstack/react-virtual` for virtual-scrolling the file table
+- **Build:** `cd web && npm run build` → static files in `web/dist/` → served by FastAPI
+- **Dev mode:** `make web-dev` runs Astro dev server (port 3000) with Vite proxy to FastAPI (port 8000)
+
+### GUI (CustomTkinter, legacy)
+- **`disk_analyzer_gui.py`** - Desktop GUI using CustomTkinter
 
 ### Key Components in disk_analyzer.py
 
@@ -157,6 +194,12 @@ When modifying the code:
 3. Verify HTML report generation: `make report`
 4. Check that all Makefile commands still work after changes
 
+When modifying the web interface:
+1. Run backend tests: `python -m pytest tests/ -v`
+2. Build the frontend: `cd web && npm run build`
+3. Verify FastAPI serves all pages: start server and check `/`, `/files`, `/cleanup`, `/export`, `/history`
+4. Test terminal: click "Terminal" button, verify shell spawns and accepts input
+
 ## Known Issues & Limitations
 
 - **Template String Escaping**: When embedding JavaScript template literals in Python f-strings, Plotly template syntax like `%{label}` must be escaped as `%{{label}}` to avoid Python format string errors.
@@ -193,6 +236,19 @@ When modifying the code:
   - Lite mode for directories with >100k files
   - Lazy loading for Sankey diagrams
   - Limited directory depth to prevent timeouts
+
+### Hosted Web UI (2026)
+
+- **Astro + React Frontend**: Modern web UI with 5 pages (Dashboard, File Browser, Cleanup, Export, History) using Astro's island architecture with React for interactive components
+- **Floating Terminal**: xterm.js-based terminal overlay that connects via WebSocket to server-side PTY sessions. Users can run cleanup commands directly from the browser.
+- **PTY Manager**: Backend module (`pty_manager.py`) that spawns pseudo-terminal sessions with safety limits (blocked dangerous commands, max 3 concurrent sessions, idle timeout, command logging)
+- **Background Task Execution**: Analysis runs in background with real-time progress via WebSocket. Cleanup commands execute in the floating terminal while users continue browsing.
+- **Virtual-Scroll File Browser**: File table using `@tanstack/react-virtual` for efficient rendering of 100k+ files with search, sort, and bulk delete
+- **Tiered Cleanup Wizard**: Recommendations grouped by risk level (Safe/Moderate/Aggressive/Deep Clean) with one-click execution in terminal
+- **Session History**: Past analysis sessions persisted and reloadable
+- **Export Options**: Standalone HTML report, JSON, and CSV export from the web UI
+- **Dark Mode**: System-aware theme toggle with localStorage persistence
+- **LAN Access**: Server binds to `0.0.0.0:8000`, accessible from any device on the network
 
 ### Bug Fixes (2026)
 
