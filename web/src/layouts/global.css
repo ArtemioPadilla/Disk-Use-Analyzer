@@ -64,3 +64,50 @@ body {
   border-radius: 12px;
   padding: 1rem;
 }
+
+/* Mobile responsive */
+@media (max-width: 768px) {
+  .sidebar {
+    position: fixed;
+    left: -var(--sidebar-width);
+    top: 0;
+    bottom: 0;
+    z-index: 1000;
+    transition: transform 0.3s ease;
+    transform: translateX(0);
+  }
+  .sidebar.open {
+    transform: translateX(var(--sidebar-width));
+  }
+  .sidebar-overlay {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.5);
+    z-index: 999;
+  }
+  .sidebar-overlay.open {
+    display: block;
+  }
+  .app-shell {
+    flex-direction: column;
+  }
+  .main-area {
+    width: 100%;
+  }
+  .page-content {
+    padding: 1rem;
+  }
+  .hamburger {
+    display: flex;
+  }
+}
+
+@media (min-width: 769px) {
+  .hamburger {
+    display: none;
+  }
+  .sidebar-overlay {
+    display: none !important;
+  }
+}

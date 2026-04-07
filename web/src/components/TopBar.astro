@@ -3,6 +3,10 @@ const { title } = Astro.props;
 ---
 
 <header class="topbar">
+  <button class="hamburger btn btn-ghost" onclick="window.openSidebar?.()" aria-label="Menu"
+    style="font-size: 1.2rem; padding: 0.3rem 0.5rem;">
+    ☰
+  </button>
   <h1 class="topbar-title">{title}</h1>
   <div class="topbar-actions">
     <a href="/" class="btn btn-primary" id="newAnalysisBtn">+ New Analysis</a>

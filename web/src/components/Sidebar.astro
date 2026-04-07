@@ -28,6 +28,7 @@ const navItems = [
     <div class="sidebar-meta" id="sidebar-meta">v2.0 · macOS</div>
   </div>
 </aside>
+<div class="sidebar-overlay" id="sidebarOverlay" onclick="closeSidebar()"></div>
 
 <style>
   .sidebar { width: var(--sidebar-width); background: var(--dark); color: white; display: flex; flex-direction: column; flex-shrink: 0; padding: 1rem 0.75rem; }
@@ -41,3 +42,18 @@ const navItems = [
   .sidebar-footer { border-top: 1px solid rgba(255,255,255,0.1); padding-top: 0.75rem; margin-top: 0.5rem; }
   .sidebar-meta { padding: 0.25rem 0.75rem; font-size: 0.65rem; color: rgba(255,255,255,0.4); }
 </style>
+
+<script>
+  window.openSidebar = function() {
+    document.querySelector('.sidebar')?.classList.add('open');
+    document.getElementById('sidebarOverlay')?.classList.add('open');
+  };
+  window.closeSidebar = function() {
+    document.querySelector('.sidebar')?.classList.remove('open');
+    document.getElementById('sidebarOverlay')?.classList.remove('open');
+  };
+  // Close on nav click (mobile)
+  document.querySelectorAll('.nav-item').forEach(item => {
+    item.addEventListener('click', () => window.closeSidebar?.());
+  });
+</script>
