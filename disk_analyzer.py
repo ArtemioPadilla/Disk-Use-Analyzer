@@ -1944,7 +1944,42 @@ class DiskAnalyzer:
             <h1>💾 Disk Analyzer Dashboard</h1>
             <p>Análisis realizado el {timestamp}</p>
         </div>'''
-        
+
+        # ── Summary Banner ──────────────────────────────────────────────
+        if report.get('disk_usage') and report['disk_usage']['total'] > 0:
+            _du = report['disk_usage']
+            _pct = int(_du['used'] / _du['total'] * 100)
+
+            # Recoverable space = sum of tier 1 + tier 2 recommendations
+            _recs = report.get('recommendations', [])
+            _safe_bytes = sum(r['space'] for r in _recs if r.get('tier', 99) <= 2)
+            _safe_str = self.format_size(_safe_bytes) if _safe_bytes > 0 else '0 MB'
+
+            # Top 3 apps
+            _apps = report.get('app_usage', [])[:3]
+            _top_apps_parts = [
+                f"{a['name']} ({self.format_size(a['size'])})" for a in _apps
+            ]
+            _top_apps_str = ', '.join(_top_apps_parts) if _top_apps_parts else 'N/A'
+
+            html += f'''
+        <div style="
+            background: linear-gradient(135deg, var(--primary), var(--secondary));
+            color: #fff;
+            border-radius: 16px;
+            padding: 24px 32px;
+            margin-bottom: 24px;
+            box-shadow: 0 4px 24px rgba(99,102,241,0.25);
+        ">
+            <p style="font-size: 1.25rem; font-weight: 700; margin: 0 0 8px 0;">
+                Tu disco está al {_pct}% de capacidad.
+                Puedes liberar {_safe_str} de forma segura.
+            </p>
+            <p style="font-size: 0.95rem; margin: 0; opacity: 0.9;">
+                Mayores consumidores: {_top_apps_str}
+            </p>
+        </div>'''
+
         # Agregar barra de uso del disco si está disponible
         if report.get('disk_usage') and report['disk_usage']['total'] > 0:
             disk_usage = report['disk_usage']
