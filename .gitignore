@@ -43,3 +43,4 @@ static/node_modules/
 web/node_modules/
 web/dist/
 web/.astro/
+!web/src/lib/
