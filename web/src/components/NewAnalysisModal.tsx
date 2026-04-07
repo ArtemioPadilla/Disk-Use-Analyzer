@@ -1,7 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { api, type DriveInfo } from '../lib/api';
 import { on, emit } from '../lib/events';
-import { useAnalysis } from '../hooks/useAnalysis';
 
 export default function NewAnalysisModal() {
   const [open, setOpen] = useState(false);
@@ -10,7 +9,6 @@ export default function NewAnalysisModal() {
   const [customPath, setCustomPath] = useState('');
   const [minSize, setMinSize] = useState(10);
   const defaultLoaded = useRef(false);
-  const { startAnalysis } = useAnalysis();
 
   // Load min_size: localStorage (UI setting) > server CLI flag > 10
   useEffect(() => {
@@ -59,9 +57,9 @@ export default function NewAnalysisModal() {
     }
   };
 
-  const submit = async () => {
+  const submit = () => {
     if (selectedPaths.length === 0) return;
-    await startAnalysis(selectedPaths, minSize);
+    emit('analysis:start-request', { paths: selectedPaths, minSizeMb: minSize });
     setOpen(false);
     setSelectedPaths([]);
   };

@@ -3,6 +3,7 @@ import Sidebar from '../components/Sidebar.astro';
 import TopBar from '../components/TopBar.astro';
 import FloatingTerminal from '../components/FloatingTerminal.tsx';
 import NewAnalysisModal from '../components/NewAnalysisModal.tsx';
+import AnalysisManager from '../components/AnalysisManager.tsx';
 import '../layouts/global.css';
 
 const { title, currentPath } = Astro.props;
@@ -26,6 +27,7 @@ const { title, currentPath } = Astro.props;
         </main>
       </div>
     </div>
+    <AnalysisManager client:load />
     <NewAnalysisModal client:idle />
     <FloatingTerminal client:idle />
   </body>
