@@ -238,11 +238,19 @@ class DiskAnalyzer:
             pct = min(int(self._scanned_dirs / self._estimated_dirs * 100), 99)
             if pct > self._last_progress:
                 self._last_progress = pct
-                end_char = '\r' if sys.stdout.isatty() else ''
+                if pct > 5 and hasattr(self, '_scan_start_time'):
+                    elapsed = time.time() - self._scan_start_time
+                    estimated_total = elapsed / (pct / 100)
+                    remaining = estimated_total - elapsed
+                    mins = int(remaining // 60)
+                    secs = int(remaining % 60)
+                    time_str = f" (~{mins}m {secs}s)" if mins > 0 else f" (~{secs}s)"
+                else:
+                    time_str = ""
                 if sys.stdout.isatty():
-                    print(f"\r   Escaneando: {pct}% ({self.total_scanned:,} archivos)", end='', flush=True)
+                    print(f"\r   Escaneando: {pct}%{time_str} ({self.total_scanned:,} archivos)", end='', flush=True)
                 elif pct % 25 == 0:
-                    print(f"   Escaneando: {pct}% ({self.total_scanned:,} archivos)")
+                    print(f"   Escaneando: {pct}%{time_str} ({self.total_scanned:,} archivos)")
                 if pct == 99 and sys.stdout.isatty():
                     print()
         total_size = 0
@@ -656,6 +664,7 @@ class DiskAnalyzer:
             pass
         self._estimated_dirs = max(self._estimated_dirs, 1)
         self._last_progress = 0
+        self._scan_start_time = time.time()
 
         # Escanear directorio principal
         total_size = self.scan_directory(self.start_path)
@@ -679,6 +688,13 @@ class DiskAnalyzer:
 
         # Estimar tamaño de volúmenes APFS excluidos
         self.skipped_volumes_size = self.estimate_skipped_apfs_volumes()
+
+        # Play completion sound on macOS
+        if self.is_macos:
+            try:
+                subprocess.run(['afplay', '/System/Library/Sounds/Glass.aiff'], capture_output=True, timeout=5)
+            except Exception:
+                pass
 
         elapsed_time = time.time() - start_time
 
@@ -2743,6 +2759,27 @@ class DiskAnalyzer:
         recs = report['recommendations']
         cumulative = 0
 
+        # Build "Copy all safe commands" button (tiers 1 & 2, non-comment commands)
+        safe_commands = [r['command'] for r in recs if r.get('tier', 9) <= 2 and r.get('command') and not r['command'].startswith('#')]
+        if safe_commands:
+            safe_cmds_json = json.dumps('\n'.join(safe_commands))
+            html += f'''
+                <div style="margin-bottom: 1rem; display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap;">
+                    <button id="copyAllSafeBtn" class="btn btn-primary" style="font-size: 0.875rem;"
+                            onclick="(function(btn){{
+                                var cmds = {safe_cmds_json};
+                                navigator.clipboard.writeText(cmds).then(function(){{
+                                    btn.textContent = '✓ Copiado!';
+                                    btn.style.background = 'var(--success)';
+                                    setTimeout(function(){{ btn.textContent = '📋 Copiar comandos seguros'; btn.style.background = ''; }}, 2000);
+                                }}).catch(function(){{
+                                    btn.textContent = '✗ Error';
+                                    setTimeout(function(){{ btn.textContent = '📋 Copiar comandos seguros'; }}, 2000);
+                                }});
+                            }})(this)">📋 Copiar comandos seguros</button>
+                    <span style="font-size: 0.8rem; color: var(--gray);">{len(safe_commands)} comandos de nivel 1-2</span>
+                </div>'''
+
         for tier_num, tier_recs in groupby(recs, key=lambda r: r['tier']):
             tier_recs = list(tier_recs)
             tier_info = tier_meta.get(tier_num, tier_meta[4])
@@ -3403,6 +3440,40 @@ class DiskAnalyzer:
         }
 
         // ── Wizard de limpieza ───────────────────────────────────────────
+
+        // localStorage dismissal: load, clean entries older than 30 days
+        const DISMISS_KEY = 'disk-analyzer-dismissed';
+        const DISMISS_TTL = 30 * 24 * 60 * 60 * 1000; // 30 days in ms
+        function loadDismissed() {
+            try {
+                const raw = localStorage.getItem(DISMISS_KEY);
+                if (!raw) return {};
+                const parsed = JSON.parse(raw);
+                const now = Date.now();
+                // Remove stale entries
+                const cleaned = {};
+                Object.entries(parsed).forEach(([k, ts]) => {
+                    if (now - ts < DISMISS_TTL) cleaned[k] = ts;
+                });
+                localStorage.setItem(DISMISS_KEY, JSON.stringify(cleaned));
+                return cleaned;
+            } catch(e) { return {}; }
+        }
+        function saveDismissed(dismissed) {
+            try { localStorage.setItem(DISMISS_KEY, JSON.stringify(dismissed)); } catch(e) {}
+        }
+        function dismissKey(rec) {
+            return (rec.type || '') + '|' + (rec.description || '');
+        }
+
+        let wizardDismissed = loadDismissed();
+        // Filter out previously dismissed recommendations
+        const allWizardRecs = wizardRecs.slice();
+        const activeWizardRecs = allWizardRecs.filter(r => !wizardDismissed[dismissKey(r)]);
+        // Replace the working list used by the wizard
+        wizardRecs.length = 0;
+        activeWizardRecs.forEach(r => wizardRecs.push(r));
+
         let wizardStep = 0;
         let wizardApplied = new Set();
         let wizardSavedBytes = 0;
@@ -3480,6 +3551,10 @@ class DiskAnalyzer:
 
         function wizardSkip() {
             if (wizardStep < wizardRecs.length) {
+                // Save dismissal to localStorage
+                const rec = wizardRecs[wizardStep];
+                wizardDismissed[dismissKey(rec)] = Date.now();
+                saveDismissed(wizardDismissed);
                 wizardStep++;
                 renderWizardStep();
             }
