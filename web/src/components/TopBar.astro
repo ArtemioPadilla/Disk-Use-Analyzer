@@ -8,6 +8,10 @@ const { title } = Astro.props;
     ☰
   </button>
   <h1 class="topbar-title">{title}</h1>
+  <div class="topbar-search">
+    <input type="text" id="globalSearch" placeholder="Search files..."
+      class="search-input" />
+  </div>
   <div class="topbar-actions">
     <a href="/" class="btn btn-primary" id="newAnalysisBtn">+ New Analysis</a>
     <button class="btn btn-dark" id="terminalToggleBtn">⚡ Terminal</button>
@@ -19,6 +23,20 @@ const { title } = Astro.props;
   .topbar { height: var(--topbar-height); padding: 0 1.5rem; display: flex; align-items: center; justify-content: space-between; background: var(--card-bg); border-bottom: 1px solid var(--border); flex-shrink: 0; }
   .topbar-title { font-size: 1.15rem; font-weight: 600; }
   .topbar-actions { display: flex; gap: 0.5rem; align-items: center; }
+  .topbar-search { flex: 1; max-width: 300px; margin: 0 1rem; }
+  .search-input {
+    width: 100%;
+    padding: 0.4rem 0.75rem;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--page-bg);
+    color: var(--text);
+    font-size: 0.85rem;
+    outline: none;
+    transition: border-color 0.15s;
+  }
+  .search-input:focus { border-color: var(--primary); }
+  @media (max-width: 768px) { .topbar-search { display: none; } }
 </style>
 
 <script>
@@ -44,5 +62,14 @@ const { title } = Astro.props;
   document.getElementById('newAnalysisBtn')?.addEventListener('click', (e) => {
     e.preventDefault();
     window.dispatchEvent(new CustomEvent('analysis:new'));
+  });
+  // Global search — Enter navigates to file browser with query
+  document.getElementById('globalSearch')?.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      const query = e.target.value.trim();
+      if (query) {
+        window.location.href = `/files?path=${encodeURIComponent(query)}`;
+      }
+    }
   });
 </script>

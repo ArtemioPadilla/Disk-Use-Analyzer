@@ -7,6 +7,7 @@ import NewAnalysisModal from '../components/NewAnalysisModal.tsx';
 import AnalysisManager from '../components/AnalysisManager.tsx';
 import NotificationManager from '../components/NotificationManager.tsx';
 import ToastNotification from '../components/ToastNotification.tsx';
+import KeyboardShortcuts from '../components/KeyboardShortcuts.tsx';
 import '../layouts/global.css';
 
 const { title, currentPath } = Astro.props;
@@ -36,5 +37,6 @@ const { title, currentPath } = Astro.props;
     <NewAnalysisModal client:idle />
     <FloatingTerminal client:idle />
     <ToastNotification client:load />
+    <KeyboardShortcuts client:load />
   </body>
 </html>
