@@ -554,6 +554,34 @@ async def get_analysis_progress(session_id: str):
         "completed_at": session.get("completed_at")
     }
 
+@app.post("/api/analysis/{session_id}/cancel")
+async def cancel_analysis(session_id: str):
+    """Cancel a running analysis."""
+    if session_id not in analysis_sessions:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    session = analysis_sessions[session_id]
+    if session["status"] != "running":
+        raise HTTPException(status_code=400, detail="Analysis is not running")
+
+    # Cancel the asyncio task
+    task = session.get("task")
+    if task:
+        task.cancel()
+
+    session["status"] = "cancelled"
+    session["completed_at"] = datetime.now().isoformat()
+    save_session_metadata()
+
+    # Notify WebSocket clients
+    await notify_progress(session_id, {
+        "type": "cancelled",
+        "session_id": session_id,
+        "message": "Analysis cancelled by user"
+    })
+
+    return {"status": "cancelled"}
+
 @app.get("/api/analysis/{session_id}/results")
 async def get_analysis_results(session_id: str):
     """Get analysis results"""

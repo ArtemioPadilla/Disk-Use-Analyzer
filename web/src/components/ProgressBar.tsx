@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
-import { on } from '../lib/events';
+import { api } from '../lib/api';
+import { on, emit } from '../lib/events';
 
 export default function ProgressBar() {
   const [active, setActive] = useState(false);
@@ -8,16 +9,20 @@ export default function ProgressBar() {
   const [filesScanned, setFilesScanned] = useState(0);
   const [startTime, setStartTime] = useState<number | null>(null);
   const [eta, setEta] = useState<string>('');
+  const [sessionId, setSessionId] = useState<string | null>(null);
+  const [cancelling, setCancelling] = useState(false);
 
   useEffect(() => {
     const offs = [
-      on('analysis:started', () => {
+      on('analysis:started', (data: any) => {
         setActive(true);
         setProgress(0);
         setMessage('Starting analysis...');
         setFilesScanned(0);
         setStartTime(Date.now());
         setEta('');
+        setSessionId(data.id || null);
+        setCancelling(false);
       }),
       on('analysis:progress', (data: any) => {
         if (data.progress !== undefined) {
@@ -51,9 +56,26 @@ export default function ProgressBar() {
         setEta('');
         setTimeout(() => setActive(false), 3000);
       }),
+      on('analysis:cancelled', () => {
+        setMessage('Analysis cancelled');
+        setProgress(0);
+        setTimeout(() => setActive(false), 2000);
+      }),
     ];
     return () => offs.forEach(off => off());
   }, []);
+
+  const handleCancel = async () => {
+    if (!sessionId || cancelling) return;
+    setCancelling(true);
+    try {
+      await api.cancelAnalysis(sessionId);
+      emit('analysis:cancelled', { id: sessionId });
+    } catch (e) {
+      console.error('Cancel failed:', e);
+      setCancelling(false);
+    }
+  };
 
   if (!active) return null;
 
@@ -87,9 +109,21 @@ export default function ProgressBar() {
         }}>
           {message}
         </span>
-        <span>
-          {progress.toFixed(0)}% &middot; {filesScanned.toLocaleString()} files{eta && ` \u00b7 ${eta}`}
-        </span>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+          {progress < 100 && (
+            <button onClick={handleCancel} disabled={cancelling}
+              style={{
+                background: 'none', border: '1px solid var(--danger)', color: 'var(--danger)',
+                padding: '0.15rem 0.5rem', borderRadius: '4px', fontSize: '0.7rem',
+                cursor: cancelling ? 'default' : 'pointer', opacity: cancelling ? 0.5 : 1,
+              }}>
+              {cancelling ? 'Cancelling...' : 'Cancel'}
+            </button>
+          )}
+          <span>
+            {progress.toFixed(0)}% &middot; {filesScanned.toLocaleString()} files{eta && ` \u00b7 ${eta}`}
+          </span>
+        </div>
       </div>
     </div>
   );

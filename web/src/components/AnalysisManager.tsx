@@ -74,6 +74,11 @@ export default function AnalysisManager() {
           }
         }
 
+        if (data.type === 'cancelled') {
+          emit('analysis:cancelled', { id: sessionIdRef.current });
+          setSessionId(null);
+        }
+
         if (data.type === 'error') {
           emit('analysis:error', data);
           setSessionId(null);

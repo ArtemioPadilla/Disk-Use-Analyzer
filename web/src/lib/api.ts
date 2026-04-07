@@ -19,7 +19,7 @@ export interface AnalysisRequest {
 
 export interface AnalysisSession {
   id: string;
-  status: 'running' | 'completed' | 'error';
+  status: 'running' | 'completed' | 'error' | 'cancelled';
   progress: number;
   current_path: string;
   paths: string[];
@@ -101,6 +101,8 @@ export const api = {
     }),
   getProgress: (id: string) => request<AnalysisSession>(`/analysis/${id}/progress`),
   getResults: (id: string) => request<SessionResults>(`/analysis/${id}/results`),
+  cancelAnalysis: (id: string) =>
+    request<any>(`/analysis/${id}/cancel`, { method: 'POST' }),
   getSessions: () => request<AnalysisSession[]>('/sessions'),
   previewCleanup: (paths: string[]) =>
     request<any>('/cleanup/preview', {
