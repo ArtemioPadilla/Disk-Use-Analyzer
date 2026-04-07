@@ -1,6 +1,7 @@
 ---
 import MainLayout from '../layouts/MainLayout.astro';
+import CleanupWizard from '../components/CleanupWizard.tsx';
 ---
 <MainLayout title="Cleanup" currentPath="/cleanup">
-  <p>Cleanup wizard coming in Task 9.</p>
+  <CleanupWizard client:load />
 </MainLayout>
