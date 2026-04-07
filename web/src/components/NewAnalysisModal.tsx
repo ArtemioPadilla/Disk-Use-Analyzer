@@ -14,7 +14,12 @@ export default function NewAnalysisModal() {
   useEffect(() => {
     const off = on('analysis:new', () => {
       setOpen(true);
-      api.getDrives().then(setDrives).catch(console.error);
+      api.getDrives().then((data: any) => {
+        // Backend returns {drives: [...], common_paths: [...]}
+        const driveItems = (data.drives || []).map((d: any) => ({ path: d.path, label: d.path }));
+        const commonItems = (data.common_paths || []).map((d: any) => ({ path: d.path, label: d.name || d.path }));
+        setDrives([...driveItems, ...commonItems]);
+      }).catch(console.error);
     });
     return off;
   }, []);

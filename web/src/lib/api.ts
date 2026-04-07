@@ -93,7 +93,7 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
 
 export const api = {
   getSystemInfo: () => request<SystemInfo>('/system/info'),
-  getDrives: () => request<DriveInfo[]>('/system/drives'),
+  getDrives: () => request<any>('/system/drives'),
   startAnalysis: (req: AnalysisRequest) =>
     request<{ session_id: string }>('/analysis/start', {
       method: 'POST',
