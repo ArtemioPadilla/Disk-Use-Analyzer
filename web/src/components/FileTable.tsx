@@ -8,8 +8,12 @@ type SortKey = 'size' | 'age_days' | 'path';
 type SortDir = 'asc' | 'desc';
 
 export default function FileTable() {
+  const initialSearch = typeof window !== 'undefined'
+    ? new URLSearchParams(window.location.search).get('path') || ''
+    : '';
+
   const [files, setFiles] = useState<LargeFile[]>([]);
-  const [search, setSearch] = useState('');
+  const [search, setSearch] = useState(initialSearch);
   const [sortKey, setSortKey] = useState<SortKey>('size');
   const [sortDir, setSortDir] = useState<SortDir>('desc');
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -19,6 +23,13 @@ export default function FileTable() {
     const off = on('analysis:completed', (data: SessionResults) => {
       const allFiles = data.results.flatMap(r => r.report.large_files);
       setFiles(allFiles);
+    });
+    return off;
+  }, []);
+
+  useEffect(() => {
+    const off = on('navigate:files', (data: any) => {
+      if (data?.path) setSearch(data.path);
     });
     return off;
   }, []);

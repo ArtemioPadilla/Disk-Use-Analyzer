@@ -115,6 +115,9 @@ export default function CategoryChart() {
           const hasChildren = allDirs.some(([p]) => p.startsWith(prefix) && p !== point.id);
           if (hasChildren) {
             setBreadcrumb(prev => [...prev, point.id]);
+          } else {
+            // Leaf node — navigate to file browser with this path
+            window.location.href = `/files?path=${encodeURIComponent(point.id)}`;
           }
         }
       });
@@ -179,6 +182,13 @@ export default function CategoryChart() {
             </span>
           ))}
         </div>
+      )}
+
+      {breadcrumb.length > 0 && (
+        <a href={`/files?path=${encodeURIComponent(breadcrumb[breadcrumb.length - 1])}`}
+          style={{ fontSize: '0.75rem', color: 'var(--primary)', textDecoration: 'none', marginTop: '0.5rem', display: 'inline-block' }}>
+          View files in this directory &rarr;
+        </a>
       )}
 
       <div ref={containerRef} />
