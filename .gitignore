@@ -37,3 +37,9 @@ static/node_modules/
 # Temporary files
 *.tmp
 *.temp
+.superpowers/
+
+# Astro web frontend
+web/node_modules/
+web/dist/
+web/.astro/
