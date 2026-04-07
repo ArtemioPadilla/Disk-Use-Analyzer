@@ -70,7 +70,12 @@ export default function CleanupWizard() {
   if (recs.length === 0) {
     return (
       <div className="card" style={{ textAlign: 'center', padding: '3rem', color: 'var(--text-muted)' }}>
-        No cleanup recommendations yet. Run an analysis from the Dashboard first.
+        <div style={{ fontSize: '2.5rem', marginBottom: '0.75rem' }}>🧹</div>
+        <div style={{ marginBottom: '0.5rem', fontWeight: 500 }}>No cleanup recommendations</div>
+        <p style={{ fontSize: '0.85rem', marginBottom: '1.5rem' }}>Scan your disk to get started.</p>
+        <button className="btn btn-primary" onClick={() => emit('analysis:new')}>
+          + New Analysis
+        </button>
       </div>
     );
   }

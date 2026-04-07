@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { api, type SessionResults } from '../lib/api';
-import { on } from '../lib/events';
+import { on, emit } from '../lib/events';
 
 export default function ExportPanel() {
   const [sessionId, setSessionId] = useState<string | null>(null);
@@ -37,6 +37,21 @@ export default function ExportPanel() {
     { id: 'csv' as const, icon: '\u{1F4CA}', title: 'CSV Spreadsheet', desc: 'Top files exported for use in Excel or Google Sheets.' },
   ];
 
+  const completedSessions = sessions.filter(s => s.status === 'completed');
+
+  if (completedSessions.length === 0) {
+    return (
+      <div className="card" style={{ textAlign: 'center', padding: '3rem', color: 'var(--text-muted)' }}>
+        <div style={{ fontSize: '2.5rem', marginBottom: '0.75rem' }}>📤</div>
+        <div style={{ marginBottom: '0.5rem', fontWeight: 500 }}>No analysis sessions to export</div>
+        <p style={{ fontSize: '0.85rem', marginBottom: '1.5rem' }}>Scan your disk to get started.</p>
+        <button className="btn btn-primary" onClick={() => emit('analysis:new')}>
+          + New Analysis
+        </button>
+      </div>
+    );
+  }
+
   return (
     <div>
       <div className="card" style={{ marginBottom: '1rem' }}>
@@ -44,7 +59,7 @@ export default function ExportPanel() {
         <select value={sessionId || ''} onChange={e => setSessionId(e.target.value || null)}
           style={{ width: '100%', padding: '0.5rem', borderRadius: '8px', border: '1px solid var(--border)', background: 'var(--card-bg)', color: 'var(--text)' }}>
           <option value="">— Select an analysis session —</option>
-          {sessions.filter(s => s.status === 'completed').map(s => (
+          {completedSessions.map(s => (
             <option key={s.id} value={s.id}>{s.paths?.join(', ') || s.id} — {new Date(s.started_at).toLocaleString()}</option>
           ))}
         </select>

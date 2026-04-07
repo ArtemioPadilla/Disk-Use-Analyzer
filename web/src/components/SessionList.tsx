@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { api } from '../lib/api';
+import { emit } from '../lib/events';
 
 interface SessionMeta {
   id: string;
@@ -38,9 +39,16 @@ export default function SessionList() {
   if (loading) return <div style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-muted)' }}>Loading sessions...</div>;
 
   if (sessions.length === 0) {
-    return (<div className="card" style={{ textAlign: 'center', padding: '3rem', color: 'var(--text-muted)' }}>
-      No analysis history yet. Start your first analysis from the Dashboard.
-    </div>);
+    return (
+      <div className="card" style={{ textAlign: 'center', padding: '3rem', color: 'var(--text-muted)' }}>
+        <div style={{ fontSize: '2.5rem', marginBottom: '0.75rem' }}>🕘</div>
+        <div style={{ marginBottom: '0.5rem', fontWeight: 500 }}>No analysis history</div>
+        <p style={{ fontSize: '0.85rem', marginBottom: '1.5rem' }}>Scan your disk to get started.</p>
+        <button className="btn btn-primary" onClick={() => emit('analysis:new')}>
+          + New Analysis
+        </button>
+      </div>
+    );
   }
 
   return (

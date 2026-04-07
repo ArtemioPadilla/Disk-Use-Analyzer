@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
-import { on } from '../lib/events';
+import { on, emit } from '../lib/events';
 import { api, type LargeFile, type SessionResults } from '../lib/api';
 import { formatBytes, formatAge } from '../lib/format';
 
@@ -76,7 +76,12 @@ export default function FileTable() {
   if (files.length === 0) {
     return (
       <div className="card" style={{ textAlign: 'center', padding: '3rem', color: 'var(--text-muted)' }}>
-        No files to display. Run an analysis from the Dashboard first.
+        <div style={{ fontSize: '2.5rem', marginBottom: '0.75rem' }}>📁</div>
+        <div style={{ marginBottom: '0.5rem', fontWeight: 500 }}>No files to display</div>
+        <p style={{ fontSize: '0.85rem', marginBottom: '1.5rem' }}>Scan your disk to get started.</p>
+        <button className="btn btn-primary" onClick={() => emit('analysis:new')}>
+          + New Analysis
+        </button>
       </div>
     );
   }
