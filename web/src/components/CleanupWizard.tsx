@@ -14,6 +14,7 @@ export default function CleanupWizard() {
   const [recs, setRecs] = useState<Recommendation[]>([]);
   const [expanded, setExpanded] = useState<Set<number>>(new Set([1]));
   const [running, setRunning] = useState<Set<string>>(new Set());
+  const [showCommands, setShowCommands] = useState(false);
 
   useEffect(() => {
     const off = on('analysis:completed', (data: SessionResults) => {
@@ -45,6 +46,20 @@ export default function CleanupWizard() {
     }
   };
 
+  const totalRecoverable = recs.reduce((s, r) => s + (r.space || 0), 0);
+  const safeTotalSpace = recs.filter(r => (r.tier || 1) === 1).reduce((s, r) => s + (r.space || 0), 0);
+
+  const cleanSafeItems = async () => {
+    const safeRecs = recs.filter(r => (r.tier || 1) === 1 && r.command && !r.command.startsWith('#'));
+    for (const rec of safeRecs) {
+      try {
+        const { pty_id } = await api.createTerminal(rec.command);
+        emit('terminal:started', { pty_id, command: rec.command });
+        setRunning(prev => new Set(prev).add(rec.command));
+      } catch (e) { console.error('Failed:', e); }
+    }
+  };
+
   const grouped = recs.reduce((acc, rec) => {
     const tier = rec.tier || 1;
     if (!acc[tier]) acc[tier] = [];
@@ -62,6 +77,28 @@ export default function CleanupWizard() {
 
   return (
     <div>
+      {/* Summary card */}
+      <div className="card" style={{ marginBottom: '1rem', background: 'linear-gradient(135deg, var(--primary), var(--secondary))', color: 'white', border: 'none' }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '1rem' }}>
+          <div>
+            <div style={{ fontSize: '0.85rem', opacity: 0.9 }}>Total recoverable space</div>
+            <div style={{ fontSize: '2rem', fontWeight: 700 }}>{formatBytes(totalRecoverable)}</div>
+            <div style={{ fontSize: '0.8rem', opacity: 0.8 }}>{recs.length} cleanup actions available</div>
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+            {safeTotalSpace > 0 && (
+              <button onClick={cleanSafeItems} disabled={running.size > 0}
+                style={{ background: 'white', color: 'var(--primary)', border: 'none', padding: '0.6rem 1.5rem', borderRadius: '8px', fontWeight: 600, fontSize: '0.9rem', cursor: 'pointer' }}>
+                {running.size > 0 ? 'Cleaning...' : `Clean Safe Items (${formatBytes(safeTotalSpace)})`}
+              </button>
+            )}
+            <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.75rem', opacity: 0.9, cursor: 'pointer' }}>
+              <input type="checkbox" checked={showCommands} onChange={e => setShowCommands(e.target.checked)} />
+              Show terminal commands
+            </label>
+          </div>
+        </div>
+      </div>
       {Object.entries(grouped)
         .sort(([a], [b]) => Number(a) - Number(b))
         .map(([tierStr, tierRecs]) => {
@@ -117,7 +154,7 @@ export default function CleanupWizard() {
                         <div style={{ fontSize: '0.875rem', fontWeight: 500 }}>
                           {rec.description}
                         </div>
-                        {rec.command && !rec.command.startsWith('#') && (
+                        {showCommands && rec.command && !rec.command.startsWith('#') && (
                           <code
                             style={{
                               display: 'block',

@@ -10,7 +10,10 @@ export default function StatsCards() {
   useEffect(() => {
     api.getSystemInfo().then(setSysInfo).catch(console.error);
     const off = on('analysis:completed', (data: SessionResults) => setResults(data));
-    return off;
+    const offCleanup = on('cleanup:completed', () => {
+      api.getSystemInfo().then(setSysInfo).catch(console.error);
+    });
+    return () => { off(); offCleanup(); };
   }, []);
 
   const disk = sysInfo?.disk_usage;
