@@ -1916,8 +1916,17 @@ class DiskAnalyzer:
         }}
         
         @media (max-width: 768px) {{
+            .container {{ padding: 1rem; }}
+            .header h1 {{ font-size: 1.5rem; }}
             .dashboard-grid {{ grid-template-columns: 1fr; }}
-            .col-span-4, .col-span-6, .col-span-8 {{ grid-column: span 1; }}
+            .col-span-4, .col-span-6, .col-span-8, .col-span-12 {{ grid-column: span 1; }}
+            .stats-grid {{ grid-template-columns: repeat(2, 1fr); gap: 0.75rem; }}
+            .stat-card .value {{ font-size: 1.3rem; }}
+            .file-table {{ font-size: 0.8rem; }}
+            .file-table th:nth-child(4), .file-table td:nth-child(4),
+            .file-table th:nth-child(5), .file-table td:nth-child(5) {{ display: none; }}
+            .theme-toggle {{ top: 0.5rem; right: 0.5rem; padding: 0.4rem 0.7rem; }}
+            .action-bar {{ flex-direction: column; gap: 0.5rem; }}
         }}
 
         .theme-toggle {{
@@ -2251,6 +2260,66 @@ class DiskAnalyzer:
                 <span><strong>Total:</strong> {self.format_size(disk_usage['total'])}</span>
             </div>'''
 
+            # ── Actionability bar (Task 6) ──────────────────────────────────
+            _act_recs = report.get('recommendations', [])
+            _act_total = disk_usage['total']
+            _cleanable  = sum(r['space'] for r in _act_recs if r.get('tier', 99) <= 2)
+            _investigate = sum(r['space'] for r in _act_recs if r.get('tier', 99) in (3, 4))
+            _skipped_sys = report.get('skipped_volumes_size', 0)
+            _your_files  = max(0, disk_usage['used'] - _cleanable - _investigate - _skipped_sys)
+
+            def _act_pct(sz):
+                return min(sz / _act_total * 100, 100) if _act_total > 0 else 0
+
+            _seg_cleanable  = _act_pct(_cleanable)
+            _seg_investigate = _act_pct(_investigate)
+            _seg_your_files  = _act_pct(_your_files)
+            _seg_system     = _act_pct(_skipped_sys)
+            # Cap total to 100%
+            _seg_total = _seg_cleanable + _seg_investigate + _seg_your_files + _seg_system
+            if _seg_total > 100:
+                _scale = 100 / _seg_total
+                _seg_cleanable   *= _scale
+                _seg_investigate *= _scale
+                _seg_your_files  *= _scale
+                _seg_system      *= _scale
+
+            _act_segments = [
+                ('#10b981', _seg_cleanable,   f'Limpiable ({self.format_size(_cleanable)})'),
+                ('#f97316', _seg_investigate, f'Investigar ({self.format_size(_investigate)})'),
+                ('#3b82f6', _seg_your_files,  f'Tus archivos ({self.format_size(_your_files)})'),
+                ('#94a3b8', _seg_system,      f'Sistema ({self.format_size(_skipped_sys)})'),
+            ]
+
+            _act_bar_html = ''
+            _act_legend_html = ''
+            _act_left = 0.0
+            for _color, _width, _label in _act_segments:
+                if _width > 0.3:
+                    _act_bar_html += (
+                        f'<div style="position:absolute; left:{_act_left:.2f}%; width:{_width:.2f}%; height:100%;'
+                        f' background:{_color}; border-right:1px solid rgba(255,255,255,0.3);" title="{_label}"></div>'
+                    )
+                    _act_legend_html += (
+                        f'<span style="display:inline-flex; align-items:center; gap:0.3rem; font-size:0.8rem; color:var(--gray);">'
+                        f'<span style="display:inline-block; width:12px; height:12px; background:{_color}; border-radius:3px;"></span>'
+                        f'{_label}</span>'
+                    )
+                    _act_left += _width
+
+            html += f'''
+            <div style="margin-top: 1.25rem;">
+                <div style="font-size: 0.8rem; font-weight: 600; color: var(--gray); margin-bottom: 0.5rem; text-transform: uppercase; letter-spacing: 0.05em;">
+                    Vista por acci&#243;n:
+                </div>
+                <div style="position: relative; height: 30px; border-radius: 8px; overflow: hidden; background: var(--hover-bg); margin-bottom: 0.5rem;">
+                    {_act_bar_html}
+                </div>
+                <div style="display: flex; flex-wrap: wrap; gap: 0.75rem;">
+                    {_act_legend_html}
+                </div>
+            </div>'''
+
             # Mostrar aviso de sudo solo si hay errores de permisos reales y cobertura >25%
             accounted_for_hint = analyzed_total + report.get('skipped_volumes_size', 0)
             permission_gap = disk_usage['used'] - accounted_for_hint
@@ -2294,6 +2363,50 @@ class DiskAnalyzer:
             </div>
         </div>
         '''
+
+        # ── Narrative "Why Is My Disk Full?" Card ──────────────────────────
+        if report.get('disk_usage') and report['disk_usage']['total'] > 0:
+            _narrative_recs = report.get('recommendations', [])
+            _narrative_du = report['disk_usage']
+            _narrative_total = _narrative_du['total']
+
+            # Re-use the categories list if it was already computed above; otherwise
+            # build a lightweight version from directory_sizes for the narrative.
+            # We do a fresh lightweight pass here so the narrative card is
+            # self-contained (categories might not be in scope at this point).
+            _nar_category_sizes = {}
+            _nar_start = str(self.start_path)
+            for _dp, _ds in self.directory_sizes.items():
+                if str(Path(_dp).parent) == _nar_start and _dp != _nar_start:
+                    _cat = self._categorize_path(_dp)
+                    _nar_category_sizes[_cat] = _nar_category_sizes.get(_cat, 0) + _ds
+
+            # Build bullet list: categories > 1 GB, excluding noise labels
+            _nar_exclude = frozenset(['Libre', 'Sin permisos (sudo)', 'APFS purgeable'])
+            _nar_bullets = []
+            for _cat, _sz in sorted(_nar_category_sizes.items(), key=lambda x: x[1], reverse=True):
+                if _sz >= GB and _cat not in _nar_exclude:
+                    _pct = _sz / _narrative_total * 100
+                    _nar_bullets.append(
+                        f'<li style="margin-bottom: 0.4rem;">'
+                        f'<strong>{_cat}</strong> ocupa {self.format_size(_sz)} ({_pct:.0f}%)'
+                        f'</li>'
+                    )
+
+            _nar_bullets_html = '\n'.join(_nar_bullets) if _nar_bullets else (
+                '<li>No se encontraron categorías mayores a 1 GB.</li>'
+            )
+
+            html += f'''
+        <div class="card" style="margin-bottom: 2rem; border-left: 4px solid #6366f1;">
+            <h2 style="margin-bottom: 1rem;">&#128218; &#191;Por qu&#233; est&#225; lleno tu disco?</h2>
+            <p style="color: var(--gray); font-size: 0.9rem; margin-bottom: 0.75rem;">
+                As&#237; se distribuye el espacio en tu sistema:
+            </p>
+            <ul style="list-style: none; padding: 0; margin: 0; font-size: 0.95rem; color: var(--dark);">
+                {_nar_bullets_html}
+            </ul>
+        </div>'''
 
         # ── Diff card (if a previous scan exists) ──
         scan_diff = report.get('scan_diff')
