@@ -4,6 +4,8 @@ import { api } from '../lib/api';
 export default function Settings() {
   const [minSize, setMinSize] = useState(10);
   const [saved, setSaved] = useState(false);
+  const [excludePaths, setExcludePaths] = useState<string[]>([]);
+  const [newExclude, setNewExclude] = useState('');
 
   useEffect(() => {
     // Load from localStorage first, then server default
@@ -17,12 +19,15 @@ export default function Settings() {
         }
       }).catch(console.error);
     }
+    const excluded = localStorage.getItem('disk-analyzer-exclude-paths');
+    if (excluded) setExcludePaths(JSON.parse(excluded));
   }, []);
 
   const save = () => {
     localStorage.setItem('disk-analyzer-min-size', String(minSize));
+    localStorage.setItem('disk-analyzer-exclude-paths', JSON.stringify(excludePaths));
     // Broadcast so NewAnalysisModal picks it up
-    window.dispatchEvent(new CustomEvent('settings:updated', { detail: { minSize } }));
+    window.dispatchEvent(new CustomEvent('settings:updated', { detail: { minSize, excludePaths } }));
     setSaved(true);
     setTimeout(() => setSaved(false), 2000);
   };
@@ -46,6 +51,27 @@ export default function Settings() {
             <span>0 MB (all files)</span>
             <span>500 MB</span>
           </div>
+        </div>
+
+        <div style={{ marginBottom: '1.5rem' }}>
+          <label style={{ fontWeight: 600, display: 'block', marginBottom: '0.5rem' }}>Excluded Paths</label>
+          <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: '0.5rem' }}>
+            Files in these directories will be hidden from results.
+          </p>
+          <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '0.5rem' }}>
+            <input type="text" placeholder="/path/to/exclude" value={newExclude}
+              onChange={e => setNewExclude(e.target.value)}
+              onKeyDown={e => { if (e.key === 'Enter' && newExclude.trim()) { setExcludePaths(prev => [...prev, newExclude.trim()]); setNewExclude(''); } }}
+              style={{ flex: 1, padding: '0.4rem 0.6rem', borderRadius: '6px', border: '1px solid var(--border)', background: 'var(--card-bg)', color: 'var(--text)', fontSize: '0.85rem' }} />
+            <button className="btn btn-ghost" onClick={() => { if (newExclude.trim()) { setExcludePaths(prev => [...prev, newExclude.trim()]); setNewExclude(''); } }}>Add</button>
+          </div>
+          {excludePaths.map((p, i) => (
+            <div key={i} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', padding: '0.25rem 0', fontSize: '0.85rem' }}>
+              <code style={{ flex: 1, background: 'var(--page-bg)', padding: '0.2rem 0.5rem', borderRadius: '4px' }}>{p}</code>
+              <button onClick={() => setExcludePaths(prev => prev.filter((_, idx) => idx !== i))}
+                style={{ background: 'none', border: 'none', color: 'var(--danger)', cursor: 'pointer', fontSize: '0.8rem' }}>x</button>
+            </div>
+          ))}
         </div>
 
         <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>

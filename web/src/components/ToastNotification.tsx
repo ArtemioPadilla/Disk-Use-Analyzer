@@ -36,6 +36,11 @@ export default function ToastNotification() {
           setTimeout(() => setToasts(prev => prev.filter(t => t.id !== id)), 5000);
         }
       }),
+      on('toast:show', (data: any) => {
+        const id = nextId++;
+        setToasts(prev => [...prev, { id, message: data.message, type: data.type || 'info' }]);
+        setTimeout(() => setToasts(prev => prev.filter(t => t.id !== id)), 4000);
+      }),
     ];
     return () => offs.forEach(off => off());
   }, []);

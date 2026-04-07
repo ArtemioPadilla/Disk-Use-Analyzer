@@ -9,6 +9,7 @@ import { on, emit } from '../lib/events';
 
 export default function AnalysisManager() {
   const [sessionId, setSessionId] = useState<string | null>(null);
+  const [wsRetry, setWsRetry] = useState(0);
   const wsRef = useRef<WebSocket | null>(null);
   const sessionIdRef = useRef<string | null>(null);
 
@@ -90,6 +91,16 @@ export default function AnalysisManager() {
 
     ws.onclose = () => {
       console.log(`[AnalysisManager] WS closed for session ${sessionId}`);
+      // Only warn if we still expected to be connected
+      if (sessionIdRef.current === sessionId) {
+        emit('toast:show', { message: 'Connection lost. Reconnecting...', type: 'error' });
+        // Try to reconnect after 2 seconds
+        setTimeout(() => {
+          if (sessionIdRef.current === sessionId) {
+            setWsRetry(r => r + 1);
+          }
+        }, 2000);
+      }
     };
 
     ws.onerror = () => ws.close();
@@ -97,7 +108,7 @@ export default function AnalysisManager() {
     return () => {
       ws.close();
     };
-  }, [sessionId]);
+  }, [sessionId, wsRetry]);
 
   // No UI — this is a headless component
   return null;

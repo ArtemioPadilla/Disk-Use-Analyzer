@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useMemo } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { on, emit } from '../lib/events';
 import { api, type LargeFile, type SessionResults } from '../lib/api';
-import { formatBytes, formatAge } from '../lib/format';
+import { formatBytes, formatAge, describePath } from '../lib/format';
 
 type SortKey = 'size' | 'age_days' | 'path';
 type SortDir = 'asc' | 'desc';
@@ -179,7 +179,20 @@ export default function FileTable() {
                       <input type="checkbox" checked={selected.has(file.path)}
                         disabled={file.is_protected} onChange={() => toggleSelect(file.path)} />
                       <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
-                        title={file.path}>{file.path}</div>
+                        title={file.path}>
+                        {(() => {
+                          const desc = describePath(file.path);
+                          if (desc) {
+                            return (
+                              <>
+                                <span style={{ fontWeight: 500 }}>{desc}</span>
+                                <span style={{ color: 'var(--text-muted)', fontSize: '0.7rem', marginLeft: '0.4rem' }}>{file.path.split('/').pop()}</span>
+                              </>
+                            );
+                          }
+                          return file.path;
+                        })()}
+                      </div>
                       <div style={{ textAlign: 'right', fontWeight: 500 }}>{formatBytes(file.size)}</div>
                       <div style={{ textAlign: 'center' }}>
                         {file.is_protected ? '🔒' : file.is_cache ? '🗑️' : '📄'}
@@ -207,10 +220,26 @@ export default function FileTable() {
                   display: 'grid', gridTemplateColumns: '32px 1fr 100px 70px 70px',
                   gap: '0.5rem', padding: '0.5rem 0.75rem', alignItems: 'center',
                   fontSize: '0.8rem', borderBottom: '1px solid var(--border)',
-                  background: selected.has(file.path) ? 'var(--primary)10' : 'transparent',
+                  background: selected.has(file.path) ? 'var(--primary)10'
+                    : file.is_protected ? '#ef444408'
+                    : file.is_cache ? '#10b98108'
+                    : 'transparent',
                 }}>
                   <input type="checkbox" checked={selected.has(file.path)} disabled={file.is_protected} onChange={() => toggleSelect(file.path)} />
-                  <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={file.path}>{file.path}</div>
+                  <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={file.path}>
+                    {(() => {
+                      const desc = describePath(file.path);
+                      if (desc) {
+                        return (
+                          <>
+                            <span style={{ fontWeight: 500 }}>{desc}</span>
+                            <span style={{ color: 'var(--text-muted)', fontSize: '0.7rem', marginLeft: '0.4rem' }}>{file.path.split('/').pop()}</span>
+                          </>
+                        );
+                      }
+                      return file.path;
+                    })()}
+                  </div>
                   <div style={{ textAlign: 'right', fontWeight: 500 }}>{formatBytes(file.size)}</div>
                   <div style={{ textAlign: 'right', color: 'var(--text-muted)' }}>{formatAge(file.age_days)}</div>
                   <div style={{ textAlign: 'center' }}>{file.is_protected ? '🔒' : file.is_cache ? '🗑️' : '📄'}</div>

@@ -139,6 +139,12 @@ export default function SessionList() {
               {new Date(session.started_at).toLocaleString()}
               {session.completed_at && ` \u00B7 Completed ${new Date(session.completed_at).toLocaleString()}`}
             </div>
+            {(session as any).disk_used && (
+              <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>
+                Disk: {formatBytes((session as any).disk_used)} used
+                {(session as any).disk_total && ` of ${formatBytes((session as any).disk_total)}`}
+              </div>
+            )}
           </div>
           <span style={{
             fontSize: '0.7rem', padding: '0.15rem 0.5rem', borderRadius: '4px',

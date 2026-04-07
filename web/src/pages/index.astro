@@ -4,7 +4,6 @@ import HeroScan from '../components/HeroScan.tsx';
 import NarrativeSummary from '../components/NarrativeSummary.tsx';
 import StatsCards from '../components/StatsCards.tsx';
 import CategoryChart from '../components/CategoryChart.tsx';
-import DiskDonut from '../components/DiskDonut.tsx';
 import TaskList from '../components/TaskList.tsx';
 import QuickActions from '../components/QuickActions.tsx';
 import DockerPanel from '../components/DockerPanel.tsx';
@@ -17,12 +16,15 @@ import TrendChart from '../components/TrendChart.tsx';
   <NarrativeSummary client:load />
   <DiskBar client:load />
   <StatsCards client:load />
-  <QuickActions client:load />
-  <div style="display: flex; gap: 0.75rem; margin-bottom: 1rem;">
-    <CategoryChart client:idle />
-    <DiskDonut client:idle />
+  <div class="dashboard-grid">
+    <div class="dashboard-main">
+      <CategoryChart client:idle />
+    </div>
+    <div class="dashboard-side">
+      <QuickActions client:load />
+      <DockerPanel client:load />
+      <TrendChart client:load />
+      <TaskList client:load />
+    </div>
   </div>
-  <TrendChart client:load />
-  <DockerPanel client:load />
-  <TaskList client:load />
 </MainLayout>
