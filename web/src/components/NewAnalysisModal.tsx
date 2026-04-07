@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { api, type DriveInfo } from '../lib/api';
 import { on, emit } from '../lib/events';
 import { useAnalysis } from '../hooks/useAnalysis';
@@ -9,13 +9,25 @@ export default function NewAnalysisModal() {
   const [selectedPaths, setSelectedPaths] = useState<string[]>([]);
   const [customPath, setCustomPath] = useState('');
   const [minSize, setMinSize] = useState(10);
+  const defaultLoaded = useRef(false);
   const { startAnalysis } = useAnalysis();
+
+  // Load server default min_size on first mount
+  useEffect(() => {
+    if (!defaultLoaded.current) {
+      api.getSystemInfo().then((info: any) => {
+        if (info.default_min_size_mb !== undefined) {
+          setMinSize(info.default_min_size_mb);
+        }
+        defaultLoaded.current = true;
+      }).catch(console.error);
+    }
+  }, []);
 
   useEffect(() => {
     const off = on('analysis:new', () => {
       setOpen(true);
       api.getDrives().then((data: any) => {
-        // Backend returns {drives: [...], common_paths: [...]}
         const driveItems = (data.drives || []).map((d: any) => ({ path: d.path, label: d.path }));
         const commonItems = (data.common_paths || []).map((d: any) => ({ path: d.path, label: d.name || d.path }));
         setDrives([...driveItems, ...commonItems]);

@@ -347,7 +347,7 @@ web:
 	@echo "$(BLUE)📚 API Docs en http://localhost:8000/docs$(NC)"
 	@echo "$(YELLOW)Presiona Ctrl+C para detener el servidor$(NC)"
 	@echo ""
-	@. venv-web/bin/activate && python disk_analyzer_web.py
+	@. venv-web/bin/activate && python disk_analyzer_web.py $(if $(min_size),--min-size $(min_size),)
 
 # Comando por defecto
 .DEFAULT_GOAL := help

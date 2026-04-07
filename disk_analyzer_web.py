@@ -177,7 +177,8 @@ async def get_system_info():
             "used": usage.used,
             "free": usage.free,
             "percent": (usage.used / usage.total * 100) if usage.total > 0 else 0
-        }
+        },
+        "default_min_size_mb": getattr(app.state, 'default_min_size_mb', 10),
     }
 
 @app.get("/api/system/drives")
@@ -984,21 +985,32 @@ async def serve_astro(path: str):
 
 
 if __name__ == "__main__":
+    import argparse
+    parser = argparse.ArgumentParser(description="Disk Analyzer Web Server")
+    parser.add_argument("--min-size", type=float, default=10,
+                        help="Default minimum file size in MB (default: 10, use 0 for all files)")
+    parser.add_argument("--port", type=int, default=8000, help="Server port (default: 8000)")
+    args = parser.parse_args()
+
+    # Store default min_size so the API can serve it
+    app.state.default_min_size_mb = args.min_size
+
     # Print startup information
     print("\n" + "="*60)
     print("🌐 Disk Analyzer Web Server")
     print("="*60)
-    
+
     # Get local IP
     local_ip = get_local_ip()
     
+    print(f"\n⚙️  Default min file size: {args.min_size} MB")
     print("\n🚀 Server starting...")
     print(f"\n📍 Access the web interface at:")
-    print(f"   Local:   http://localhost:8000")
+    print(f"   Local:   http://localhost:{args.port}")
     if local_ip != "localhost":
-        print(f"   Network: http://{local_ip}:8000")
+        print(f"   Network: http://{local_ip}:{args.port}")
     print(f"\n📚 API documentation:")
-    print(f"   http://localhost:8000/docs")
+    print(f"   http://localhost:{args.port}/docs")
     print(f"\nℹ️  Press Ctrl+C to stop the server")
     print("="*60 + "\n")
     
@@ -1006,7 +1018,7 @@ if __name__ == "__main__":
     uvicorn.run(
         "disk_analyzer_web:app",
         host="0.0.0.0",
-        port=8000,
+        port=args.port,
         reload=True,
         log_level="info",
         # WebSocket settings to reduce buffering
