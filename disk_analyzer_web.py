@@ -121,21 +121,28 @@ class CleanupRequest(BaseModel):
 class DeleteFileRequest(BaseModel):
     path: str = Field(..., description="Path of the file to delete")
 
-# Serve static files (frontend)
+# Serve new Astro frontend from web/dist/ if it exists, else fall back to static/
+astro_dist = Path(__file__).parent / "web" / "dist"
 static_dir = Path(__file__).parent / "static"
-if not static_dir.exists():
-    static_dir.mkdir(exist_ok=True)
 
-# Mount static files
-app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
+if astro_dist.exists():
+    app.mount("/static", StaticFiles(directory=str(static_dir)), name="legacy_static")
+    # Mount Astro's built assets (CSS, JS, etc.)
+    astro_assets = astro_dist / "_astro"
+    if astro_assets.exists():
+        app.mount("/_astro", StaticFiles(directory=str(astro_assets)), name="astro_assets")
+else:
+    if not static_dir.exists():
+        static_dir.mkdir(exist_ok=True)
+    app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
 
-@app.get("/")
-async def root():
-    """Serve the main HTML page"""
-    index_file = static_dir / "index.html"
-    if index_file.exists():
-        return FileResponse(str(index_file))
-    return {"message": "Disk Analyzer Web API", "docs": "/docs"}
+@app.get("/", include_in_schema=False)
+async def serve_root():
+    """Serve the Astro index or legacy index."""
+    astro_index = Path(__file__).parent / "web" / "dist" / "index.html"
+    if astro_index.is_file():
+        return FileResponse(str(astro_index))
+    return FileResponse(str(Path(__file__).parent / "static" / "index.html"))
 
 @app.get("/api/system/info")
 async def get_system_info():
@@ -801,21 +808,20 @@ async def delete_file(request: DeleteFileRequest):
 @app.on_event("startup")
 async def startup_event():
     """Initialize the application"""
-    # Create static directory structure
+    # Create static directory structure for legacy frontend
+    if not static_dir.exists():
+        static_dir.mkdir(exist_ok=True)
     for subdir in ["css", "js", "img"]:
         (static_dir / subdir).mkdir(exist_ok=True)
-    
-    # Create default index.html if it doesn't exist
-    index_file = static_dir / "index.html"
-    if not index_file.exists():
-        # We'll create this in the next step
-        pass
-    
+
     # Load previous session metadata
     load_session_metadata()
-    
+
     print("✅ Web server started successfully")
-    print(f"📁 Static files served from: {static_dir}")
+    if astro_dist.exists():
+        print(f"📁 Astro frontend served from: {astro_dist}")
+    else:
+        print(f"📁 Legacy frontend served from: {static_dir}")
     print(f"🔍 API endpoints available at /api/*")
     print(f"📊 Loaded {len(analysis_sessions)} previous sessions")
 
@@ -845,6 +851,27 @@ def get_local_ip():
         return ip
     except:
         return "localhost"
+
+@app.get("/{path:path}")
+async def serve_astro(path: str):
+    """Serve Astro frontend pages. API routes take priority (registered first)."""
+    astro_dist = Path(__file__).parent / "web" / "dist"
+    if not astro_dist.exists():
+        return FileResponse(str(Path(__file__).parent / "static" / "index.html"))
+
+    for candidate in [
+        astro_dist / path / "index.html",
+        astro_dist / f"{path}.html",
+        astro_dist / path,
+    ]:
+        if candidate.is_file():
+            return FileResponse(str(candidate))
+
+    index = astro_dist / "index.html"
+    if index.is_file():
+        return FileResponse(str(index))
+    return FileResponse(str(Path(__file__).parent / "static" / "index.html"))
+
 
 if __name__ == "__main__":
     # Print startup information
