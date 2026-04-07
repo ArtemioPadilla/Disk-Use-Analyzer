@@ -1,6 +1,7 @@
 ---
 import Sidebar from '../components/Sidebar.astro';
 import TopBar from '../components/TopBar.astro';
+import FloatingTerminal from '../components/FloatingTerminal.tsx';
 import '../layouts/global.css';
 
 const { title, currentPath } = Astro.props;
@@ -24,6 +25,6 @@ const { title, currentPath } = Astro.props;
         </main>
       </div>
     </div>
-    <div id="terminal-root"></div>
+    <FloatingTerminal client:idle />
   </body>
 </html>
