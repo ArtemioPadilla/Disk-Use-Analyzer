@@ -68,8 +68,8 @@ export default function NewAnalysisModal() {
           <div style={{ marginBottom: '1rem', fontSize: '0.8rem', color: 'var(--text-muted)' }}>Selected: {selectedPaths.join(', ')}</div>
         )}
         <div style={{ marginBottom: '1.5rem' }}>
-          <label style={{ fontWeight: 600, display: 'block', marginBottom: '0.5rem' }}>Minimum file size: {minSize} MB</label>
-          <input type="range" min={1} max={500} value={minSize} onChange={e => setMinSize(Number(e.target.value))} style={{ width: '100%' }} />
+          <label style={{ fontWeight: 600, display: 'block', marginBottom: '0.5rem' }}>Minimum file size: {minSize} MB {minSize === 0 && <span style={{ color: 'var(--warning)', fontSize: '0.75rem' }}>(all files — may be slow)</span>}</label>
+          <input type="range" min={0} max={500} value={minSize} onChange={e => setMinSize(Number(e.target.value))} style={{ width: '100%' }} />
         </div>
         <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end' }}>
           <button className="btn btn-ghost" onClick={() => setOpen(false)}>Cancel</button>
