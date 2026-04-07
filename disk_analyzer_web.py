@@ -24,6 +24,7 @@ import uvicorn
 
 # Import our core analyzer
 from disk_analyzer_core import DiskAnalyzerCore, MB, GB, IS_MACOS, IS_WINDOWS
+from pty_manager import PTYManager
 
 # Create FastAPI app
 app = FastAPI(
@@ -45,6 +46,9 @@ app.add_middleware(
 analysis_sessions: Dict[str, Dict] = {}
 websocket_connections: Dict[str, List[WebSocket]] = {}
 executor = ThreadPoolExecutor(max_workers=4)
+
+# Terminal management
+pty_manager = PTYManager(max_sessions=3, idle_timeout=600)
 
 # Session persistence
 SESSIONS_FILE = Path("sessions_metadata.json")
@@ -117,6 +121,13 @@ class CleanupRequest(BaseModel):
     paths: List[str]
     categories: List[str]
     dry_run: bool = True
+
+class TerminalCreateRequest(BaseModel):
+    command: Optional[str] = None
+
+class TerminalResizeRequest(BaseModel):
+    cols: int
+    rows: int
 
 class DeleteFileRequest(BaseModel):
     path: str = Field(..., description="Path of the file to delete")
@@ -805,6 +816,86 @@ async def delete_file(request: DeleteFileRequest):
             detail=f"An error occurred: {str(e)}"
         )
 
+# ─── Terminal Endpoints ───────────────────────────────────────────────────────
+
+@app.post("/api/terminal/create")
+async def create_terminal(request: TerminalCreateRequest):
+    """Spawn a new PTY session."""
+    try:
+        pty_id = pty_manager.create_session(command=request.command)
+        session = pty_manager.sessions[pty_id]
+        return {"pty_id": pty_id, "created_at": session.created_at}
+    except RuntimeError as e:
+        raise HTTPException(status_code=429, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.get("/api/terminal/sessions")
+async def list_terminals():
+    """List active terminal sessions."""
+    return pty_manager.list_sessions()
+
+
+@app.post("/api/terminal/{pty_id}/resize")
+async def resize_terminal(pty_id: str, request: TerminalResizeRequest):
+    """Resize a terminal session."""
+    try:
+        pty_manager.resize(pty_id, request.cols, request.rows)
+        return {"status": "ok"}
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"No session: {pty_id}")
+
+
+@app.delete("/api/terminal/{pty_id}")
+async def kill_terminal(pty_id: str):
+    """Kill a terminal session."""
+    try:
+        pty_manager.kill_session(pty_id)
+        return {"status": "killed"}
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"No session: {pty_id}")
+
+
+@app.websocket("/ws/terminal/{pty_id}")
+async def terminal_websocket(websocket: WebSocket, pty_id: str):
+    """Bidirectional WebSocket: stdin from browser -> PTY, stdout from PTY -> browser."""
+    if pty_id not in pty_manager.sessions:
+        await websocket.close(code=4004, reason="No such session")
+        return
+
+    await websocket.accept()
+    session = pty_manager.sessions[pty_id]
+
+    async def send_output():
+        """Read PTY output and send to browser."""
+        while session.alive:
+            data = session.read_output_bytes()
+            if data:
+                await websocket.send_bytes(data)
+            else:
+                await asyncio.sleep(0.05)
+        exit_code = session.get_exit_code()
+        try:
+            await websocket.send_json({"type": "exit", "code": exit_code or 0})
+        except Exception:
+            pass
+
+    output_task = asyncio.create_task(send_output())
+
+    try:
+        while True:
+            data = await websocket.receive()
+            if "text" in data:
+                session.write_input(data["text"])
+            elif "bytes" in data:
+                session.write_input_bytes(data["bytes"])
+    except WebSocketDisconnect:
+        pass
+    finally:
+        output_task.cancel()
+
+
 @app.on_event("startup")
 async def startup_event():
     """Initialize the application"""
@@ -835,7 +926,10 @@ async def shutdown_event():
                 await ws.close()
             except:
                 pass
-    
+
+    # Cleanup PTY sessions
+    pty_manager.cleanup_all()
+
     # Shutdown executor
     executor.shutdown(wait=True)
 
