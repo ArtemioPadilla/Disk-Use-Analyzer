@@ -232,6 +232,19 @@ class DiskAnalyzer:
         """Escanea un directorio y retorna su tamaño total"""
         if _depth > 200:
             return 0
+        # Progress indicator (update every ~5% or at depth <= 1)
+        if hasattr(self, '_estimated_dirs') and _depth <= 1:
+            self._scanned_dirs += 1
+            pct = min(int(self._scanned_dirs / self._estimated_dirs * 100), 99)
+            if pct > self._last_progress:
+                self._last_progress = pct
+                end_char = '\r' if sys.stdout.isatty() else ''
+                if sys.stdout.isatty():
+                    print(f"\r   Escaneando: {pct}% ({self.total_scanned:,} archivos)", end='', flush=True)
+                elif pct % 25 == 0:
+                    print(f"   Escaneando: {pct}% ({self.total_scanned:,} archivos)")
+                if pct == 99 and sys.stdout.isatty():
+                    print()
         total_size = 0
         
         try:
@@ -625,7 +638,25 @@ class DiskAnalyzer:
         
         # Obtener uso del disco
         self.disk_usage = self.get_disk_usage()
-        
+
+        # Estimación rápida: contar directorios a depth 2 para progress
+        self._estimated_dirs = 0
+        self._scanned_dirs = 0
+        try:
+            for d1 in self.start_path.iterdir():
+                if d1.is_dir(follow_symlinks=False) and not d1.is_symlink():
+                    self._estimated_dirs += 1
+                    try:
+                        for d2 in d1.iterdir():
+                            if d2.is_dir(follow_symlinks=False):
+                                self._estimated_dirs += 1
+                    except (PermissionError, OSError):
+                        pass
+        except (PermissionError, OSError):
+            pass
+        self._estimated_dirs = max(self._estimated_dirs, 1)
+        self._last_progress = 0
+
         # Escanear directorio principal
         total_size = self.scan_directory(self.start_path)
         self.directory_sizes[str(self.start_path)] = total_size
@@ -695,6 +726,46 @@ class DiskAnalyzer:
         if 'Mobile Documents' in dir_path or 'CloudDocs' in dir_path:
             return 'iCloud'
         return 'Otros'
+
+    def get_app_usage(self) -> List[Dict]:
+        """Agrupa el uso de disco por aplicación/herramienta."""
+        app_patterns = [
+            ('Xcode', ['/Developer/Xcode', '/CoreSimulator', 'com.apple.dt.Xcode']),
+            ('Docker', ['/com.docker', '/.docker', '/Docker.app']),
+            ('Homebrew', ['/homebrew/', '/Homebrew/', '/Cellar/']),
+            ('Steam', ['/Steam/', 'steamapps']),
+            ('Chrome', ['/Google/Chrome', '/com.google.Chrome']),
+            ('VS Code', ['/Code/', '/com.microsoft.VSCode', '/.vscode']),
+            ('Anaconda', ['/anaconda3/', '/miniconda3/']),
+            ('StarCraft II', ['/StarCraft II/']),
+            ('Microsoft Teams', ['/Microsoft Teams']),
+            ('Adobe', ['/Adobe/']),
+            ('Whisky', ['/com.isaacmarovitz.Whisky']),
+            ('Claude', ['/Claude.app', '/claude/']),
+            ('npm', ['/.npm/', '/node_modules/']),
+            ('Git', ['/.git/']),
+        ]
+        app_sizes = {}
+        # Aggregate from directory_sizes
+        for dir_path, size in self.directory_sizes.items():
+            for app_name, patterns in app_patterns:
+                if any(p in dir_path for p in patterns):
+                    app_sizes[app_name] = app_sizes.get(app_name, 0) + size
+                    break
+        # Deduplicate: only count non-overlapping (use direct children approach)
+        # Simple approach: for each app, take the max directory size
+        app_max = {}
+        for dir_path, size in self.directory_sizes.items():
+            for app_name, patterns in app_patterns:
+                if any(p in dir_path for p in patterns):
+                    # Only count if no parent of this dir is also in the same app
+                    parent = str(Path(dir_path).parent)
+                    parent_is_same_app = any(p in parent for p in patterns)
+                    if not parent_is_same_app:
+                        app_max[app_name] = app_max.get(app_name, 0) + size
+                    break
+        result = [{'app': name, 'size': size} for name, size in app_max.items() if size > 10 * MB]
+        return sorted(result, key=lambda x: x['size'], reverse=True)
 
     def generate_delete_command(self, file_path: str) -> str:
         """Genera comando seguro para borrar un archivo"""
@@ -1128,7 +1199,8 @@ class DiskAnalyzer:
             'delete_commands': self._generate_delete_commands(self.large_files[:50]),
             'disk_usage': self.disk_usage,
             'skipped_volumes_size': getattr(self, 'skipped_volumes_size', 0),
-            'duplicates': getattr(self, 'duplicates', [])
+            'duplicates': getattr(self, 'duplicates', []),
+            'app_usage': self.get_app_usage()
         }
 
         return report
@@ -2400,6 +2472,78 @@ class DiskAnalyzer:
                 </div>
             </div>
             
+'''
+
+        # App usage card
+        app_usage = report.get('app_usage', [])
+        if app_usage:
+            html += f'''
+            <div class="card col-span-12">
+                <h2>📱 Uso por Aplicación</h2>
+                <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 0.75rem;">'''
+            for app in app_usage[:15]:
+                bar_width = min(app['size'] / app_usage[0]['size'] * 100, 100)
+                html += f'''
+                    <div style="padding: 0.75rem; border: 1px solid var(--border); border-radius: 10px; background: var(--card-bg);">
+                        <div style="font-weight: 600; color: var(--dark); font-size: 0.9rem; margin-bottom: 0.25rem;">{app['app']}</div>
+                        <div style="font-size: 1.1rem; font-weight: 700; color: var(--primary);">{self.format_size(app['size'])}</div>
+                        <div style="height: 4px; background: var(--border); border-radius: 2px; margin-top: 0.5rem;">
+                            <div style="height: 100%; width: {bar_width:.0f}%; background: var(--primary); border-radius: 2px;"></div>
+                        </div>
+                    </div>'''
+            html += '''
+                </div>
+            </div>'''
+
+        # Before/after simulation
+        if report.get('disk_usage') and report['disk_usage']['total'] > 0:
+            disk_total = report['disk_usage']['total']
+            disk_used = report['disk_usage']['used']
+            recs = report.get('recommendations', [])
+            # Calculate cumulative savings per tier
+            tier_savings = {}
+            cumul = 0
+            for r in recs:
+                t = r.get('tier', 9)
+                tier_savings.setdefault(t, 0)
+                tier_savings[t] += r['space']
+            tiers_list = sorted(tier_savings.keys())
+            sim_data = []
+            cumul = 0
+            for t in tiers_list:
+                cumul += tier_savings[t]
+                pct_after = max(0, (disk_used - cumul) / disk_total * 100)
+                sim_data.append({'tier': t, 'saved': cumul, 'pct': pct_after})
+
+            if sim_data:
+                current_pct = disk_used / disk_total * 100
+                html += f'''
+            <div class="card col-span-12">
+                <h2>🔮 Simulación: ¿Qué pasa si limpio?</h2>
+                <p style="color: var(--gray); margin-bottom: 1rem;">Selecciona un nivel de limpieza para ver el impacto en tu disco:</p>
+                <div style="display: flex; gap: 0.5rem; margin-bottom: 1rem; flex-wrap: wrap;">
+                    <button onclick="simClean(0, {current_pct:.1f})" class="tab-button active" style="padding: 0.5rem 1rem; border: 1px solid var(--border); border-radius: 8px; cursor: pointer; background: var(--hover-bg); color: var(--dark); font-weight: 600;">
+                        Actual: {current_pct:.0f}%
+                    </button>'''
+                tier_icons = {1: '🟢', 2: '🟡', 3: '🟠', 4: '🔴'}
+                for s in sim_data:
+                    html += f'''
+                    <button onclick="simClean({s['saved']}, {s['pct']:.1f})" class="tab-button" style="padding: 0.5rem 1rem; border: 1px solid var(--border); border-radius: 8px; cursor: pointer; background: var(--hover-bg); color: var(--dark); font-weight: 600;">
+                        {tier_icons.get(s['tier'], '⚪')} Nivel {s['tier']}: {s['pct']:.0f}% (-{self.format_size(s['saved'])})
+                    </button>'''
+                html += f'''
+                </div>
+                <div style="height: 40px; background: var(--border); border-radius: 20px; overflow: hidden; position: relative;">
+                    <div id="simBar" style="height: 100%; width: {current_pct:.1f}%; background: linear-gradient(90deg, var(--primary), var(--secondary)); transition: width 0.5s ease; border-radius: 20px; display: flex; align-items: center; justify-content: center;">
+                        <span id="simLabel" style="color: white; font-weight: 700; text-shadow: 0 1px 2px rgba(0,0,0,0.3);">{current_pct:.0f}% usado</span>
+                    </div>
+                </div>
+                <p id="simText" style="text-align: center; color: var(--gray); margin-top: 0.5rem; font-size: 0.9rem;">
+                    Estado actual: {self.format_size(disk_used)} de {self.format_size(disk_total)}
+                </p>
+            </div>'''
+
+        html += '''
             <div class="card col-span-12">
                 <h2>💡 Plan de Limpieza</h2>'''
 
@@ -2738,6 +2882,7 @@ class DiskAnalyzer:
         const filesData = {json.dumps(files_data)};
         const duplicatesData = {json.dumps(report.get('duplicates', []))};
         const treemapData = {json.dumps(treemap_data)};
+        const appUsageData = {json.dumps(report.get('app_usage', [])[:15])};
 
         // Render treemap
         if (treemapData.ids.length > 1) {{
@@ -3184,6 +3329,27 @@ class DiskAnalyzer:
         }
 
         // Visualization tab switching (treemap/sunburst)
+        // Before/after simulation
+        function simClean(saved, pct) {
+            const bar = document.getElementById('simBar');
+            const label = document.getElementById('simLabel');
+            const text = document.getElementById('simText');
+            if (bar) {
+                bar.style.width = pct + '%';
+                label.textContent = pct.toFixed(0) + '% usado';
+                if (saved > 0) {
+                    text.textContent = 'Después de limpiar: ' + formatBytes(saved) + ' liberados';
+                    bar.style.background = 'linear-gradient(90deg, #10b981, #6366f1)';
+                } else {
+                    text.textContent = 'Estado actual';
+                    bar.style.background = 'linear-gradient(90deg, var(--primary), var(--secondary))';
+                }
+            }
+            // Update active button
+            event.target.parentElement.querySelectorAll('.tab-button').forEach(b => b.classList.remove('active'));
+            event.target.classList.add('active');
+        }
+
         function showVizTab(viz, btn) {
             document.getElementById('treemap-panel').style.display = viz === 'treemap' ? 'block' : 'none';
             document.getElementById('sunburst-panel').style.display = viz === 'sunburst' ? 'block' : 'none';
