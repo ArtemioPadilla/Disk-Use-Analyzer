@@ -5,6 +5,7 @@ import ProgressBar from '../components/ProgressBar.tsx';
 import FloatingTerminal from '../components/FloatingTerminal.tsx';
 import NewAnalysisModal from '../components/NewAnalysisModal.tsx';
 import AnalysisManager from '../components/AnalysisManager.tsx';
+import NotificationManager from '../components/NotificationManager.tsx';
 import ToastNotification from '../components/ToastNotification.tsx';
 import '../layouts/global.css';
 
@@ -31,6 +32,7 @@ const { title, currentPath } = Astro.props;
       </div>
     </div>
     <AnalysisManager client:load />
+    <NotificationManager client:load />
     <NewAnalysisModal client:idle />
     <FloatingTerminal client:idle />
     <ToastNotification client:load />
