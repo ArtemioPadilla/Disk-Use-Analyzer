@@ -8,12 +8,14 @@ import DiskDonut from '../components/DiskDonut.tsx';
 import TaskList from '../components/TaskList.tsx';
 import QuickActions from '../components/QuickActions.tsx';
 import DockerPanel from '../components/DockerPanel.tsx';
+import DiskBar from '../components/DiskBar.tsx';
 import TrendChart from '../components/TrendChart.tsx';
 ---
 
 <MainLayout title="Dashboard" currentPath="/">
   <HeroScan client:load />
   <NarrativeSummary client:load />
+  <DiskBar client:load />
   <StatsCards client:load />
   <QuickActions client:load />
   <div style="display: flex; gap: 0.75rem; margin-bottom: 1rem;">
