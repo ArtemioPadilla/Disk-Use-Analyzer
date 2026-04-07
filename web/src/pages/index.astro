@@ -1,6 +1,16 @@
 ---
 import MainLayout from '../layouts/MainLayout.astro';
+import StatsCards from '../components/StatsCards.tsx';
+import CategoryChart from '../components/CategoryChart.tsx';
+import DiskDonut from '../components/DiskDonut.tsx';
+import TaskList from '../components/TaskList.tsx';
 ---
+
 <MainLayout title="Dashboard" currentPath="/">
-  <p>Dashboard content coming in Task 7.</p>
+  <StatsCards client:load />
+  <div style="display: flex; gap: 0.75rem; margin-bottom: 1rem;">
+    <CategoryChart client:idle />
+    <DiskDonut client:idle />
+  </div>
+  <TaskList client:load />
 </MainLayout>
