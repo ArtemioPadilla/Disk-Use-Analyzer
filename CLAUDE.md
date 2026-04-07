@@ -183,8 +183,9 @@ The project has three interfaces: CLI, GUI, and Web.
 - **Language**: Documentation and user-facing messages are in Spanish
 - **Platform**: macOS-specific (uses macOS paths and commands)
 - **Python Version**: Requires Python 3.6+ with type hints
-- **No pip install needed**: Uses only standard library modules
+- **No pip install needed**: Core CLI uses only standard library modules
 - **Docker**: Optional dependency for Docker analysis features
+- **Permissions (sudo)**: Scanning `~/` works without sudo — you own your home directory. Scanning `/` or `/Library` requires `sudo` for full visibility; without it, restricted directories are skipped and the report shows a "Sin permisos (sudo)" gap. Use `sudo make full path=/` or `sudo make web` for complete system scans. **Warning**: `sudo make web` gives the floating terminal root access — only use on a trusted LAN.
 
 ## Testing Changes
 

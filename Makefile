@@ -57,10 +57,16 @@ help:
 	@echo "  $(YELLOW)make gui$(NC)          - Ejecutar interfaz gráfica CustomTkinter"
 	@echo "  $(YELLOW)make install-gui$(NC)  - Instalar dependencias para GUI"
 	@echo ""
+	@echo "$(GREEN)Permisos (sudo):$(NC)"
+	@echo "  $(YELLOW)sudo make analyze path=/$(NC)  - Análisis completo del sistema (requiere sudo)"
+	@echo "  $(YELLOW)sudo make web$(NC)             - Servidor web con acceso completo al disco"
+	@echo "  $(BLUE)Nota: sin sudo, ~/  funciona bien pero / muestra huecos de permisos$(NC)"
+	@echo ""
 	@echo "$(BLUE)Ejemplos:$(NC)"
 	@echo "  make analyze path=/Users/me/Projects"
 	@echo "  make quick min_size=100"
 	@echo "  make full path=/ min_size=500"
+	@echo "  sudo make full path=/ min_size=50    # Full system scan"
 	@echo "$(BLUE)═══════════════════════════════════════════════════════════════$(NC)"
 
 # Análisis estándar
