@@ -1,11 +1,13 @@
 ---
 import MainLayout from '../layouts/MainLayout.astro';
 import GuidedDeclutter from '../components/GuidedDeclutter.tsx';
+import WhatIfSandbox from '../components/WhatIfSandbox.tsx';
 import CleanupWizard from '../components/CleanupWizard.tsx';
 ---
 <MainLayout title="Cleanup" currentPath="/cleanup">
   <div style="margin-bottom: 1.5rem;">
     <GuidedDeclutter client:load />
   </div>
+  <WhatIfSandbox client:load />
   <CleanupWizard client:load />
 </MainLayout>
