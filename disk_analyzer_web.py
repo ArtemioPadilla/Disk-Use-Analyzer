@@ -693,11 +693,11 @@ async def export_results(session_id: str, format: str):
         # Generate CSV
         import csv
         import io
-        
+
         output = io.StringIO()
         writer = csv.writer(output)
         writer.writerow(["Path", "Size", "Type", "Age (days)", "Is Cache"])
-        
+
         for result in session["results"]:
             for file in result["report"]["large_files"][:100]:  # Top 100 files
                 writer.writerow([
@@ -707,7 +707,7 @@ async def export_results(session_id: str, format: str):
                     file["age_days"],
                     file["is_cache"]
                 ])
-        
+
         return Response(
             content=output.getvalue(),
             media_type="text/csv",
@@ -715,6 +715,22 @@ async def export_results(session_id: str, format: str):
                 "Content-Disposition": f"attachment; filename=disk_analysis_{session_id}.csv"
             }
         )
+    elif format == "html":
+        # Generate standalone HTML report
+        try:
+            from disk_analyzer import DiskAnalyzer
+            analyzer = DiskAnalyzer(str(Path.home()))
+            merged_report = session["results"][0]["report"] if session["results"] else {}
+            html_content = analyzer.generate_html_report(merged_report)
+            return Response(
+                content=html_content,
+                media_type="text/html",
+                headers={
+                    "Content-Disposition": f'attachment; filename="disk_report_{session_id}.html"'
+                },
+            )
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Report generation failed: {str(e)}")
     else:
         raise HTTPException(status_code=400, detail="Unsupported format")
 

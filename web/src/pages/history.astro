@@ -1,6 +1,7 @@
 ---
 import MainLayout from '../layouts/MainLayout.astro';
+import SessionList from '../components/SessionList.tsx';
 ---
 <MainLayout title="History" currentPath="/history">
-  <p>Session history coming in Task 12.</p>
+  <SessionList client:load />
 </MainLayout>
