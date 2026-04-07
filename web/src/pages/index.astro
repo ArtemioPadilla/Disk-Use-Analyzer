@@ -6,6 +6,7 @@ import CategoryChart from '../components/CategoryChart.tsx';
 import DiskDonut from '../components/DiskDonut.tsx';
 import TaskList from '../components/TaskList.tsx';
 import QuickActions from '../components/QuickActions.tsx';
+import DockerPanel from '../components/DockerPanel.tsx';
 ---
 
 <MainLayout title="Dashboard" currentPath="/">
@@ -16,5 +17,6 @@ import QuickActions from '../components/QuickActions.tsx';
     <CategoryChart client:idle />
     <DiskDonut client:idle />
   </div>
+  <DockerPanel client:load />
   <TaskList client:load />
 </MainLayout>
