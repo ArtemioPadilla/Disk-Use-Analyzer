@@ -135,4 +135,5 @@ export const api = {
     request<any>(`/terminal/${ptyId}`, { method: 'DELETE' }),
   getTerminalSessions: () =>
     request<any[]>('/terminal/sessions'),
+  getPersona: () => request<any>('/persona'),
 };

@@ -1,0 +1,38 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python3 disk_analyzer.py . --min-size 1 --html --export /tmp/test_report3)",
+      "Bash(python3:*)",
+      "Bash(diskutil apfs:*)",
+      "Bash(tmutil listlocalsnapshots:*)",
+      "Bash(diskutil info:*)",
+      "Bash(make full:*)",
+      "Bash(git add:*)",
+      "Bash(git commit -m ':*)",
+      "Bash(gh pr:*)",
+      "Bash(open /tmp/test_tiers2.html)",
+      "Bash(open /tmp/test_final_features.html)",
+      "Bash(jobs)",
+      "Bash(ls:*)",
+      "Bash(git push:*)",
+      "Bash(/Users/artemiopadilla/.claude/plugins/cache/claude-plugins-official/superpowers/5.0.7/skills/brainstorming/scripts/start-server.sh:*)",
+      "Bash(git checkout:*)",
+      "Bash(npm install:*)",
+      "Bash(npm run:*)",
+      "Bash(git commit:*)",
+      "Bash(python:*)",
+      "Bash(pip install:*)",
+      "Bash(pip show:*)",
+      "Bash(python3.11 -c \"import httpx; print\\('httpx available'\\)\")",
+      "Bash(pip --version)",
+      "Bash(/opt/homebrew/bin/python3.11 -m pip install httpx)",
+      "Bash(git check-ignore:*)",
+      "Bash(./venv/bin/pip list:*)",
+      "Bash(./venv/bin/pip install:*)",
+      "Bash(./venv/bin/python3:*)",
+      "Bash(git log:*)",
+      "Bash(git stash:*)",
+      "Bash(rm:*)"
+    ]
+  }
+}

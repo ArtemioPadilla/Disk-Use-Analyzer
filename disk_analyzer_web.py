@@ -27,6 +27,7 @@ import uvicorn
 from disk_analyzer_core import DiskAnalyzerCore, MB, GB, IS_MACOS, IS_WINDOWS
 from pty_manager import PTYManager
 from agents_manager import AgentsManager
+from persona_detector import detect_personas, generate_persona_recommendations
 
 # Create FastAPI app
 app = FastAPI(
@@ -1166,6 +1167,50 @@ def get_local_ip():
         return ip
     except:
         return "localhost"
+
+@app.get("/api/persona")
+async def get_persona():
+    """Detect user persona from the most recent analysis."""
+    # Find most recent completed session with results
+    completed = [s for s in analysis_sessions.values()
+                 if s.get("status") == "completed" and s.get("results")]
+    if not completed:
+        # Try loading from disk
+        result_files = sorted(RESULTS_DIR.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True)
+        if result_files:
+            results = load_analysis_results(result_files[0].stem)
+            if results and len(results) > 0:
+                report = results[0].get("report", {})
+                profile = detect_personas(
+                    report.get("large_files", []),
+                    report.get("top_directories", []),
+                    report.get("cache_locations", []),
+                )
+                persona_recs = generate_persona_recommendations(
+                    profile["primary"]["id"],
+                    report.get("large_files", []),
+                    report.get("top_directories", []),
+                    report.get("cache_locations", []),
+                )
+                return {"profile": profile, "recommendations": persona_recs}
+        raise HTTPException(status_code=404, detail="No analysis results available")
+
+    latest = max(completed, key=lambda s: s.get("completed_at", s.get("started_at", "")))
+    report = latest["results"][0].get("report", {}) if latest["results"] else {}
+
+    profile = detect_personas(
+        report.get("large_files", []),
+        report.get("top_directories", []),
+        report.get("cache_locations", []),
+    )
+    persona_recs = generate_persona_recommendations(
+        profile["primary"]["id"],
+        report.get("large_files", []),
+        report.get("top_directories", []),
+        report.get("cache_locations", []),
+    )
+    return {"profile": profile, "recommendations": persona_recs}
+
 
 @app.get("/{path:path}")
 async def serve_astro(path: str):
