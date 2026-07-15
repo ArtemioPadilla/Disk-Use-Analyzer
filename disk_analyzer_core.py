@@ -704,14 +704,14 @@ class DiskAnalyzerCore:
                 'description': f'{len(brew_files)} descargas ({self.format_size(size)})',
                 'space': size, 'command': 'brew cleanup --prune=all'})
 
-        vscode_locs = [l for l in self.cache_locations if l['type'] == 'VS Code']
+        vscode_locs = [l for l in self.cache_locations if l['type'] == 'VS Code Cache']
         if vscode_locs and sum(l['size'] for l in vscode_locs) > 10 * MB:
             recommendations.append({'tier': 1, 'priority': 'Seguro', 'type': 'Cache de VS Code',
                 'description': f'{self.format_size(sum(l["size"] for l in vscode_locs))} en cache',
                 'space': sum(l['size'] for l in vscode_locs),
                 'command': ' && '.join(f"rm -rf '{l['path']}/*'" for l in vscode_locs)})
 
-        npm_locs = [l for l in self.cache_locations if l['type'] == 'Node.js/npm']
+        npm_locs = [l for l in self.cache_locations if l['type'] == 'NPM Cache']
         if npm_locs and sum(l['size'] for l in npm_locs) > 50 * MB:
             recommendations.append({'tier': 1, 'priority': 'Seguro', 'type': 'Cache de npm',
                 'description': f'{self.format_size(sum(l["size"] for l in npm_locs))} en cache',
