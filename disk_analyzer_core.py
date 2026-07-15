@@ -572,33 +572,18 @@ class DiskAnalyzerCore:
         return docker_stats
     
     def parse_docker_size(self, size_str: str) -> int:
-        """Convierte el formato de tamaño de Docker a bytes"""
+        """Parse docker size strings like '1.5GB', '2.796kB', '500MB (45%)' to bytes"""
+        import re
         try:
-            # Remove parentheses if present
-            size_str = size_str.strip('()')
-            
-            # Split value and unit
-            parts = size_str.split()
-            if len(parts) != 2:
+            clean = size_str.strip().split('(')[0].strip()
+            match = re.match(r'([\d.]+)\s*([KMGTk]?B)', clean)
+            if not match:
                 return 0
-                
-            value = float(parts[0])
-            unit = parts[1].upper()
-            
-            # Convert to bytes
-            if unit == 'B':
-                return int(value)
-            elif unit == 'KB' or unit == 'KB':
-                return int(value * KB)
-            elif unit == 'MB':
-                return int(value * MB)
-            elif unit == 'GB':
-                return int(value * GB)
-            elif unit == 'TB':
-                return int(value * GB * 1024)
-            else:
-                return 0
-        except Exception as e:
+            value = float(match.group(1))
+            unit = match.group(2).upper()
+            multipliers = {'B': 1, 'KB': KB, 'MB': MB, 'GB': GB, 'TB': GB * 1024}
+            return int(value * multipliers.get(unit, 1))
+        except (ValueError, AttributeError):
             return 0
     
     def analyze(self) -> Dict:
