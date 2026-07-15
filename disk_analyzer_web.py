@@ -160,8 +160,8 @@ class AnalysisResponse(BaseModel):
     message: str
 
 class CleanupRequest(BaseModel):
-    paths: List[str]
-    categories: List[str]
+    paths: List[str] = []
+    categories: List[str] = []  # empty list means "all categories"
     dry_run: bool = True
 
 class TerminalCreateRequest(BaseModel):
@@ -778,22 +778,24 @@ async def preview_cleanup(request: CleanupRequest):
     """Preview cleanup actions"""
     cleanup_actions = []
     total_size = 0
-    
+    wanted = {c.lower() for c in request.categories}
+
     for path in request.paths:
         analyzer = DiskAnalyzerCore(path)
         # Quick scan for cache locations only
         analyzer.find_cache_locations()
-        
+
         for cache_loc in analyzer.cache_locations:
-            if cache_loc['type'].lower() in request.categories:
-                cleanup_actions.append({
-                    "path": cache_loc['path'],
-                    "size": cache_loc['size'],
-                    "type": cache_loc['type'],
-                    "action": "delete"
-                })
-                total_size += cache_loc['size']
-    
+            if wanted and cache_loc['type'].lower() not in wanted:
+                continue
+            cleanup_actions.append({
+                "path": cache_loc['path'],
+                "size": cache_loc['size'],
+                "type": cache_loc['type'],
+                "action": "delete"
+            })
+            total_size += cache_loc['size']
+
     return {
         "actions": cleanup_actions,
         "total_size": total_size,
@@ -805,20 +807,22 @@ async def execute_cleanup(request: CleanupRequest):
     """Execute cleanup actions"""
     if request.dry_run:
         return await preview_cleanup(request)
-    
+
     # Safety: always preview first so callers see what would be deleted
     preview = await preview_cleanup(
-        CleanupRequest(categories=request.categories, dry_run=True)
+        CleanupRequest(paths=request.paths, categories=request.categories, dry_run=True)
     )
 
-    # Perform actual cleanup
-    analyzer = DiskAnalyzerCore()
+    checker = DiskAnalyzerCore(str(Path.home()))
     deleted: list[dict] = []
     errors: list[dict] = []
     freed_size = 0
 
     for action in preview.get("actions", []):
-        target = Path(action["path"])
+        target = Path(action["path"]).resolve()
+        if checker.is_protected_path(str(target)):
+            errors.append({"path": str(target), "error": "Ruta protegida del sistema"})
+            continue
         try:
             if target.is_file():
                 size = target.stat().st_size
