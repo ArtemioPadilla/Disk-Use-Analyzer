@@ -131,6 +131,30 @@ class TestPTYManager:
         elapsed = time.monotonic() - start
         assert elapsed < 0.09, f"kill of dead session took {elapsed:.3f}s"
 
+    def test_kill_with_stale_alive_flag_kills_live_child(self):
+        # _read_loop flips alive=False on ANY OSError, not only on confirmed
+        # child exit. If kill() trusted that flag to skip the signal
+        # sequence, a live child would survive (leaked) while kill() burned
+        # the full reap deadline. The liveness pre-check (waitpid) must
+        # detect the child is still running and fire the signals.
+        pty_id = self.manager.create_session(command="sleep 30")
+        session = self.manager.sessions[pty_id]
+        pid = session.pid
+        time.sleep(0.2)  # let the child start
+        session.alive = False  # simulate the spurious-OSError false negative
+        start = time.monotonic()
+        self.manager.kill_session(pty_id)
+        elapsed = time.monotonic() - start
+        # Signals fired => completes in ~0.1s, not the 2s reap deadline.
+        assert elapsed < 1.0, f"kill took {elapsed:.3f}s (burned reap deadline?)"
+        # The child must be dead AND reaped: waitpid must raise
+        # ChildProcessError, not report a live/zombie process.
+        try:
+            result = os.waitpid(pid, os.WNOHANG)
+            raise AssertionError(f"child {pid} leaked or unreaped: {result}")
+        except ChildProcessError:
+            pass  # correctly killed and reaped
+
     def test_command_logging(self, tmp_path):
         log_file = tmp_path / "terminal.log"
         manager = PTYManager(max_sessions=2, log_file=str(log_file))

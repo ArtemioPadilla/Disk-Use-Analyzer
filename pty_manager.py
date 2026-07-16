@@ -135,33 +135,41 @@ class PTYSession:
 
     def kill(self):
         """Kill the PTY process and clean up."""
-        was_alive = self.alive
         self.alive = False
         if self.pid:
             try:
-                # Skip the signal sequence when the reader loop already
-                # observed process death: signaling a zombie succeeds (no
-                # ProcessLookupError), so it would only waste the 0.1s grace
-                # sleep. A true zombie reaps on the first WNOHANG poll below.
-                if was_alive:
+                # Authoritative liveness pre-check: one non-blocking waitpid.
+                # self.alive is NOT trustworthy here — _read_loop flips it on
+                # any OSError, not only on confirmed child exit — so it must
+                # not decide whether to skip the signal sequence.
+                child_gone = False
+                try:
+                    reaped_pid, _ = os.waitpid(self.pid, os.WNOHANG)
+                    if reaped_pid == self.pid:
+                        child_gone = True  # zombie reaped right here
+                except ChildProcessError:
+                    child_gone = True  # already reaped elsewhere
+                if not child_gone:
+                    # Child still running: full signal sequence, then reap
+                    # with a deadline so it never lingers as a zombie. A
+                    # single non-blocking waitpid right after SIGKILL can
+                    # miss the state transition under load; poll until
+                    # reaped or timeout.
                     os.kill(self.pid, signal.SIGTERM)
                     time.sleep(0.1)
                     try:
                         os.kill(self.pid, signal.SIGKILL)
                     except ProcessLookupError:
                         pass
-                # Reap with a deadline so the child never lingers as a zombie.
-                # A single non-blocking waitpid right after SIGKILL can miss
-                # the state transition under load; poll until reaped or timeout.
-                deadline = time.time() + KILL_REAP_TIMEOUT
-                while time.time() < deadline:
-                    try:
-                        reaped_pid, _ = os.waitpid(self.pid, os.WNOHANG)
-                    except ChildProcessError:
-                        break
-                    if reaped_pid == self.pid:
-                        break
-                    time.sleep(KILL_REAP_POLL_INTERVAL)
+                    deadline = time.time() + KILL_REAP_TIMEOUT
+                    while time.time() < deadline:
+                        try:
+                            reaped_pid, _ = os.waitpid(self.pid, os.WNOHANG)
+                        except ChildProcessError:
+                            break
+                        if reaped_pid == self.pid:
+                            break
+                        time.sleep(KILL_REAP_POLL_INTERVAL)
             except ProcessLookupError:
                 pass
             self.pid = None
