@@ -1048,7 +1048,9 @@ async def resize_terminal(pty_id: str, request: TerminalResizeRequest):
 async def kill_terminal(pty_id: str):
     """Kill a terminal session."""
     try:
-        pty_manager.kill_session(pty_id)
+        # kill_session reaps the child and can block up to ~2s; run it in a
+        # worker thread so the event loop keeps serving other requests.
+        await asyncio.to_thread(pty_manager.kill_session, pty_id)
         return {"status": "killed"}
     except KeyError:
         raise HTTPException(status_code=404, detail=f"No session: {pty_id}")
@@ -1121,7 +1123,9 @@ async def _idle_terminal_reaper():
     while True:
         await asyncio.sleep(60)
         try:
-            pty_manager.cleanup_idle()
+            # cleanup_idle kills/reaps sessions and can block up to ~2s each;
+            # offload to a worker thread to keep the event loop responsive.
+            await asyncio.to_thread(pty_manager.cleanup_idle)
         except Exception as e:
             print(f"Warning: idle terminal reaper error: {e}")
 
@@ -1175,8 +1179,8 @@ async def shutdown_event():
     # Stop background agents
     agents_manager.stop()
 
-    # Cleanup PTY sessions
-    pty_manager.cleanup_all()
+    # Cleanup PTY sessions (blocking reap — offload from the event loop)
+    await asyncio.to_thread(pty_manager.cleanup_all)
 
     # Shutdown executor
     executor.shutdown(wait=True)

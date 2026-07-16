@@ -16,6 +16,11 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 
+# Deadline for reaping a killed child before giving up (seconds), and the
+# polling interval between non-blocking waitpid attempts.
+KILL_REAP_TIMEOUT = 2.0
+KILL_REAP_POLL_INTERVAL = 0.05
+
 BLOCKED_PATTERNS = [
     "rm -rf /",
     "rm -rf ~",
@@ -141,8 +146,8 @@ class PTYSession:
                     pass
                 # Reap with a deadline so the child never lingers as a zombie.
                 # A single non-blocking waitpid right after SIGKILL can miss
-                # the state transition under load; poll until reaped or 2s.
-                deadline = time.time() + 2.0
+                # the state transition under load; poll until reaped or timeout.
+                deadline = time.time() + KILL_REAP_TIMEOUT
                 while time.time() < deadline:
                     try:
                         reaped_pid, _ = os.waitpid(self.pid, os.WNOHANG)
@@ -150,7 +155,7 @@ class PTYSession:
                         break
                     if reaped_pid == self.pid:
                         break
-                    time.sleep(0.05)
+                    time.sleep(KILL_REAP_POLL_INTERVAL)
             except ProcessLookupError:
                 pass
             self.pid = None
@@ -212,21 +217,28 @@ class PTYManager:
 
     def create_session(self, command: Optional[str] = None) -> str:
         """Create a new PTY session. Returns pty_id."""
-        with self._lock:
-            self._reap_dead()
-            if len(self.sessions) >= self.max_sessions:
-                raise RuntimeError(
-                    f"Maximum {self.max_sessions} sessions reached. "
-                    "Kill an existing session first."
-                )
-            if command:
-                self._check_blocked(command)
-            pty_id = uuid.uuid4().hex[:12]
-            session = PTYSession(pty_id, command)
-            session.start()
-            self.sessions[pty_id] = session
-            self._log_command(pty_id, command)
-            return pty_id
+        dead: List[PTYSession] = []
+        try:
+            with self._lock:
+                dead = self._pop_dead()
+                if len(self.sessions) >= self.max_sessions:
+                    raise RuntimeError(
+                        f"Maximum {self.max_sessions} sessions reached. "
+                        "Kill an existing session first."
+                    )
+                if command:
+                    self._check_blocked(command)
+                pty_id = uuid.uuid4().hex[:12]
+                session = PTYSession(pty_id, command)
+                session.start()
+                self.sessions[pty_id] = session
+                self._log_command(pty_id, command)
+                return pty_id
+        finally:
+            # Kill/reap outside the lock: kill() can block up to
+            # KILL_REAP_TIMEOUT and must not freeze other sessions.
+            for s in dead:
+                s.kill()
 
     def read_output(self, pty_id: str) -> str:
         return self._get_session(pty_id).read_output()
@@ -252,25 +264,34 @@ class PTYManager:
 
     def list_sessions(self) -> List[Dict]:
         with self._lock:
-            self._reap_dead()
-            return [
+            dead = self._pop_dead()
+            result = [
                 {'pty_id': s.pty_id, 'command': s.command, 'created_at': s.created_at, 'alive': s.alive}
                 for s in self.sessions.values()
             ]
+        # Kill/reap outside the lock (see create_session).
+        for s in dead:
+            s.kill()
+        return result
 
     def cleanup_all(self):
         with self._lock:
-            for session in list(self.sessions.values()):
-                session.kill()
+            to_kill = list(self.sessions.values())
             self.sessions.clear()
+        # Kill/reap outside the lock (see create_session).
+        for session in to_kill:
+            session.kill()
 
     def cleanup_idle(self):
         now = time.time()
+        to_kill: List[PTYSession] = []
         with self._lock:
             for pty_id, session in list(self.sessions.items()):
                 if now - session.last_activity > self.idle_timeout:
-                    session.kill()
-                    del self.sessions[pty_id]
+                    to_kill.append(self.sessions.pop(pty_id))
+        # Kill/reap outside the lock (see create_session).
+        for session in to_kill:
+            session.kill()
 
     def _get_session(self, pty_id: str) -> PTYSession:
         with self._lock:
@@ -278,9 +299,15 @@ class PTYManager:
                 raise KeyError(f"No session: {pty_id}")
             return self.sessions[pty_id]
 
-    def _reap_dead(self):
+    def _pop_dead(self) -> List[PTYSession]:
+        """Remove dead sessions from the registry and return them.
+
+        Must be called with self._lock held. The caller is responsible for
+        calling kill() on the returned sessions after releasing the lock,
+        since kill() can block up to KILL_REAP_TIMEOUT.
+        """
+        dead: List[PTYSession] = []
         for pty_id in list(self.sessions.keys()):
-            session = self.sessions[pty_id]
-            if not session.alive:
-                session.kill()
-                del self.sessions[pty_id]
+            if not self.sessions[pty_id].alive:
+                dead.append(self.sessions.pop(pty_id))
+        return dead

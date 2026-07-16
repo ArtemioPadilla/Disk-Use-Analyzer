@@ -84,6 +84,37 @@ class TestPTYManager:
         except ChildProcessError:
             pass  # correctly reaped
 
+    def test_cleanup_idle_does_not_hold_lock_during_kill(self):
+        # kill() can block up to KILL_REAP_TIMEOUT; if cleanup_idle held the
+        # manager lock while killing, every other session would freeze.
+        manager = self.manager
+
+        class FakeSession:
+            def __init__(self):
+                self.pty_id = "fake_idle"
+                self.command = None
+                self.created_at = "now"
+                self.alive = True
+                self.last_activity = 0  # stale => considered idle
+                self.lock_acquired_during_kill = None
+
+            def kill(self):
+                # If cleanup_idle released the manager lock before calling
+                # kill(), this acquire succeeds immediately.
+                acquired = manager._lock.acquire(timeout=0.5)
+                self.lock_acquired_during_kill = acquired
+                if acquired:
+                    manager._lock.release()
+                self.alive = False
+
+        fake = FakeSession()
+        manager.sessions["fake_idle"] = fake
+        manager.cleanup_idle()
+        assert fake.lock_acquired_during_kill is True, (
+            "cleanup_idle held the manager lock while calling kill()"
+        )
+        assert "fake_idle" not in manager.sessions
+
     def test_command_logging(self, tmp_path):
         log_file = tmp_path / "terminal.log"
         manager = PTYManager(max_sessions=2, log_file=str(log_file))
