@@ -99,11 +99,16 @@ def load_session_metadata():
 
             for session_meta in metadata:
                 session_id = session_meta["id"]
+                status = session_meta["status"]
+                # A restored "running" session has no in-flight task backing
+                # it after a server restart, so it would hang forever.
+                if status == "running":
+                    status = "interrupted"
                 # Restore session without results
                 analysis_sessions[session_id] = {
                     "id": session_id,
-                    "status": session_meta["status"],
-                    "progress": 100 if session_meta["status"] == "completed" else 0,
+                    "status": status,
+                    "progress": 100 if status == "completed" else 0,
                     "current_path": "",
                     "paths": session_meta["paths"],
                     "started_at": session_meta["started_at"],
