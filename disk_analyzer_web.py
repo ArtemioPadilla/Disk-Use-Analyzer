@@ -53,6 +53,9 @@ executor = ThreadPoolExecutor(max_workers=4)
 # Terminal management
 pty_manager = PTYManager(max_sessions=3, idle_timeout=600)
 
+# Handle to the idle-terminal reaper task (set at startup; kept for testability)
+_idle_reaper_task = None
+
 # Background agents
 agents_manager = AgentsManager()
 
@@ -1121,6 +1124,7 @@ async def _idle_terminal_reaper():
 @app.on_event("startup")
 async def startup_event():
     """Initialize the application"""
+    global _idle_reaper_task
     # Create static directory structure for legacy frontend
     if not static_dir.exists():
         static_dir.mkdir(exist_ok=True)
@@ -1150,7 +1154,7 @@ async def startup_event():
     print(f"📊 Loaded {len(analysis_sessions)} previous sessions")
 
     # Start the periodic reaper that kills idle terminal sessions
-    asyncio.create_task(_idle_terminal_reaper())
+    _idle_reaper_task = asyncio.create_task(_idle_terminal_reaper())
 
 @app.on_event("shutdown")
 async def shutdown_event():

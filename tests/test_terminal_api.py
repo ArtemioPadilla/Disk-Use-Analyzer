@@ -66,3 +66,45 @@ def test_idle_reaper_task_is_registered():
     assert hasattr(disk_analyzer_web, "_idle_terminal_reaper"), (
         "expected an _idle_terminal_reaper coroutine registered at startup"
     )
+
+
+def test_idle_reaper_calls_cleanup_and_survives_errors(monkeypatch):
+    """One reaper iteration must call cleanup_idle(); a raising cleanup must not kill the loop."""
+    import asyncio
+    import disk_analyzer_web
+
+    calls = {"cleanup": 0, "sleep": 0}
+
+    def fake_cleanup():
+        calls["cleanup"] += 1
+        if calls["cleanup"] == 1:
+            # Must be swallowed by the reaper so the loop survives
+            raise RuntimeError("boom")
+
+    async def fake_sleep(_seconds):
+        calls["sleep"] += 1
+        if calls["sleep"] > 2:
+            # Break out of the infinite loop after two full iterations
+            raise asyncio.CancelledError()
+
+    monkeypatch.setattr(disk_analyzer_web.pty_manager, "cleanup_idle", fake_cleanup)
+    monkeypatch.setattr(disk_analyzer_web.asyncio, "sleep", fake_sleep)
+
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(disk_analyzer_web._idle_terminal_reaper())
+
+    # cleanup ran on both iterations: the RuntimeError on the first
+    # iteration was swallowed and the loop kept going.
+    assert calls["cleanup"] == 2
+
+
+def test_startup_registers_idle_reaper_task():
+    """The app lifespan (startup) must actually create the reaper task."""
+    import disk_analyzer_web
+
+    disk_analyzer_web._idle_reaper_task = None
+    # `with` triggers the lifespan; bare TestClient(app) does not run startup.
+    with TestClient(disk_analyzer_web.app):
+        assert disk_analyzer_web._idle_reaper_task is not None, (
+            "startup_event did not create the _idle_terminal_reaper task"
+        )
