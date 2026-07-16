@@ -139,10 +139,18 @@ class PTYSession:
                     os.kill(self.pid, signal.SIGKILL)
                 except ProcessLookupError:
                     pass
-                try:
-                    os.waitpid(self.pid, os.WNOHANG)
-                except ChildProcessError:
-                    pass
+                # Reap with a deadline so the child never lingers as a zombie.
+                # A single non-blocking waitpid right after SIGKILL can miss
+                # the state transition under load; poll until reaped or 2s.
+                deadline = time.time() + 2.0
+                while time.time() < deadline:
+                    try:
+                        reaped_pid, _ = os.waitpid(self.pid, os.WNOHANG)
+                    except ChildProcessError:
+                        break
+                    if reaped_pid == self.pid:
+                        break
+                    time.sleep(0.05)
             except ProcessLookupError:
                 pass
             self.pid = None

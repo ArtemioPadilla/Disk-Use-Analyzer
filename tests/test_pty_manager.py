@@ -71,6 +71,19 @@ class TestPTYManager:
         with pytest.raises(ValueError, match="[Bb]locked"):
             self.manager.create_session(command="rm -rf /")
 
+    def test_kill_reaps_child_no_zombie(self):
+        pty_id = self.manager.create_session()
+        session = self.manager.sessions[pty_id]
+        pid = session.pid
+        self.manager.kill_session(pty_id)
+        # After kill, the pid must be fully reaped: waitpid must raise
+        # ChildProcessError (no such child) rather than find a zombie.
+        try:
+            result = os.waitpid(pid, os.WNOHANG)
+            raise AssertionError(f"child {pid} was not reaped by kill(): {result}")
+        except ChildProcessError:
+            pass  # correctly reaped
+
     def test_command_logging(self, tmp_path):
         log_file = tmp_path / "terminal.log"
         manager = PTYManager(max_sessions=2, log_file=str(log_file))
