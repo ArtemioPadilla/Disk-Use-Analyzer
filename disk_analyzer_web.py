@@ -1108,6 +1108,16 @@ async def run_agent(agent_id: str):
         raise HTTPException(status_code=404, detail=str(e))
 
 
+async def _idle_terminal_reaper():
+    """Periodically kill PTY sessions idle beyond the configured timeout."""
+    while True:
+        await asyncio.sleep(60)
+        try:
+            pty_manager.cleanup_idle()
+        except Exception as e:
+            print(f"Warning: idle terminal reaper error: {e}")
+
+
 @app.on_event("startup")
 async def startup_event():
     """Initialize the application"""
@@ -1138,6 +1148,9 @@ async def startup_event():
         print(f"📁 Legacy frontend served from: {static_dir}")
     print(f"🔍 API endpoints available at /api/*")
     print(f"📊 Loaded {len(analysis_sessions)} previous sessions")
+
+    # Start the periodic reaper that kills idle terminal sessions
+    asyncio.create_task(_idle_terminal_reaper())
 
 @app.on_event("shutdown")
 async def shutdown_event():

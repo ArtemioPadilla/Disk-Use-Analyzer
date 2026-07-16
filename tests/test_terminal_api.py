@@ -58,3 +58,11 @@ class TestTerminalAPI:
     def test_kill_nonexistent(self):
         r = self.client.delete('/api/terminal/nonexistent')
         assert r.status_code == 404
+
+
+def test_idle_reaper_task_is_registered():
+    """startup must schedule the idle-session reaper."""
+    import disk_analyzer_web
+    assert hasattr(disk_analyzer_web, "_idle_terminal_reaper"), (
+        "expected an _idle_terminal_reaper coroutine registered at startup"
+    )
