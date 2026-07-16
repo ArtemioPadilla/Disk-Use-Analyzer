@@ -16,10 +16,13 @@ from typing import Dict, List, Optional, Any
 from concurrent.futures import ThreadPoolExecutor
 import threading
 
+import secrets
+
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, BackgroundTasks, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse, Response
+from starlette.responses import JSONResponse as _StarletteJSONResponse
 from pydantic import BaseModel, Field
 import uvicorn
 
@@ -36,13 +39,53 @@ app = FastAPI(
     version="1.0.0"
 )
 
-# Enable CORS for web frontend
+# --- Auth configuration (read at module import so the uvicorn reload worker sees it) ---
+NO_AUTH = os.environ.get("DISK_ANALYZER_NO_AUTH") == "1"
+AUTH_TOKEN = None if NO_AUTH else os.environ.get("DISK_ANALYZER_TOKEN")
+
+
+def _token_is_valid(provided: str | None) -> bool:
+    if NO_AUTH:
+        return True
+    if not AUTH_TOKEN or not provided:
+        return False
+    return secrets.compare_digest(provided, AUTH_TOKEN)
+
+
+def require_token(request: Request) -> None:
+    """Reusable validation for the HTTP auth gate (WS variant is Task 2)."""
+    if NO_AUTH:
+        return
+    provided = request.headers.get("X-Auth-Token")
+    if not _token_is_valid(provided):
+        raise HTTPException(status_code=401, detail="Token inválido o ausente")
+
+
+@app.middleware("http")
+async def auth_middleware(request: Request, call_next):
+    """Require a valid token for /api/* routes; static/SPA routes stay open."""
+    if request.url.path.startswith("/api/"):
+        try:
+            require_token(request)
+        except HTTPException as exc:
+            return _StarletteJSONResponse(
+                {"detail": exc.detail}, status_code=exc.status_code
+            )
+    return await call_next(request)
+
+
+# CORS: only the Astro dev server needs cross-origin access (make web-dev).
+# In production the frontend is served same-origin from web/dist/.
+# Registered AFTER auth_middleware so it becomes the OUTERMOST layer (Starlette
+# executes middleware in reverse registration order) — this way CORS headers
+# are attached even to 401 responses short-circuited by the auth gate, which
+# the dev browser needs to be able to read the rejection at all.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # In production, specify your domain
+    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
     allow_credentials=False,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "DELETE"],
+    allow_headers=["X-Auth-Token", "Content-Type"],
 )
 
 # Global storage for analysis sessions
@@ -1308,39 +1351,48 @@ if __name__ == "__main__":
     parser.add_argument("--min-size", type=float, default=10,
                         help="Default minimum file size in MB (default: 10, use 0 for all files)")
     parser.add_argument("--port", type=int, default=8000, help="Server port (default: 8000)")
+    parser.add_argument("--no-auth", action="store_true",
+                        help="Disable token auth (only on a fully trusted, isolated network)")
     args = parser.parse_args()
 
-    # Store default min_size so the API can serve it
     app.state.default_min_size_mb = args.min_size
 
-    # Print startup information
+    # Propagate auth config via env vars so the uvicorn reload worker (a fresh
+    # process that re-imports the module) sees the same token/flag.
+    if args.no_auth:
+        os.environ["DISK_ANALYZER_NO_AUTH"] = "1"
+        token = None
+    else:
+        os.environ["DISK_ANALYZER_NO_AUTH"] = "0"
+        token = os.environ.get("DISK_ANALYZER_TOKEN") or secrets.token_urlsafe(32)
+        os.environ["DISK_ANALYZER_TOKEN"] = token
+
     print("\n" + "="*60)
     print("🌐 Disk Analyzer Web Server")
     print("="*60)
-
-    # Get local IP
     local_ip = get_local_ip()
-    
     print(f"\n⚙️  Default min file size: {args.min_size} MB")
-    print("\n🚀 Server starting...")
-    print(f"\n📍 Access the web interface at:")
-    print(f"   Local:   http://localhost:{args.port}")
+    if args.no_auth:
+        print("\n⚠️  Auth DESHABILITADA (--no-auth): cualquiera en tu red puede")
+        print("    leer/borrar archivos y abrir una terminal. Úsalo solo en una red aislada.")
+        suffix = ""
+    else:
+        print("\n🔑 Auth activada. Abre el enlace con token (no lo compartas):")
+        suffix = f"/?token={token}"
+    print(f"\n📍 Accede a la interfaz web en:")
+    print(f"   Local:   http://localhost:{args.port}{suffix}")
     if local_ip != "localhost":
-        print(f"   Network: http://{local_ip}:{args.port}")
-    print(f"\n📚 API documentation:")
-    print(f"   http://localhost:{args.port}/docs")
-    print(f"\nℹ️  Press Ctrl+C to stop the server")
+        print(f"   Network: http://{local_ip}:{args.port}{suffix}")
+    print(f"\nℹ️  Presiona Ctrl+C para detener el servidor")
     print("="*60 + "\n")
-    
-    # Run the server
+
     uvicorn.run(
         "disk_analyzer_web:app",
         host="0.0.0.0",
         port=args.port,
         reload=True,
         log_level="info",
-        # WebSocket settings to reduce buffering
         ws_ping_interval=20,
         ws_ping_timeout=20,
-        ws_max_size=16777216  # 16MB
+        ws_max_size=16777216
     )
