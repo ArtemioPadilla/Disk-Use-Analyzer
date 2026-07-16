@@ -781,14 +781,17 @@ async def notify_progress(session_id: str, message: Dict):
         for ws in disconnected:
             websocket_connections[session_id].remove(ws)
 
-@app.post("/api/cleanup/preview")
-async def preview_cleanup(request: CleanupRequest):
-    """Preview cleanup actions"""
+def _scan_cleanup_actions(paths: List[str], categories: List[str]) -> tuple:
+    """Synchronous cache-location scan used by preview_cleanup.
+
+    find_cache_locations() recursively sizes directories and can take seconds,
+    so this is run via asyncio.to_thread instead of inline in the async handler.
+    """
     cleanup_actions = []
     total_size = 0
-    wanted = {c.lower() for c in request.categories}
+    wanted = {c.lower() for c in categories}
 
-    for path in request.paths:
+    for path in paths:
         analyzer = DiskAnalyzerCore(path)
         # Quick scan for cache locations only
         analyzer.find_cache_locations()
@@ -803,6 +806,51 @@ async def preview_cleanup(request: CleanupRequest):
                 "action": "delete"
             })
             total_size += cache_loc['size']
+
+    return cleanup_actions, total_size
+
+
+def _perform_cleanup_deletes(actions: list) -> tuple:
+    """Synchronous delete loop used by execute_cleanup.
+
+    unlink()/shutil.rmtree() on large directories can block for a while, so
+    this is run via asyncio.to_thread instead of inline in the async handler.
+    """
+    checker = DiskAnalyzerCore(str(Path.home()))
+    deleted: list[dict] = []
+    errors: list[dict] = []
+    freed_size = 0
+
+    for action in actions:
+        target = Path(action["path"]).resolve()
+        if checker.is_protected_path(str(target)):
+            errors.append({"path": str(target), "error": "Ruta protegida del sistema"})
+            continue
+        try:
+            if target.is_file():
+                size = target.stat().st_size
+                target.unlink()
+                deleted.append({"path": str(target), "size": size})
+                freed_size += size
+            elif target.is_dir():
+                size = action.get("size", 0)
+                shutil.rmtree(str(target))
+                deleted.append({"path": str(target), "size": size})
+                freed_size += size
+        except Exception as e:
+            errors.append({"path": str(target), "error": str(e)})
+
+    return deleted, errors, freed_size
+
+
+@app.post("/api/cleanup/preview")
+async def preview_cleanup(request: CleanupRequest):
+    """Preview cleanup actions"""
+    # Scanning cache locations is blocking (recursive directory sizing) and
+    # can take seconds; offload to a worker thread to keep the event loop responsive.
+    cleanup_actions, total_size = await asyncio.to_thread(
+        _scan_cleanup_actions, request.paths, request.categories
+    )
 
     return {
         "actions": cleanup_actions,
@@ -821,30 +869,11 @@ async def execute_cleanup(request: CleanupRequest):
         CleanupRequest(paths=request.paths, categories=request.categories, dry_run=True)
     )
 
-    checker = DiskAnalyzerCore(str(Path.home()))
-    deleted: list[dict] = []
-    errors: list[dict] = []
-    freed_size = 0
-
-    for action in preview.get("actions", []):
-        target = Path(action["path"]).resolve()
-        if checker.is_protected_path(str(target)):
-            errors.append({"path": str(target), "error": "Ruta protegida del sistema"})
-            continue
-        try:
-            if target.is_file():
-                size = target.stat().st_size
-                target.unlink()
-                deleted.append({"path": str(target), "size": size})
-                freed_size += size
-            elif target.is_dir():
-                import shutil
-                size = action.get("size", 0)
-                shutil.rmtree(str(target))
-                deleted.append({"path": str(target), "size": size})
-                freed_size += size
-        except Exception as e:
-            errors.append({"path": str(target), "error": str(e)})
+    # Deleting files/dirs (unlink/rmtree) is blocking and can take a while for
+    # large directories; offload to a worker thread to keep the event loop responsive.
+    deleted, errors, freed_size = await asyncio.to_thread(
+        _perform_cleanup_deletes, preview.get("actions", [])
+    )
 
     return {
         "deleted": deleted,
@@ -1184,6 +1213,10 @@ async def shutdown_event():
 
     # Stop background agents
     agents_manager.stop()
+
+    # Cancel the idle terminal reaper background task
+    if _idle_reaper_task is not None:
+        _idle_reaper_task.cancel()
 
     # Cleanup PTY sessions (blocking reap — offload from the event loop)
     await asyncio.to_thread(pty_manager.cleanup_all)
