@@ -115,6 +115,22 @@ class TestPTYManager:
         )
         assert "fake_idle" not in manager.sessions
 
+    def test_kill_dead_session_is_fast(self):
+        # A session whose child already exited must not pay the
+        # SIGTERM/sleep(0.1)/SIGKILL sequence: the zombie reaps on the first
+        # WNOHANG poll, so kill() should return well under 100ms.
+        pty_id = self.manager.create_session(command="echo hi")
+        session = self.manager.sessions[pty_id]
+        # Wait for the short-lived child to exit (reader loop observes EOF)
+        deadline = time.time() + 5.0
+        while session.alive and time.time() < deadline:
+            time.sleep(0.02)
+        assert not session.alive, "child did not exit in time"
+        start = time.monotonic()
+        self.manager.kill_session(pty_id)
+        elapsed = time.monotonic() - start
+        assert elapsed < 0.09, f"kill of dead session took {elapsed:.3f}s"
+
     def test_command_logging(self, tmp_path):
         log_file = tmp_path / "terminal.log"
         manager = PTYManager(max_sessions=2, log_file=str(log_file))

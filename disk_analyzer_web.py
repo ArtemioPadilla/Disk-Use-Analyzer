@@ -1019,7 +1019,12 @@ async def delete_file(request: DeleteFileRequest):
 async def create_terminal(request: TerminalCreateRequest):
     """Spawn a new PTY session."""
     try:
-        pty_id = pty_manager.create_session(command=request.command)
+        # create_session may reap dead sessions (blocking); offload from the
+        # event loop. to_thread propagates exceptions, so the handlers below
+        # still map ValueError -> 400 and RuntimeError -> 429.
+        pty_id = await asyncio.to_thread(
+            pty_manager.create_session, command=request.command
+        )
         session = pty_manager.sessions[pty_id]
         return {"pty_id": pty_id, "created_at": session.created_at}
     except RuntimeError as e:
@@ -1031,7 +1036,8 @@ async def create_terminal(request: TerminalCreateRequest):
 @app.get("/api/terminal/sessions")
 async def list_terminals():
     """List active terminal sessions."""
-    return pty_manager.list_sessions()
+    # list_sessions may reap dead sessions (blocking); offload from the loop.
+    return await asyncio.to_thread(pty_manager.list_sessions)
 
 
 @app.post("/api/terminal/{pty_id}/resize")

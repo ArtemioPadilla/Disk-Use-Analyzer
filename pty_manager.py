@@ -135,15 +135,21 @@ class PTYSession:
 
     def kill(self):
         """Kill the PTY process and clean up."""
+        was_alive = self.alive
         self.alive = False
         if self.pid:
             try:
-                os.kill(self.pid, signal.SIGTERM)
-                time.sleep(0.1)
-                try:
-                    os.kill(self.pid, signal.SIGKILL)
-                except ProcessLookupError:
-                    pass
+                # Skip the signal sequence when the reader loop already
+                # observed process death: signaling a zombie succeeds (no
+                # ProcessLookupError), so it would only waste the 0.1s grace
+                # sleep. A true zombie reaps on the first WNOHANG poll below.
+                if was_alive:
+                    os.kill(self.pid, signal.SIGTERM)
+                    time.sleep(0.1)
+                    try:
+                        os.kill(self.pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
                 # Reap with a deadline so the child never lingers as a zombie.
                 # A single non-blocking waitpid right after SIGKILL can miss
                 # the state transition under load; poll until reaped or timeout.
