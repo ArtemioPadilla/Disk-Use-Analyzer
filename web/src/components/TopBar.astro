@@ -1,0 +1,75 @@
+---
+const { title } = Astro.props;
+---
+
+<header class="topbar">
+  <button class="hamburger btn btn-ghost" onclick="window.openSidebar?.()" aria-label="Menu"
+    style="font-size: 1.2rem; padding: 0.3rem 0.5rem;">
+    ☰
+  </button>
+  <h1 class="topbar-title">{title}</h1>
+  <div class="topbar-search">
+    <input type="text" id="globalSearch" placeholder="Search files..."
+      class="search-input" />
+  </div>
+  <div class="topbar-actions">
+    <a href="/" class="btn btn-primary" id="newAnalysisBtn">+ New Analysis</a>
+    <button class="btn btn-dark" id="terminalToggleBtn">⚡ Terminal</button>
+    <button class="btn btn-ghost" id="themeToggleBtn" aria-label="Toggle theme">🌙</button>
+  </div>
+</header>
+
+<style>
+  .topbar { height: var(--topbar-height); padding: 0 1.5rem; display: flex; align-items: center; justify-content: space-between; background: var(--card-bg); border-bottom: 1px solid var(--border); flex-shrink: 0; }
+  .topbar-title { font-size: 1.15rem; font-weight: 600; }
+  .topbar-actions { display: flex; gap: 0.5rem; align-items: center; }
+  .topbar-search { flex: 1; max-width: 300px; margin: 0 1rem; }
+  .search-input {
+    width: 100%;
+    padding: 0.4rem 0.75rem;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--page-bg);
+    color: var(--text);
+    font-size: 0.85rem;
+    outline: none;
+    transition: border-color 0.15s;
+  }
+  .search-input:focus { border-color: var(--primary); }
+  @media (max-width: 768px) { .topbar-search { display: none; } }
+</style>
+
+<script>
+  const themeBtn = document.getElementById('themeToggleBtn');
+  function applyTheme() {
+    const saved = localStorage.getItem('disk-analyzer-theme');
+    const isDarkSystem = window.matchMedia('(prefers-color-scheme: dark)').matches;
+    const isDark = saved === 'dark' || (!saved && isDarkSystem);
+    document.documentElement.setAttribute('data-theme', isDark ? 'dark' : 'light');
+    if (themeBtn) themeBtn.textContent = isDark ? '☀️' : '🌙';
+  }
+  applyTheme();
+  themeBtn?.addEventListener('click', () => {
+    const current = document.documentElement.getAttribute('data-theme');
+    const next = current === 'dark' ? 'light' : 'dark';
+    localStorage.setItem('disk-analyzer-theme', next);
+    document.documentElement.setAttribute('data-theme', next);
+    themeBtn.textContent = next === 'dark' ? '☀️' : '🌙';
+  });
+  document.getElementById('terminalToggleBtn')?.addEventListener('click', () => {
+    window.dispatchEvent(new CustomEvent('terminal:toggle'));
+  });
+  document.getElementById('newAnalysisBtn')?.addEventListener('click', (e) => {
+    e.preventDefault();
+    window.dispatchEvent(new CustomEvent('analysis:new'));
+  });
+  // Global search — Enter navigates to file browser with query
+  document.getElementById('globalSearch')?.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      const query = e.target.value.trim();
+      if (query) {
+        window.location.href = `/files?path=${encodeURIComponent(query)}`;
+      }
+    }
+  });
+</script>

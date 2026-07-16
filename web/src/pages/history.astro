@@ -1,0 +1,7 @@
+---
+import MainLayout from '../layouts/MainLayout.astro';
+import SessionList from '../components/SessionList.tsx';
+---
+<MainLayout title="History" currentPath="/history">
+  <SessionList client:load />
+</MainLayout>

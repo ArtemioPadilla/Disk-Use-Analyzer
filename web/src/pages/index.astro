@@ -1,0 +1,36 @@
+---
+import MainLayout from '../layouts/MainLayout.astro';
+import HeroScan from '../components/HeroScan.tsx';
+import NarrativeSummary from '../components/NarrativeSummary.tsx';
+import StatsCards from '../components/StatsCards.tsx';
+import CategoryChart from '../components/CategoryChart.tsx';
+import TaskList from '../components/TaskList.tsx';
+import QuickActions from '../components/QuickActions.tsx';
+import DockerPanel from '../components/DockerPanel.tsx';
+import DiskBar from '../components/DiskBar.tsx';
+import ReverseView from '../components/ReverseView.tsx';
+import TrendChart from '../components/TrendChart.tsx';
+import SavingsTracker from '../components/SavingsTracker.tsx';
+import LivePulse from '../components/LivePulse.tsx';
+---
+
+<MainLayout title="Dashboard" currentPath="/">
+  <HeroScan client:load />
+  <NarrativeSummary client:load />
+  <DiskBar client:load />
+  <ReverseView client:load />
+  <StatsCards client:load />
+  <div class="dashboard-grid">
+    <div class="dashboard-main">
+      <CategoryChart client:idle />
+    </div>
+    <div class="dashboard-side">
+      <SavingsTracker client:load />
+      <QuickActions client:load />
+      <DockerPanel client:load />
+      <TrendChart client:load />
+      <LivePulse client:load />
+      <TaskList client:load />
+    </div>
+  </div>
+</MainLayout>

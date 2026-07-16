@@ -9,6 +9,7 @@ import sys
 import uuid
 import asyncio
 import json
+import shutil
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Any
@@ -24,6 +25,9 @@ import uvicorn
 
 # Import our core analyzer
 from disk_analyzer_core import DiskAnalyzerCore, MB, GB, IS_MACOS, IS_WINDOWS
+from pty_manager import PTYManager
+from agents_manager import AgentsManager
+from persona_detector import detect_personas, generate_persona_recommendations
 
 # Create FastAPI app
 app = FastAPI(
@@ -46,8 +50,20 @@ analysis_sessions: Dict[str, Dict] = {}
 websocket_connections: Dict[str, List[WebSocket]] = {}
 executor = ThreadPoolExecutor(max_workers=4)
 
+# Terminal management
+pty_manager = PTYManager(max_sessions=3, idle_timeout=600)
+
+# Handle to the idle-terminal reaper task (set at startup; kept for testability)
+_idle_reaper_task = None
+
+# Background agents
+agents_manager = AgentsManager()
+
 # Session persistence
 SESSIONS_FILE = Path("sessions_metadata.json")
+RESULTS_DIR = Path.home() / ".disk-analyzer" / "results"
+RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+MAX_STORED_RESULTS = 10
 
 def save_session_metadata():
     """Save session metadata to disk"""
@@ -55,14 +71,19 @@ def save_session_metadata():
         metadata = []
         for session_id, session in analysis_sessions.items():
             # Only save basic metadata, not results
-            metadata.append({
+            meta_entry = {
                 "id": session_id,
                 "status": session["status"],
                 "paths": session["paths"],
                 "started_at": session["started_at"],
                 "completed_at": session.get("completed_at"),
                 "error": session.get("error")
-            })
+            }
+            if session.get("disk_used") is not None:
+                meta_entry["disk_used"] = session["disk_used"]
+            if session.get("disk_total") is not None:
+                meta_entry["disk_total"] = session["disk_total"]
+            metadata.append(meta_entry)
         
         with open(SESSIONS_FILE, "w") as f:
             json.dump(metadata, f)
@@ -75,23 +96,56 @@ def load_session_metadata():
         if SESSIONS_FILE.exists():
             with open(SESSIONS_FILE, "r") as f:
                 metadata = json.load(f)
-                
+
             for session_meta in metadata:
                 session_id = session_meta["id"]
+                status = session_meta["status"]
+                # A restored "running" session has no in-flight task backing
+                # it after a server restart, so it would hang forever.
+                if status == "running":
+                    status = "interrupted"
                 # Restore session without results
                 analysis_sessions[session_id] = {
                     "id": session_id,
-                    "status": session_meta["status"],
-                    "progress": 100 if session_meta["status"] == "completed" else 0,
+                    "status": status,
+                    "progress": 100 if status == "completed" else 0,
                     "current_path": "",
                     "paths": session_meta["paths"],
                     "started_at": session_meta["started_at"],
                     "completed_at": session_meta.get("completed_at"),
-                    "results": None,  # Results not persisted
-                    "error": session_meta.get("error")
+                    "results": None,  # Results loaded on demand
+                    "error": session_meta.get("error"),
+                    "disk_used": session_meta.get("disk_used"),
+                    "disk_total": session_meta.get("disk_total")
                 }
     except Exception as e:
         print(f"Error loading session metadata: {e}")
+
+
+def save_analysis_results(session_id: str, results: list):
+    """Save full analysis results to disk."""
+    try:
+        result_file = RESULTS_DIR / f"{session_id}.json"
+        with open(result_file, 'w') as f:
+            json.dump(results, f)
+        # Prune old results
+        result_files = sorted(RESULTS_DIR.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True)
+        for old_file in result_files[MAX_STORED_RESULTS:]:
+            old_file.unlink()
+    except Exception as e:
+        print(f"Warning: Could not save results for {session_id}: {e}")
+
+
+def load_analysis_results(session_id: str) -> list | None:
+    """Load analysis results from disk."""
+    try:
+        result_file = RESULTS_DIR / f"{session_id}.json"
+        if result_file.exists():
+            with open(result_file, 'r') as f:
+                return json.load(f)
+    except Exception as e:
+        print(f"Warning: Could not load results for {session_id}: {e}")
+    return None
 
 # Pydantic models for API
 class AnalysisRequest(BaseModel):
@@ -114,28 +168,42 @@ class AnalysisResponse(BaseModel):
     message: str
 
 class CleanupRequest(BaseModel):
-    paths: List[str]
-    categories: List[str]
+    paths: List[str] = []
+    categories: List[str] = []  # empty list means "all categories"
     dry_run: bool = True
+
+class TerminalCreateRequest(BaseModel):
+    command: Optional[str] = None
+
+class TerminalResizeRequest(BaseModel):
+    cols: int
+    rows: int
 
 class DeleteFileRequest(BaseModel):
     path: str = Field(..., description="Path of the file to delete")
 
-# Serve static files (frontend)
+# Serve new Astro frontend from web/dist/ if it exists, else fall back to static/
+astro_dist = Path(__file__).parent / "web" / "dist"
 static_dir = Path(__file__).parent / "static"
-if not static_dir.exists():
-    static_dir.mkdir(exist_ok=True)
 
-# Mount static files
-app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
+if astro_dist.exists():
+    app.mount("/static", StaticFiles(directory=str(static_dir)), name="legacy_static")
+    # Mount Astro's built assets (CSS, JS, etc.)
+    astro_assets = astro_dist / "_astro"
+    if astro_assets.exists():
+        app.mount("/_astro", StaticFiles(directory=str(astro_assets)), name="astro_assets")
+else:
+    if not static_dir.exists():
+        static_dir.mkdir(exist_ok=True)
+    app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
 
-@app.get("/")
-async def root():
-    """Serve the main HTML page"""
-    index_file = static_dir / "index.html"
-    if index_file.exists():
-        return FileResponse(str(index_file))
-    return {"message": "Disk Analyzer Web API", "docs": "/docs"}
+@app.get("/", include_in_schema=False)
+async def serve_root():
+    """Serve the Astro index or legacy index."""
+    astro_index = Path(__file__).parent / "web" / "dist" / "index.html"
+    if astro_index.is_file():
+        return FileResponse(str(astro_index))
+    return FileResponse(str(Path(__file__).parent / "static" / "index.html"))
 
 @app.get("/api/system/info")
 async def get_system_info():
@@ -159,7 +227,8 @@ async def get_system_info():
             "used": usage.used,
             "free": usage.free,
             "percent": (usage.used / usage.total * 100) if usage.total > 0 else 0
-        }
+        },
+        "default_min_size_mb": getattr(app.state, 'default_min_size_mb', 10),
     }
 
 @app.get("/api/system/drives")
@@ -441,9 +510,18 @@ async def run_analysis(
         analysis_sessions[session_id]["progress"] = 100
         analysis_sessions[session_id]["results"] = all_results
         analysis_sessions[session_id]["completed_at"] = datetime.now().isoformat()
-        
-        # Save session metadata
+
+        # Store disk usage snapshot for trend tracking
+        try:
+            usage = shutil.disk_usage("/")
+            analysis_sessions[session_id]["disk_used"] = usage.used
+            analysis_sessions[session_id]["disk_total"] = usage.total
+        except Exception:
+            pass
+
+        # Save session metadata and full results to disk
         save_session_metadata()
+        save_analysis_results(session_id, all_results)
         
         # Notify completion
         await notify_progress(session_id, {
@@ -489,6 +567,34 @@ async def get_analysis_progress(session_id: str):
         "completed_at": session.get("completed_at")
     }
 
+@app.post("/api/analysis/{session_id}/cancel")
+async def cancel_analysis(session_id: str):
+    """Cancel a running analysis."""
+    if session_id not in analysis_sessions:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    session = analysis_sessions[session_id]
+    if session["status"] != "running":
+        raise HTTPException(status_code=400, detail="Analysis is not running")
+
+    # Cancel the asyncio task
+    task = session.get("task")
+    if task:
+        task.cancel()
+
+    session["status"] = "cancelled"
+    session["completed_at"] = datetime.now().isoformat()
+    save_session_metadata()
+
+    # Notify WebSocket clients
+    await notify_progress(session_id, {
+        "type": "cancelled",
+        "session_id": session_id,
+        "message": "Analysis cancelled by user"
+    })
+
+    return {"status": "cancelled"}
+
 @app.get("/api/analysis/{session_id}/results")
 async def get_analysis_results(session_id: str):
     """Get analysis results"""
@@ -499,10 +605,12 @@ async def get_analysis_results(session_id: str):
     if session["status"] != "completed":
         raise HTTPException(status_code=400, detail="Analysis not completed")
     
-    # Check if results are available (might be None after server restart)
-    if session["results"] is None:
+    # Try loading results from disk if not in memory
+    if not session.get("results"):
+        session["results"] = load_analysis_results(session_id)
+    if not session.get("results"):
         raise HTTPException(
-            status_code=410, 
+            status_code=410,
             detail="Session results no longer available. Please run a new analysis."
         )
     
@@ -519,19 +627,106 @@ async def get_sessions():
     """Get list of analysis sessions"""
     sessions_list = []
     for session_id, session in analysis_sessions.items():
-        sessions_list.append({
+        session_entry = {
             "id": session_id,
             "status": session["status"],
             "paths": session["paths"],
             "started_at": session["started_at"],
             "completed_at": session.get("completed_at"),
-            "progress": session["progress"]
-        })
+            "progress": session["progress"],
+        }
+        if session.get("disk_used") is not None:
+            session_entry["disk_used"] = session["disk_used"]
+        if session.get("disk_total") is not None:
+            session_entry["disk_total"] = session["disk_total"]
+        sessions_list.append(session_entry)
     
     # Sort by start time, newest first
     sessions_list.sort(key=lambda x: x["started_at"], reverse=True)
     
     return {"sessions": sessions_list[:20]}  # Return last 20 sessions
+
+@app.get("/api/digest")
+async def get_digest():
+    """Generate a weekly digest from session history."""
+    from datetime import timedelta
+
+    now = datetime.now()
+    week_ago = now - timedelta(days=7)
+
+    # Get all sessions
+    all_sessions = list(analysis_sessions.values())
+
+    # Recent sessions (this week)
+    recent = [s for s in all_sessions
+              if s.get("completed_at") and datetime.fromisoformat(s["completed_at"]) > week_ago]
+
+    # Find oldest and newest with disk data
+    with_disk = [s for s in all_sessions if s.get("disk_used")]
+    with_disk.sort(key=lambda s: s.get("started_at", ""))
+
+    disk_growth = 0
+    if len(with_disk) >= 2:
+        disk_growth = (with_disk[-1].get("disk_used", 0) - with_disk[0].get("disk_used", 0))
+
+    # Current disk state
+    usage = shutil.disk_usage("/")
+    days_until_full = 0
+    if disk_growth > 0 and len(with_disk) >= 2:
+        first_date = datetime.fromisoformat(with_disk[0]["started_at"])
+        last_date = datetime.fromisoformat(with_disk[-1]["started_at"])
+        days_span = max((last_date - first_date).days, 1)
+        daily_growth = disk_growth / days_span
+        if daily_growth > 0:
+            days_until_full = int(usage.free / daily_growth)
+
+    # Agent activity
+    agents_log: list[str] = []
+    log_path = Path.home() / ".disk-analyzer" / "agents.log"
+    if log_path.exists():
+        try:
+            lines = log_path.read_text().strip().split('\n')[-20:]  # Last 20 lines
+            agents_log = [l for l in lines if l.strip()]
+        except Exception:
+            pass
+
+    return {
+        "generated_at": now.isoformat(),
+        "period": {"start": week_ago.isoformat(), "end": now.isoformat()},
+        "scans_this_week": len(recent),
+        "total_scans": len(all_sessions),
+        "disk": {
+            "used": usage.used,
+            "total": usage.total,
+            "free": usage.free,
+            "percent": round((usage.used / usage.total) * 100, 1) if usage.total > 0 else 0,
+        },
+        "growth": {
+            "bytes": disk_growth,
+            "direction": "up" if disk_growth > 0 else "down" if disk_growth < 0 else "stable",
+            "days_until_full": days_until_full if days_until_full > 0 else None,
+        },
+        "agents_log": agents_log[-10:],
+    }
+
+@app.get("/api/analysis/latest")
+async def get_latest_results():
+    """Get the most recent completed analysis results."""
+    # Check in-memory first
+    completed = [s for s in analysis_sessions.values() if s.get("status") == "completed" and s.get("results")]
+    if completed:
+        latest = max(completed, key=lambda s: s.get("completed_at", s.get("started_at", "")))
+        return {"id": latest["id"], "status": latest["status"], "results": latest["results"]}
+
+    # Try loading from disk
+    result_files = sorted(RESULTS_DIR.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True)
+    if result_files:
+        sid = result_files[0].stem
+        results = load_analysis_results(sid)
+        if results:
+            return {"id": sid, "status": "completed", "results": results}
+
+    raise HTTPException(status_code=404, detail="No completed analysis found")
 
 @app.websocket("/ws/{session_id}")
 async def websocket_endpoint(websocket: WebSocket, session_id: str):
@@ -586,27 +781,77 @@ async def notify_progress(session_id: str, message: Dict):
         for ws in disconnected:
             websocket_connections[session_id].remove(ws)
 
-@app.post("/api/cleanup/preview")
-async def preview_cleanup(request: CleanupRequest):
-    """Preview cleanup actions"""
+def _scan_cleanup_actions(paths: List[str], categories: List[str]) -> tuple:
+    """Synchronous cache-location scan used by preview_cleanup.
+
+    find_cache_locations() recursively sizes directories and can take seconds,
+    so this is run via asyncio.to_thread instead of inline in the async handler.
+    """
     cleanup_actions = []
     total_size = 0
-    
-    for path in request.paths:
+    wanted = {c.lower() for c in categories}
+
+    for path in paths:
         analyzer = DiskAnalyzerCore(path)
         # Quick scan for cache locations only
         analyzer.find_cache_locations()
-        
+
         for cache_loc in analyzer.cache_locations:
-            if cache_loc['type'].lower() in request.categories:
-                cleanup_actions.append({
-                    "path": cache_loc['path'],
-                    "size": cache_loc['size'],
-                    "type": cache_loc['type'],
-                    "action": "delete"
-                })
-                total_size += cache_loc['size']
-    
+            if wanted and cache_loc['type'].lower() not in wanted:
+                continue
+            cleanup_actions.append({
+                "path": cache_loc['path'],
+                "size": cache_loc['size'],
+                "type": cache_loc['type'],
+                "action": "delete"
+            })
+            total_size += cache_loc['size']
+
+    return cleanup_actions, total_size
+
+
+def _perform_cleanup_deletes(actions: list) -> tuple:
+    """Synchronous delete loop used by execute_cleanup.
+
+    unlink()/shutil.rmtree() on large directories can block for a while, so
+    this is run via asyncio.to_thread instead of inline in the async handler.
+    """
+    checker = DiskAnalyzerCore(str(Path.home()))
+    deleted: list[dict] = []
+    errors: list[dict] = []
+    freed_size = 0
+
+    for action in actions:
+        target = Path(action["path"]).resolve()
+        if checker.is_protected_path(str(target)):
+            errors.append({"path": str(target), "error": "Ruta protegida del sistema"})
+            continue
+        try:
+            if target.is_file():
+                size = target.stat().st_size
+                target.unlink()
+                deleted.append({"path": str(target), "size": size})
+                freed_size += size
+            elif target.is_dir():
+                size = action.get("size", 0)
+                shutil.rmtree(str(target))
+                deleted.append({"path": str(target), "size": size})
+                freed_size += size
+        except Exception as e:
+            errors.append({"path": str(target), "error": str(e)})
+
+    return deleted, errors, freed_size
+
+
+@app.post("/api/cleanup/preview")
+async def preview_cleanup(request: CleanupRequest):
+    """Preview cleanup actions"""
+    # Scanning cache locations is blocking (recursive directory sizing) and
+    # can take seconds; offload to a worker thread to keep the event loop responsive.
+    cleanup_actions, total_size = await asyncio.to_thread(
+        _scan_cleanup_actions, request.paths, request.categories
+    )
+
     return {
         "actions": cleanup_actions,
         "total_size": total_size,
@@ -618,34 +863,17 @@ async def execute_cleanup(request: CleanupRequest):
     """Execute cleanup actions"""
     if request.dry_run:
         return await preview_cleanup(request)
-    
+
     # Safety: always preview first so callers see what would be deleted
     preview = await preview_cleanup(
-        CleanupRequest(categories=request.categories, dry_run=True)
+        CleanupRequest(paths=request.paths, categories=request.categories, dry_run=True)
     )
 
-    # Perform actual cleanup
-    analyzer = DiskAnalyzerCore()
-    deleted: list[dict] = []
-    errors: list[dict] = []
-    freed_size = 0
-
-    for action in preview.get("actions", []):
-        target = Path(action["path"])
-        try:
-            if target.is_file():
-                size = target.stat().st_size
-                target.unlink()
-                deleted.append({"path": str(target), "size": size})
-                freed_size += size
-            elif target.is_dir():
-                import shutil
-                size = action.get("size", 0)
-                shutil.rmtree(str(target))
-                deleted.append({"path": str(target), "size": size})
-                freed_size += size
-        except Exception as e:
-            errors.append({"path": str(target), "error": str(e)})
+    # Deleting files/dirs (unlink/rmtree) is blocking and can take a while for
+    # large directories; offload to a worker thread to keep the event loop responsive.
+    deleted, errors, freed_size = await asyncio.to_thread(
+        _perform_cleanup_deletes, preview.get("actions", [])
+    )
 
     return {
         "deleted": deleted,
@@ -675,11 +903,11 @@ async def export_results(session_id: str, format: str):
         # Generate CSV
         import csv
         import io
-        
+
         output = io.StringIO()
         writer = csv.writer(output)
         writer.writerow(["Path", "Size", "Type", "Age (days)", "Is Cache"])
-        
+
         for result in session["results"]:
             for file in result["report"]["large_files"][:100]:  # Top 100 files
                 writer.writerow([
@@ -689,7 +917,7 @@ async def export_results(session_id: str, format: str):
                     file["age_days"],
                     file["is_cache"]
                 ])
-        
+
         return Response(
             content=output.getvalue(),
             media_type="text/csv",
@@ -697,6 +925,22 @@ async def export_results(session_id: str, format: str):
                 "Content-Disposition": f"attachment; filename=disk_analysis_{session_id}.csv"
             }
         )
+    elif format == "html":
+        # Generate standalone HTML report
+        try:
+            from disk_analyzer import DiskAnalyzer
+            analyzer = DiskAnalyzer(str(Path.home()))
+            merged_report = session["results"][0]["report"] if session["results"] else {}
+            html_content = analyzer.generate_html_report(merged_report)
+            return Response(
+                content=html_content,
+                media_type="text/html",
+                headers={
+                    "Content-Disposition": f'attachment; filename="disk_report_{session_id}.html"'
+                },
+            )
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Report generation failed: {str(e)}")
     else:
         raise HTTPException(status_code=400, detail="Unsupported format")
 
@@ -798,26 +1042,163 @@ async def delete_file(request: DeleteFileRequest):
             detail=f"An error occurred: {str(e)}"
         )
 
+# ─── Terminal Endpoints ───────────────────────────────────────────────────────
+
+@app.post("/api/terminal/create")
+async def create_terminal(request: TerminalCreateRequest):
+    """Spawn a new PTY session."""
+    try:
+        # create_session may reap dead sessions (blocking); offload from the
+        # event loop. to_thread propagates exceptions, so the handlers below
+        # still map ValueError -> 400 and RuntimeError -> 429.
+        pty_id = await asyncio.to_thread(
+            pty_manager.create_session, command=request.command
+        )
+        session = pty_manager.sessions[pty_id]
+        return {"pty_id": pty_id, "created_at": session.created_at}
+    except RuntimeError as e:
+        raise HTTPException(status_code=429, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.get("/api/terminal/sessions")
+async def list_terminals():
+    """List active terminal sessions."""
+    # list_sessions may reap dead sessions (blocking); offload from the loop.
+    return await asyncio.to_thread(pty_manager.list_sessions)
+
+
+@app.post("/api/terminal/{pty_id}/resize")
+async def resize_terminal(pty_id: str, request: TerminalResizeRequest):
+    """Resize a terminal session."""
+    try:
+        pty_manager.resize(pty_id, request.cols, request.rows)
+        return {"status": "ok"}
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"No session: {pty_id}")
+
+
+@app.delete("/api/terminal/{pty_id}")
+async def kill_terminal(pty_id: str):
+    """Kill a terminal session."""
+    try:
+        # kill_session reaps the child and can block up to ~2s; run it in a
+        # worker thread so the event loop keeps serving other requests.
+        await asyncio.to_thread(pty_manager.kill_session, pty_id)
+        return {"status": "killed"}
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"No session: {pty_id}")
+
+
+@app.websocket("/ws/terminal/{pty_id}")
+async def terminal_websocket(websocket: WebSocket, pty_id: str):
+    """Bidirectional WebSocket: stdin from browser -> PTY, stdout from PTY -> browser."""
+    if pty_id not in pty_manager.sessions:
+        await websocket.close(code=4004, reason="No such session")
+        return
+
+    await websocket.accept()
+    session = pty_manager.sessions[pty_id]
+
+    async def send_output():
+        """Read PTY output and send to browser."""
+        while session.alive:
+            data = session.read_output_bytes()
+            if data:
+                await websocket.send_bytes(data)
+            else:
+                await asyncio.sleep(0.05)
+        exit_code = session.get_exit_code()
+        try:
+            await websocket.send_json({"type": "exit", "code": exit_code or 0})
+        except Exception:
+            pass
+
+    output_task = asyncio.create_task(send_output())
+
+    try:
+        while True:
+            data = await websocket.receive()
+            if "text" in data:
+                session.write_input(data["text"])
+            elif "bytes" in data:
+                session.write_input_bytes(data["bytes"])
+    except WebSocketDisconnect:
+        pass
+    finally:
+        output_task.cancel()
+
+
+# ── Background Agents API ──────────────────────────────────────────────
+
+@app.get("/api/agents")
+async def list_agents():
+    return agents_manager.get_agents()
+
+@app.post("/api/agents/{agent_id}/toggle")
+async def toggle_agent(agent_id: str, enabled: bool = True):
+    try:
+        agents_manager.toggle_agent(agent_id, enabled)
+        return {"status": "ok", "agent_id": agent_id, "enabled": enabled}
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+@app.post("/api/agents/{agent_id}/run")
+async def run_agent(agent_id: str):
+    try:
+        result = agents_manager.run_agent(agent_id)
+        return result
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+async def _idle_terminal_reaper():
+    """Periodically kill PTY sessions idle beyond the configured timeout."""
+    while True:
+        await asyncio.sleep(60)
+        try:
+            # cleanup_idle kills/reaps sessions and can block up to ~2s each;
+            # offload to a worker thread to keep the event loop responsive.
+            await asyncio.to_thread(pty_manager.cleanup_idle)
+        except Exception as e:
+            print(f"Warning: idle terminal reaper error: {e}")
+
+
 @app.on_event("startup")
 async def startup_event():
     """Initialize the application"""
-    # Create static directory structure
+    global _idle_reaper_task
+    # Create static directory structure for legacy frontend
+    if not static_dir.exists():
+        static_dir.mkdir(exist_ok=True)
     for subdir in ["css", "js", "img"]:
         (static_dir / subdir).mkdir(exist_ok=True)
-    
-    # Create default index.html if it doesn't exist
-    index_file = static_dir / "index.html"
-    if not index_file.exists():
-        # We'll create this in the next step
-        pass
-    
+
     # Load previous session metadata
     load_session_metadata()
-    
+
+    # Load results for completed sessions
+    for sid, session in analysis_sessions.items():
+        if session.get("status") == "completed" and not session.get("results"):
+            results = load_analysis_results(sid)
+            if results:
+                session["results"] = results
+                print(f"  Loaded cached results for session {sid}")
+
+    # Start background agents scheduler
+    agents_manager.start()
+
     print("✅ Web server started successfully")
-    print(f"📁 Static files served from: {static_dir}")
+    if astro_dist.exists():
+        print(f"📁 Astro frontend served from: {astro_dist}")
+    else:
+        print(f"📁 Legacy frontend served from: {static_dir}")
     print(f"🔍 API endpoints available at /api/*")
     print(f"📊 Loaded {len(analysis_sessions)} previous sessions")
+
+    # Start the periodic reaper that kills idle terminal sessions
+    _idle_reaper_task = asyncio.create_task(_idle_terminal_reaper())
 
 @app.on_event("shutdown")
 async def shutdown_event():
@@ -829,7 +1210,17 @@ async def shutdown_event():
                 await ws.close()
             except:
                 pass
-    
+
+    # Stop background agents
+    agents_manager.stop()
+
+    # Cancel the idle terminal reaper background task
+    if _idle_reaper_task is not None:
+        _idle_reaper_task.cancel()
+
+    # Cleanup PTY sessions (blocking reap — offload from the event loop)
+    await asyncio.to_thread(pty_manager.cleanup_all)
+
     # Shutdown executor
     executor.shutdown(wait=True)
 
@@ -846,22 +1237,98 @@ def get_local_ip():
     except:
         return "localhost"
 
+@app.get("/api/persona")
+async def get_persona():
+    """Detect user persona from the most recent analysis."""
+    # Find most recent completed session with results
+    completed = [s for s in analysis_sessions.values()
+                 if s.get("status") == "completed" and s.get("results")]
+    if not completed:
+        # Try loading from disk
+        result_files = sorted(RESULTS_DIR.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True)
+        if result_files:
+            results = load_analysis_results(result_files[0].stem)
+            if results and len(results) > 0:
+                report = results[0].get("report", {})
+                profile = detect_personas(
+                    report.get("large_files", []),
+                    report.get("top_directories", []),
+                    report.get("cache_locations", []),
+                )
+                persona_recs = generate_persona_recommendations(
+                    profile["primary"]["id"],
+                    report.get("large_files", []),
+                    report.get("top_directories", []),
+                    report.get("cache_locations", []),
+                )
+                return {"profile": profile, "recommendations": persona_recs}
+        raise HTTPException(status_code=404, detail="No analysis results available")
+
+    latest = max(completed, key=lambda s: s.get("completed_at", s.get("started_at", "")))
+    report = latest["results"][0].get("report", {}) if latest["results"] else {}
+
+    profile = detect_personas(
+        report.get("large_files", []),
+        report.get("top_directories", []),
+        report.get("cache_locations", []),
+    )
+    persona_recs = generate_persona_recommendations(
+        profile["primary"]["id"],
+        report.get("large_files", []),
+        report.get("top_directories", []),
+        report.get("cache_locations", []),
+    )
+    return {"profile": profile, "recommendations": persona_recs}
+
+
+@app.get("/{path:path}")
+async def serve_astro(path: str):
+    """Serve Astro frontend pages. API routes take priority (registered first)."""
+    astro_dist = Path(__file__).parent / "web" / "dist"
+    if not astro_dist.exists():
+        return FileResponse(str(Path(__file__).parent / "static" / "index.html"))
+
+    for candidate in [
+        astro_dist / path / "index.html",
+        astro_dist / f"{path}.html",
+        astro_dist / path,
+    ]:
+        if candidate.is_file():
+            return FileResponse(str(candidate))
+
+    index = astro_dist / "index.html"
+    if index.is_file():
+        return FileResponse(str(index))
+    return FileResponse(str(Path(__file__).parent / "static" / "index.html"))
+
+
 if __name__ == "__main__":
+    import argparse
+    parser = argparse.ArgumentParser(description="Disk Analyzer Web Server")
+    parser.add_argument("--min-size", type=float, default=10,
+                        help="Default minimum file size in MB (default: 10, use 0 for all files)")
+    parser.add_argument("--port", type=int, default=8000, help="Server port (default: 8000)")
+    args = parser.parse_args()
+
+    # Store default min_size so the API can serve it
+    app.state.default_min_size_mb = args.min_size
+
     # Print startup information
     print("\n" + "="*60)
     print("🌐 Disk Analyzer Web Server")
     print("="*60)
-    
+
     # Get local IP
     local_ip = get_local_ip()
     
+    print(f"\n⚙️  Default min file size: {args.min_size} MB")
     print("\n🚀 Server starting...")
     print(f"\n📍 Access the web interface at:")
-    print(f"   Local:   http://localhost:8000")
+    print(f"   Local:   http://localhost:{args.port}")
     if local_ip != "localhost":
-        print(f"   Network: http://{local_ip}:8000")
+        print(f"   Network: http://{local_ip}:{args.port}")
     print(f"\n📚 API documentation:")
-    print(f"   http://localhost:8000/docs")
+    print(f"   http://localhost:{args.port}/docs")
     print(f"\nℹ️  Press Ctrl+C to stop the server")
     print("="*60 + "\n")
     
@@ -869,7 +1336,7 @@ if __name__ == "__main__":
     uvicorn.run(
         "disk_analyzer_web:app",
         host="0.0.0.0",
-        port=8000,
+        port=args.port,
         reload=True,
         log_level="info",
         # WebSocket settings to reduce buffering

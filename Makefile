@@ -17,7 +17,7 @@ BLUE = \033[0;34m
 NC = \033[0m # No Color
 
 # Comandos principales
-.PHONY: help analyze quick full report clean-preview clean-cache clean-docker clean-all install gui install-gui check-gui web install-web
+.PHONY: help analyze quick full report clean-preview clean-cache clean-docker clean-all install gui install-gui check-gui web install-web web-build web-dev
 
 help:
 	@echo "$(BLUE)═══════════════════════════════════════════════════════════════$(NC)"
@@ -47,16 +47,26 @@ help:
 	@echo "  $(YELLOW)make check$(NC)        - Verificar que todo esté instalado"
 	@echo "  $(YELLOW)make open$(NC)         - Abrir el último reporte HTML"
 	@echo ""
-	@echo "$(GREEN)Interfaz Gráfica:$(NC)"
-	@echo "  $(YELLOW)make gui$(NC)          - Ejecutar interfaz gráfica moderna"
+	@echo "$(GREEN)Interfaz Web (Astro + React):$(NC)"
+	@echo "  $(YELLOW)make web$(NC)          - Compilar frontend y ejecutar servidor web"
+	@echo "  $(YELLOW)make web-dev$(NC)      - Modo desarrollo (hot-reload frontend)"
+	@echo "  $(YELLOW)make web-build$(NC)    - Solo compilar el frontend Astro"
+	@echo "  $(YELLOW)make install-web$(NC)  - Instalar dependencias (Python + Node)"
+	@echo ""
+	@echo "$(GREEN)Interfaz GUI (legacy):$(NC)"
+	@echo "  $(YELLOW)make gui$(NC)          - Ejecutar interfaz gráfica CustomTkinter"
 	@echo "  $(YELLOW)make install-gui$(NC)  - Instalar dependencias para GUI"
-	@echo "  $(YELLOW)make web$(NC)          - Ejecutar interfaz web (sin problemas de GUI!)"
-	@echo "  $(YELLOW)make install-web$(NC)  - Instalar dependencias para web"
+	@echo ""
+	@echo "$(GREEN)Permisos (sudo):$(NC)"
+	@echo "  $(YELLOW)sudo make analyze path=/$(NC)  - Análisis completo del sistema (requiere sudo)"
+	@echo "  $(YELLOW)sudo make web$(NC)             - Servidor web con acceso completo al disco"
+	@echo "  $(BLUE)Nota: sin sudo, ~/  funciona bien pero / muestra huecos de permisos$(NC)"
 	@echo ""
 	@echo "$(BLUE)Ejemplos:$(NC)"
 	@echo "  make analyze path=/Users/me/Projects"
 	@echo "  make quick min_size=100"
 	@echo "  make full path=/ min_size=500"
+	@echo "  sudo make full path=/ min_size=50    # Full system scan"
 	@echo "$(BLUE)═══════════════════════════════════════════════════════════════$(NC)"
 
 # Análisis estándar
@@ -276,21 +286,47 @@ check-gui:
 	@echo "Path de Python:"
 	@$(PYTHON) -c "import sys; print('\n'.join(sys.path[:5]))"
 
-# Web Interface Commands
+# Web Interface Commands (Astro + React frontend, FastAPI backend)
 install-web:
 	@echo "$(GREEN)🌐 Instalando dependencias para interfaz web...$(NC)"
 	@if [ ! -d "venv-web" ]; then \
 		echo "$(BLUE)Creando entorno virtual para web...$(NC)"; \
 		$(PYTHON) -m venv venv-web; \
 	fi
-	@echo "$(BLUE)Activando entorno virtual e instalando dependencias...$(NC)"
+	@echo "$(BLUE)Instalando dependencias Python...$(NC)"
 	@. venv-web/bin/activate && pip install --upgrade pip >/dev/null 2>&1
 	@. venv-web/bin/activate && pip install -r requirements-web.txt
-	@echo "$(GREEN)✅ Servidor web instalado correctamente$(NC)"
+	@echo "$(BLUE)Instalando dependencias Node.js (Astro frontend)...$(NC)"
+	@if ! command -v node >/dev/null 2>&1; then \
+		echo "$(RED)Node.js no encontrado. Instálalo con: brew install node$(NC)"; \
+		exit 1; \
+	fi
+	@cd web && npm install
+	@echo "$(BLUE)Compilando frontend...$(NC)"
+	@cd web && npm run build
+	@echo "$(GREEN)✅ Interfaz web instalada correctamente$(NC)"
 	@echo ""
 	@echo "$(YELLOW)Para usar la interfaz web:$(NC)"
 	@echo "  1. Ejecuta: $(BLUE)make web$(NC)"
 	@echo "  2. Abre tu navegador en: $(BLUE)http://localhost:8000$(NC)"
+
+web-build:
+	@echo "$(GREEN)🔨 Compilando frontend Astro...$(NC)"
+	@cd web && npm run build
+	@echo "$(GREEN)✅ Frontend compilado en web/dist/$(NC)"
+
+web-dev:
+	@echo "$(GREEN)🌐 Iniciando en modo desarrollo...$(NC)"
+	@echo "$(BLUE)Frontend (Astro): http://localhost:3000$(NC)"
+	@echo "$(BLUE)Backend (FastAPI): http://localhost:8000$(NC)"
+	@echo "$(YELLOW)Presiona Ctrl+C para detener$(NC)"
+	@echo ""
+	@if [ ! -d "venv-web" ]; then \
+		echo "$(YELLOW)Ejecuta primero: make install-web$(NC)"; \
+		exit 1; \
+	fi
+	@. venv-web/bin/activate && python disk_analyzer_web.py &
+	@cd web && npm run dev
 
 web:
 	@echo "$(GREEN)🌐 Iniciando servidor web...$(NC)"
@@ -303,11 +339,15 @@ web:
 		echo "$(YELLOW)Las dependencias no están instaladas. Ejecuta: make install-web$(NC)"; \
 		exit 1; \
 	fi
+	@if [ ! -d "web/dist" ]; then \
+		echo "$(BLUE)Frontend no compilado, compilando...$(NC)"; \
+		cd web && npm run build; \
+	fi
 	@echo "$(GREEN)✅ Servidor iniciando en http://localhost:8000$(NC)"
 	@echo "$(BLUE)📚 API Docs en http://localhost:8000/docs$(NC)"
 	@echo "$(YELLOW)Presiona Ctrl+C para detener el servidor$(NC)"
 	@echo ""
-	@. venv-web/bin/activate && python disk_analyzer_web.py
+	@. venv-web/bin/activate && python disk_analyzer_web.py $(if $(min_size),--min-size $(min_size),)
 
 # Comando por defecto
 .DEFAULT_GOAL := help

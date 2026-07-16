@@ -3734,7 +3734,7 @@ class DiskAnalyzer:
 
             lines.push('echo "Limpieza completada. Espacio liberado: ' + formatBytes(totalWasted) + '"');
 
-            const script = lines.join('\n');
+            const script = lines.join('\\n');
             document.getElementById('dupScriptContent').textContent = script;
             document.getElementById('dupScriptModal').style.display = 'flex';
         }
