@@ -1,10 +1,12 @@
 import { useState, useEffect } from 'react';
-import { api, type SessionResults } from '../lib/api';
+import { api, downloadExport, type SessionResults } from '../lib/api';
 import { on, emit } from '../lib/events';
 
 export default function ExportPanel() {
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [sessions, setSessions] = useState<any[]>([]);
+  const [downloading, setDownloading] = useState<'html' | 'json' | 'csv' | null>(null);
+  const [downloadError, setDownloadError] = useState<string | null>(null);
 
   useEffect(() => {
     api.getSessions()
@@ -26,9 +28,17 @@ export default function ExportPanel() {
     return off;
   }, []);
 
-  const download = (format: 'html' | 'json' | 'csv') => {
+  const download = async (format: 'html' | 'json' | 'csv') => {
     if (!sessionId) return;
-    window.open(api.getExportUrl(sessionId, format), '_blank');
+    setDownloadError(null);
+    setDownloading(format);
+    try {
+      await downloadExport(sessionId, format);
+    } catch (err) {
+      setDownloadError(err instanceof Error ? err.message : 'Download failed');
+    } finally {
+      setDownloading(null);
+    }
   };
 
   const formats = [
@@ -64,14 +74,19 @@ export default function ExportPanel() {
           ))}
         </select>
       </div>
+      {downloadError && (
+        <div className="card" style={{ marginBottom: '1rem', color: 'var(--danger, #e5484d)', fontSize: '0.85rem' }}>
+          ⚠️ {downloadError}
+        </div>
+      )}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: '0.75rem' }}>
         {formats.map(f => (
           <div key={f.id} className="card" style={{ display: 'flex', flexDirection: 'column' }}>
             <div style={{ fontSize: '1.5rem', marginBottom: '0.5rem' }}>{f.icon}</div>
             <div style={{ fontWeight: 600, marginBottom: '0.25rem' }}>{f.title}</div>
             <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', flex: 1, marginBottom: '0.75rem' }}>{f.desc}</div>
-            <button className="btn btn-primary" onClick={() => download(f.id)} disabled={!sessionId} style={{ alignSelf: 'flex-start' }}>
-              Download {f.id.toUpperCase()}
+            <button className="btn btn-primary" onClick={() => download(f.id)} disabled={!sessionId || downloading !== null} style={{ alignSelf: 'flex-start' }}>
+              {downloading === f.id ? 'Downloading…' : `Download ${f.id.toUpperCase()}`}
             </button>
           </div>
         ))}

@@ -1,4 +1,4 @@
-import { authHeaders, withToken } from './auth';
+import { authHeaders } from './auth';
 
 const BASE = '/api';
 
@@ -93,6 +93,49 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
   return res.json();
 }
 
+/** Pull a filename out of a Content-Disposition header, if the server sent one. */
+function filenameFromContentDisposition(header: string | null): string | null {
+  if (!header) return null;
+  // RFC 5987 extended form (filename*=UTF-8''...) takes priority when present.
+  const extended = header.match(/filename\*=UTF-8''([^;]+)/i);
+  if (extended) return decodeURIComponent(extended[1]);
+  const simple = header.match(/filename="?([^";]+)"?/i);
+  return simple ? simple[1] : null;
+}
+
+/**
+ * Download an export using an authenticated fetch instead of a plain link.
+ *
+ * `window.open`/`<a href>` navigation cannot attach the `X-Auth-Token`
+ * header, so with auth enabled a direct link to `/api/export/...` always
+ * returns 401. Fetching the blob ourselves keeps the token in a header
+ * (never in a URL, browser history, or server access log) and lets us
+ * trigger a normal browser download via a temporary object URL.
+ */
+export async function downloadExport(id: string, format: 'json' | 'csv' | 'html'): Promise<void> {
+  const res = await fetch(`${BASE}/export/${id}/${format}`, { headers: authHeaders() });
+  if (!res.ok) {
+    const body = await res.text().catch(() => '');
+    throw new Error(`Export failed (${res.status}): ${body || res.statusText}`);
+  }
+  const blob = await res.blob();
+  const fallbackPrefix = format === 'html' ? 'disk_report' : 'disk_analysis';
+  const filename = filenameFromContentDisposition(res.headers.get('Content-Disposition'))
+    ?? `${fallbackPrefix}_${id}.${format}`;
+
+  const objectUrl = URL.createObjectURL(blob);
+  try {
+    const a = document.createElement('a');
+    a.href = objectUrl;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  } finally {
+    URL.revokeObjectURL(objectUrl);
+  }
+}
+
 export const api = {
   getSystemInfo: () => request<SystemInfo>('/system/info'),
   getDrives: () => request<any>('/system/drives'),
@@ -121,8 +164,6 @@ export const api = {
       method: 'DELETE',
       body: JSON.stringify({ path }),
     }),
-  getExportUrl: (id: string, format: 'json' | 'csv' | 'html') =>
-    withToken(`${BASE}/export/${id}/${format}`),
   createTerminal: (command?: string) =>
     request<{ pty_id: string; created_at: string }>('/terminal/create', {
       method: 'POST',
