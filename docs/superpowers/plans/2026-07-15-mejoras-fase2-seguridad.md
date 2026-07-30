@@ -363,7 +363,7 @@ git commit -m "feat(seguridad): validar token en los WebSockets de progreso y te
 
 **Interfaces:**
 - Produces: `AgentsManager.run_agent(agent_id: str, dry_run: bool = True) -> dict`. En dry-run NO ejecuta `subprocess.run`; devuelve `{"agent_id", "dry_run": True, "would_run": [cmd, ...], "freed": 0}`. En real ejecuta como hoy y devuelve además `"dry_run": False`.
-- Produces: `POST /api/agents/{agent_id}/run?confirm=<bool>&dry_run=<bool>` — sin `confirm=true`, corre en dry-run (nunca borra). El scheduler llama `run_agent(agent_id, dry_run=True)` por defecto.
+- Produces: `POST /api/agents/{agent_id}/run?confirm=<bool>` — sin `confirm=true`, corre en dry-run (nunca borra). El scheduler llama `run_agent(agent_id, dry_run=True)` por defecto.
 
 - [ ] **Step 1: Escribir los tests que fallan**
 

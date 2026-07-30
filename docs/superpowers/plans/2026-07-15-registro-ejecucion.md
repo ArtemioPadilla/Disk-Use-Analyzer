@@ -75,17 +75,38 @@ Todos se triaron en la revisión final. Ninguno bloquea:
 
 ## Fase 2 — Seguridad
 
-**Estado:** en curso en la rama `feat/fase2-seguridad`, creada desde `main`
-(`6c633df`). Completado 1 de 6 tasks. Tests: 39 → 45.
+**Estado:** los 5 tasks de implementación están completos en la rama
+`feat/fase2-seguridad`, creada desde `main` (`6c633df`). Tests: 39 → 57.
 
 | Task | Qué hace | Estado |
 |---|---|---|
 | 1 | Auth por token para `/api/*`, CORS restringido a los orígenes de desarrollo, flag `--no-auth` | ✅ `58debfa` |
-| 2 | Validar el token en los dos WebSockets antes de `accept()` | Pendiente |
-| 3 | Agents en modo simulación por defecto; `/run` exige `confirm=true` | Pendiente |
-| 4 | El frontend adjunta el token en REST y WebSockets | Pendiente |
-| 5 | El shell del PTY no hereda descriptores de archivo del servidor | Pendiente |
-| 6 | Verificación integral y revisión final de la rama | Pendiente |
+| 2 | Validar el token en los dos WebSockets antes de `accept()`, cierre 1008 | ✅ `8f6c799` |
+| 3 | Agents en modo simulación por defecto; `/run` exige `confirm=true` | ✅ `2bf082c` |
+| 4 | El frontend adjunta el token en REST y WebSockets | ✅ `ff44e7a`, `078915c`, `abbbb2b` |
+| 5 | El shell del PTY no hereda descriptores de archivo del servidor | ✅ `e601638` |
+| 6 | Verificación integral y revisión final de la rama | En curso |
+
+### Alcance añadido durante la ejecución
+
+Dos cosas que el plan no anticipaba y que se resolvieron dentro de la fase,
+porque la propia fase las rompió:
+
+- **El panel de agents quedó como un botón muerto.** El Task 3 hizo que `/run`
+  simule si no recibe `confirm=true`, así que el botón "Run now" de
+  `AgentsPanel.tsx` dejó de hacer nada visible. Se arregló en el Task 4: el
+  botón pide una confirmación al usuario mostrando los comandos exactos que se
+  van a ejecutar, y luego manda `confirm=true`. Falla cerrado: si la sonda de
+  simulación no responde bien, cancela en vez de ejecutar sin haber mostrado el
+  diálogo.
+- **Las descargas de export daban 401.** Se abrían con `window.open`, que no
+  puede mandar el header del token. Se cambió a descarga por `fetch`
+  autenticado más blob (commit `078915c`), y se eliminó `getExportUrl`. Se
+  descartó deliberadamente la alternativa de aceptar el token como query param
+  en el backend: filtraría el token a los logs del servidor y al historial del
+  navegador, y tocar la puerta de autenticación arriesga abrir un bypass.
+
+### Decisiones de diseño de la fase
 
 ### Decisiones de diseño de la fase
 
@@ -103,6 +124,8 @@ Todos se triaron en la revisión final. Ninguno bloquea:
 |---|---|---|
 | 1 | `tests/conftest.py` parchea los atributos `NO_AUTH` y `AUTH_TOKEN` del módulo con `monkeypatch.setattr`, además de la variable de entorno | La versión del plan (solo entorno) dependía del orden de ejecución: los archivos de test importan `app` al colectarse, antes de que corra cualquier fixture, así que los valores ya estaban calculados. Con el plan literal, `test_cleanup_api.py` y `test_terminal_api.py` fallaban con 401 al correr aislados |
 | 1 | El middleware de autenticación se registra antes que el de CORS, al revés de lo que decía el plan | Starlette ejecuta los middlewares en orden inverso al de registro, así que este orden deja el de CORS por fuera y las respuestas 401 llevan sus headers. Verificado empíricamente |
+| 2 | El helper de test afirma que el código de cierre sea 1008, no solo que el WebSocket se cierre | Sin esa afirmación el test del WebSocket del terminal era un falso positivo: ya se cerraba con 4004 por la verificación preexistente de `pty_id`, así que habría pasado antes del arreglo. La afirmación del código es lo que prueba que la puerta del token corre primero |
+| 5 | El test fuerza un descriptor heredable con `os.set_inheritable(w, True)` en vez de usar el `os.pipe()` simple del plan, y lo sondea con un builtin del shell en vez de `ls -l /dev/fd` | Desde PEP 446 (Python 3.4+), `os.pipe()`, `os.openpty()` y `socket.socket()` ya devuelven descriptores no heredables, así que `exec()` los cierra incluso sin el arreglo: el test del plan habría pasado por la razón equivocada |
 
 ### Hallazgos menores diferidos
 
@@ -111,6 +134,20 @@ Todos se triaron en la revisión final. Ninguno bloquea:
 | `/docs` y `/openapi.json` quedan sin autenticación | Fuera del alcance declarado (solo `/api/*`). Exponen el esquema, no datos |
 | El test de rutas abiertas solo cubre `/`, no los montajes `/static` ni `/_astro` | Sin riesgo: están fuera del prefijo que revisa el middleware |
 | Falta el salto de línea final en `disk_analyzer_web.py` | Cosmético |
+| La segunda llamada de `AgentsPanel` (la real, con `confirm=true`) no revisa `res.ok` antes de `res.json()` | No es un bypass: el diálogo ya se mostró. Solo degrada el mensaje de error a uno genérico |
+| La lógica de arranque del token está duplicada en `auth.ts` y en el script inline de `MainLayout.astro` | Deliberado: el script inline limpia la URL en el primer render, antes de que hidrate cualquier isla. Hay que mantener las dos copias en sincronía a mano |
+| No hay tests de frontend para la lógica de fallo cerrado | El repo no tiene suite de JS. Candidato para la Fase 5 |
+| El token viaja en la query string de los WebSockets sobre `ws://` sin cifrar | Inevitable: el `WebSocket` del navegador no puede mandar headers. Asumido por el modelo de confianza de LAN que ya documenta `CLAUDE.md` |
+
+### Nota honesta sobre el alcance real del Task 5
+
+El arreglo de descriptores de archivo es defensa en profundidad, no el cierre de
+un agujero explotable hoy. Desde PEP 446, los descriptores que abre el propio
+Python (el maestro del PTY, el socket de uvicorn) ya son no heredables por
+defecto, así que `exec()` los cerraba de todos modos. El `closerange` protege
+contra descriptores que sí sean heredables, presentes o futuros, sin depender de
+que cada punto del código recuerde marcarlos. Vale registrarlo así para que
+nadie sobrevalore la severidad al leer el historial.
 
 ## Fases 0 y 3 a 5
 

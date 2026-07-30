@@ -7,13 +7,13 @@ cuál es la siguiente acción y cómo ejecutarla.
 
 ## Estado de un vistazo
 
-Última actualización: 15 de julio de 2026. Tests: **45 passed**.
+Última actualización: 15 de julio de 2026. Tests: **57 passed**.
 
 | Fase | Alcance | Plan | Estado |
 |---|---|---|---|
 | 0 | Higiene del repo (destrackear `.pyc`, borrar ~12 MB de reportes) | En el roadmap, sin plan TDD | Pendiente |
 | 1 | Bugs críticos del backend (6 fixes) | [Fase 1](2026-07-15-mejoras-fase1-bugs-criticos.md) | ✅ Completa, mergeada a `main` (PR #5) |
-| 2 | Seguridad (auth, CORS, agents, fds del PTY) | [Fase 2](2026-07-15-mejoras-fase2-seguridad.md) | 🔄 En curso: 1 de 6 tasks |
+| 2 | Seguridad (auth, CORS, agents, fds del PTY) | [Fase 2](2026-07-15-mejoras-fase2-seguridad.md) | ✅ Implementación completa en `feat/fase2-seguridad`, sin mergear |
 | 3 | Motor compartido (deduplicar CLI vs core) | Solo esbozo en el roadmap | Pendiente |
 | 4 | Frontend (cleanup runner, sesiones, tipos, código muerto) | Solo esbozo en el roadmap | Pendiente |
 | 5 | Tests del motor y CI | Solo esbozo en el roadmap | Pendiente |
@@ -29,33 +29,38 @@ Documentos de referencia:
 
 ## Siguiente acción
 
-Ejecutar el **Task 2 de la Fase 2**: autenticación de los dos WebSockets
-(validar `?token=` antes de `accept()`, cerrar con código 1008). El texto
-completo del task está en el
-[plan de la Fase 2](2026-07-15-mejoras-fase2-seguridad.md), sección "Task 2".
+La Fase 2 está implementada y verificada en `feat/fase2-seguridad`, pero **sin
+mergear**: falta decidir si se abre un pull request hacia `main` (como se hizo
+con la Fase 1) o se sigue trabajando sobre la rama.
 
-Trabaja en la rama `feat/fase2-seguridad`. Los tasks 3 a 6 de esa fase siguen
-después, en orden.
+Después de eso, la siguiente pieza de trabajo es escribir el plan detallado de
+una de las fases pendientes. Recomendación: la **Fase 3** (motor compartido),
+porque la duplicación entre `disk_analyzer.py` y `disk_analyzer_core.py` es la
+que hace que cada bug haya que arreglarlo dos veces. Su alcance está en el
+[roadmap](2026-07-15-roadmap-mejoras.md#fase-3--motor-compartido-plan-detallado-pendiente).
+La Fase 0 (higiene) son 15 minutos y no necesita plan.
 
 ## Cómo ejecutar un plan
 
 Los planes están escritos para el skill `superpowers:subagent-driven-development`
 (un subagente por task, con revisión entre tasks). El flujo por task es:
 
-1. Extrae el texto del task a un archivo:
-   `<skill>/scripts/task-brief docs/superpowers/plans/<plan>.md <N>`
+1. Extrae el texto del task a un archivo con el script `task-brief` del skill.
 2. Despacha un subagente implementador con ese brief más el contexto que el
    brief no puede conocer (interfaces de tasks anteriores, decisiones tomadas).
-3. Genera el paquete de revisión:
-   `<skill>/scripts/review-package <BASE> HEAD`
+3. Genera el paquete de revisión con el script `review-package` del skill.
 4. Despacha un subagente revisor con el brief, el reporte del implementador y
    el paquete. No marques el task como completo mientras queden hallazgos
    críticos o importantes.
 5. Registra el resultado en el
    [registro de ejecución](2026-07-15-registro-ejecucion.md).
 
-`<skill>` es
-`~/.claude/plugins/cache/claude-plugins-official/superpowers/<versión>/skills/subagent-driven-development`.
+Los scripts viven en
+`~/.claude/plugins/cache/claude-plugins-official/superpowers/<versión>/skills/subagent-driven-development/scripts/`.
+Sus argumentos cambian entre versiones del skill (por ejemplo, la 6.2.0 le
+agregó el archivo del plan como primer argumento a los dos), así que
+ejecútalos sin argumentos para ver el uso actual en vez de copiar una firma de
+aquí.
 
 También puedes ejecutar los tasks a mano: cada uno trae sus tests y su código
 completos, en pasos de 2 a 5 minutos. El skill no es un requisito.
@@ -88,12 +93,20 @@ La suite pasó de 18 tests (antes de la Fase 1) a 45. Los archivos
 
 Cosas que sorprenden si no las sabes:
 
-- **La UI web devuelve 401 en la rama `feat/fase2-seguridad`.** El Task 1 activó
-  la autenticación por token en el backend, pero el frontend todavía no lo
-  adjunta: eso es el Task 4. Mientras tanto, arranca con
-  `venv-web/bin/python disk_analyzer_web.py --no-auth` para probar la interfaz,
-  o llama al API con el header `X-Auth-Token`. Es un estado intermedio
-  esperado de la fase, no un bug.
+- **Ahora hay que abrir la web con el enlace que imprime el servidor.** Con la
+  Fase 2, el arranque imprime `http://localhost:8000/?token=...`. Ese token se
+  guarda en `sessionStorage` y se limpia de la URL, así que basta abrirlo una
+  vez por sesión del navegador. Si abres `http://localhost:8000` a secas sin
+  haber cargado antes el enlace con token, la interfaz da 401. Para saltarte
+  todo eso en una red aislada: `disk_analyzer_web.py --no-auth`.
+- **El token vive en `sessionStorage`, no en `localStorage`.** Se pierde al
+  cerrar la pestaña, a propósito: hay que volver a abrir el enlace con token.
+  Es el compromiso elegido para una herramienta local de un solo usuario.
+- **Los agents simulan por defecto.** `POST /api/agents/{id}/run` no borra nada
+  sin `?confirm=true`, y el planificador de fondo quedó en simulación
+  permanente: solo registra en el log qué borraría. El botón "Run now" de la
+  interfaz pide confirmación mostrando los comandos exactos antes de ejecutar
+  de verdad.
 - **El token debe viajar por variable de entorno, no por `app.state`.** El
   servidor corre con `reload=True`, así que uvicorn re-importa el módulo en un
   subproceso: cualquier cosa que definas solo en el bloque `__main__` no llega
