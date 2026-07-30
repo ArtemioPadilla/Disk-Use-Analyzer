@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { formatBytes } from '../lib/format';
+import { authHeaders } from '../lib/auth';
 
 interface Digest {
   generated_at: string;
@@ -15,7 +16,7 @@ export default function WeeklyDigest() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    fetch('/api/digest')
+    fetch('/api/digest', { headers: authHeaders() })
       .then(r => r.json())
       .then(setDigest)
       .catch(console.error)

@@ -1,3 +1,5 @@
+import { authHeaders, withToken } from './auth';
+
 const BASE = '/api';
 
 export interface SystemInfo {
@@ -81,8 +83,8 @@ export interface SessionResults {
 
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
   const res = await fetch(`${BASE}${path}`, {
-    headers: { 'Content-Type': 'application/json' },
     ...options,
+    headers: { 'Content-Type': 'application/json', ...authHeaders(), ...(options?.headers ?? {}) },
   });
   if (!res.ok) {
     const body = await res.text();
@@ -120,7 +122,7 @@ export const api = {
       body: JSON.stringify({ path }),
     }),
   getExportUrl: (id: string, format: 'json' | 'csv' | 'html') =>
-    `${BASE}/export/${id}/${format}`,
+    withToken(`${BASE}/export/${id}/${format}`),
   createTerminal: (command?: string) =>
     request<{ pty_id: string; created_at: string }>('/terminal/create', {
       method: 'POST',

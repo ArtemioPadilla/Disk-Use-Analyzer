@@ -1,5 +1,6 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
 import { api } from '../lib/api';
+import { withToken } from '../lib/auth';
 import { emit } from '../lib/events';
 
 export function useTerminal() {
@@ -9,7 +10,7 @@ export function useTerminal() {
   const onDataRef = useRef<((data: string | ArrayBuffer) => void) | null>(null);
 
   const connect = useCallback((id: string) => {
-    const wsUrl = `ws://${window.location.host}/ws/terminal/${id}`;
+    const wsUrl = withToken(`ws://${window.location.host}/ws/terminal/${id}`);
     const ws = new WebSocket(wsUrl);
     ws.binaryType = 'arraybuffer';
     wsRef.current = ws;

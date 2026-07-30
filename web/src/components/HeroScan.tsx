@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { api } from '../lib/api';
+import { authHeaders } from '../lib/auth';
 import { on, emit } from '../lib/events';
 
 export default function HeroScan() {
@@ -8,7 +9,7 @@ export default function HeroScan() {
 
   useEffect(() => {
     // Check if there are any completed results
-    fetch('/api/analysis/latest').then(r => {
+    fetch('/api/analysis/latest', { headers: authHeaders() }).then(r => {
       if (r.ok) {
         r.json().then(data => {
           setHasResults(true);

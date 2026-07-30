@@ -5,6 +5,7 @@
  */
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { api, type AnalysisSession, type SessionResults } from '../lib/api';
+import { withToken } from '../lib/auth';
 import { on, emit } from '../lib/events';
 
 export default function AnalysisManager() {
@@ -46,7 +47,7 @@ export default function AnalysisManager() {
   useEffect(() => {
     if (!sessionId) return;
 
-    const wsUrl = `ws://${window.location.host}/ws/${sessionId}`;
+    const wsUrl = withToken(`ws://${window.location.host}/ws/${sessionId}`);
     const ws = new WebSocket(wsUrl);
     wsRef.current = ws;
 

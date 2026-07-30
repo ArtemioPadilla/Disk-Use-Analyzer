@@ -1,4 +1,5 @@
 import { useEffect, useRef, useCallback, useState } from 'react';
+import { withToken } from '../lib/auth';
 
 interface UseWebSocketOptions {
   url: string;
@@ -14,7 +15,7 @@ export function useWebSocket({ url, onMessage, onClose, enabled = true }: UseWeb
 
   const connect = useCallback(() => {
     if (!enabled) return;
-    const wsUrl = `ws://${window.location.host}${url}`;
+    const wsUrl = withToken(`ws://${window.location.host}${url}`);
     const ws = new WebSocket(wsUrl);
     wsRef.current = ws;
 

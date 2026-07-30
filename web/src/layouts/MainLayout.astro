@@ -20,6 +20,32 @@ const { title, currentPath } = Astro.props;
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>{title} — Disk Analyzer</title>
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <!--
+      Auth token bootstrap, inlined so it runs synchronously on first paint —
+      before any React island hydrates or fetches anything. This is a static
+      multi-page Astro site (full page loads between routes), so on every
+      navigation the `?token=` query param would otherwise sit visible in the
+      address bar/history until `web/src/lib/auth.ts` gets imported by a
+      module script, which only happens once an island bundle loads and runs
+      (client:load/client:idle are deferred). Stripping it here, as vanilla JS
+      with no dependencies, closes that window. `lib/auth.ts` runs the same
+      bootstrap logic on import for non-page contexts (tests, direct module
+      use); both are idempotent since the second run just finds no `?token=`
+      left to strip.
+    -->
+    <script is:inline>
+      (function () {
+        var params = new URLSearchParams(window.location.search);
+        var token = params.get('token');
+        if (token) {
+          sessionStorage.setItem('da_token', token);
+          params.delete('token');
+          var qs = params.toString();
+          var clean = window.location.pathname + (qs ? '?' + qs : '') + window.location.hash;
+          window.history.replaceState({}, '', clean);
+        }
+      })();
+    </script>
   </head>
   <body>
     <div class="app-shell">
