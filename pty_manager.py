@@ -73,6 +73,13 @@ class PTYSession:
             os.dup2(slave_fd, 2)
             if slave_fd > 2:
                 os.close(slave_fd)
+            # Close any inherited fds (other sessions' PTY masters, the uvicorn
+            # socket, etc.) so the spawned shell can't touch them.
+            try:
+                max_fd = os.sysconf("SC_OPEN_MAX")
+            except (AttributeError, ValueError):
+                max_fd = 1024
+            os.closerange(3, max_fd)
             os.execvp(args[0], args)
         else:
             # Parent process
