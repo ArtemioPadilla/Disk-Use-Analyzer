@@ -2,6 +2,16 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Active Work: Improvement Plan
+
+There is a phased improvement plan in progress. **Before starting work on the backend, security, or the web UI, read `docs/superpowers/plans/README.md`** — it holds the current state, the next action, and the gotchas of the intermediate state (the plan documents are in Spanish).
+
+- `docs/superpowers/plans/README.md` — entry point: status table, next action, how to execute a plan, verification commands
+- `docs/superpowers/plans/2026-07-15-roadmap-mejoras.md` — the deep assessment (19 verified findings) and the scope of the 6 phases
+- `docs/superpowers/plans/2026-07-15-registro-ejecucion.md` — what was actually implemented, with commits, approved plan deviations, and deferred findings
+
+Current state: Phase 1 (backend bugs) is merged to `main`; Phase 2 (security) is in progress on `feat/fase2-seguridad`. Note that on that branch the web UI returns 401 until the frontend token task lands — use `--no-auth` to test the UI meanwhile.
+
 ## Build and Test Commands
 
 ```bash
@@ -66,7 +76,8 @@ This is a **macOS Disk Usage Analyzer** - a powerful standalone Python tool for 
 ├── static/                 # Legacy web static assets (fallback)
 ├── docs/                   # Documentation
 │   ├── FAQ.md              # Frequently Asked Questions
-│   └── examples/           # Usage examples
+│   ├── examples/           # Usage examples
+│   └── superpowers/plans/  # Phased improvement plan (start at README.md)
 └── utils/                  # Helper scripts
 ```
 
