@@ -108,12 +108,25 @@ class AgentsManager:
         self._save_state()
         _log(f"Agent {agent_id} {'enabled' if enabled else 'disabled'}")
 
-    def run_agent(self, agent_id: str) -> dict:
-        """Run an agent immediately. Returns result."""
+    def run_agent(self, agent_id: str, dry_run: bool = True) -> dict:
+        """Run an agent. dry_run=True (default) reports what WOULD run without
+        executing anything -- no subprocess is invoked. Pass dry_run=False to
+        actually execute the agent's commands."""
         if agent_id not in AGENT_DEFINITIONS:
             raise ValueError(f"Unknown agent: {agent_id}")
 
         defn = AGENT_DEFINITIONS[agent_id]
+
+        if dry_run:
+            _log(f"[dry-run] agent {agent_id}: would run {defn['commands']}")
+            return {
+                "agent_id": agent_id,
+                "dry_run": True,
+                "would_run": list(defn["commands"]),
+                "freed": 0,
+                "results": [],
+            }
+
         usage_before = shutil.disk_usage("/").used
 
         results = []
@@ -150,6 +163,7 @@ class AgentsManager:
 
         return {
             "agent_id": agent_id,
+            "dry_run": False,
             "freed": freed,
             "results": results,
         }
@@ -168,10 +182,15 @@ class AgentsManager:
                     elapsed = (datetime.now() - datetime.fromisoformat(last_run)).total_seconds() / 3600
                     if elapsed < defn["interval_hours"]:
                         continue
-                # Time to run
-                _log(f"Scheduler running agent: {agent_id}")
+                # Time to run.
+                # Design decision (Phase 2): the scheduler stays in permanent
+                # dry-run -- it only logs what it would delete. Unattended
+                # real deletion is a product decision deferred to a later
+                # phase; users can trigger a real run on demand via
+                # POST /api/agents/{id}/run?confirm=true.
+                _log(f"Scheduler running agent (dry-run): {agent_id}")
                 try:
-                    self.run_agent(agent_id)
+                    self.run_agent(agent_id, dry_run=True)
                 except Exception as e:
                     _log(f"Scheduler error for {agent_id}: {e}")
 

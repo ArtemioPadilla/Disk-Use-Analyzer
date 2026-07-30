@@ -1194,9 +1194,12 @@ async def toggle_agent(agent_id: str, enabled: bool = True):
         raise HTTPException(status_code=404, detail=str(e))
 
 @app.post("/api/agents/{agent_id}/run")
-async def run_agent(agent_id: str):
+async def run_agent(agent_id: str, confirm: bool = False):
+    """Run an agent. Without confirm=true this is a dry-run (nothing is deleted)."""
     try:
-        result = agents_manager.run_agent(agent_id)
+        result = await asyncio.to_thread(
+            agents_manager.run_agent, agent_id, not confirm
+        )
         return result
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
