@@ -774,6 +774,9 @@ async def get_latest_results():
 @app.websocket("/ws/{session_id}")
 async def websocket_endpoint(websocket: WebSocket, session_id: str):
     """WebSocket for real-time progress updates"""
+    if not _token_is_valid(websocket.query_params.get("token")):
+        await websocket.close(code=1008)
+        return
     await websocket.accept()
     
     # Add to connection pool
@@ -1137,6 +1140,9 @@ async def kill_terminal(pty_id: str):
 @app.websocket("/ws/terminal/{pty_id}")
 async def terminal_websocket(websocket: WebSocket, pty_id: str):
     """Bidirectional WebSocket: stdin from browser -> PTY, stdout from PTY -> browser."""
+    if not _token_is_valid(websocket.query_params.get("token")):
+        await websocket.close(code=1008)
+        return
     if pty_id not in pty_manager.sessions:
         await websocket.close(code=4004, reason="No such session")
         return

@@ -53,3 +53,47 @@ class TestHttpAuth:
         _, client = _load_app(monkeypatch, no_auth=True)
         resp = client.get("/api/system/info")
         assert resp.status_code == 200
+
+
+import contextlib
+
+import pytest
+from starlette.websockets import WebSocketDisconnect
+
+
+@contextlib.contextmanager
+def pytest_raises_ws_close(expected_code=1008):
+    # Starlette's TestClient raises WebSocketDisconnect when the server closes
+    # before/at accept. We additionally assert the close code is the auth
+    # gate's 1008 (policy violation) so this test can't pass "by accident"
+    # via some other pre-accept close path (e.g. the terminal WS's unrelated
+    # "no such pty session" -> 4004 close, which fires if the auth check
+    # isn't actually first).
+    with pytest.raises(WebSocketDisconnect) as exc_info:
+        yield
+    assert exc_info.value.code == expected_code
+
+
+class TestWebSocketAuth:
+    def test_progress_ws_without_token_rejected(self, monkeypatch):
+        _, client = _load_app(monkeypatch, token="secret1")
+        with pytest_raises_ws_close():
+            with client.websocket_connect("/ws/does-not-exist"):
+                pass
+
+    def test_progress_ws_with_token_accepts(self, monkeypatch):
+        _, client = _load_app(monkeypatch, token="secret1")
+        # A valid token must let the handshake through (session unknown is fine)
+        with client.websocket_connect("/ws/unknown-session?token=secret1") as ws:
+            ws.send_text("ping")
+            assert ws.receive_text() == "pong"
+
+    def test_terminal_ws_without_token_rejected(self, monkeypatch):
+        _, client = _load_app(monkeypatch, token="secret1")
+        # Uses a pty_id that doesn't exist. Asserting code==1008 (not the
+        # existence check's 4004) proves the token gate runs BEFORE the
+        # pty_id lookup, so unauthenticated clients can't probe which
+        # sessions exist.
+        with pytest_raises_ws_close():
+            with client.websocket_connect("/ws/terminal/whatever"):
+                pass
