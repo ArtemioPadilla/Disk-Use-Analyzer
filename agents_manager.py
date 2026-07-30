@@ -14,10 +14,21 @@ AGENTS_LOG = Path.home() / ".disk-analyzer" / "agents.log"
 
 
 def _log(msg: str):
-    AGENTS_LOG.parent.mkdir(parents=True, exist_ok=True)
-    timestamp = datetime.now().isoformat()
-    with open(AGENTS_LOG, 'a') as f:
-        f.write(f"[{timestamp}] {msg}\n")
+    """Append a line to the agents log. Best-effort: logging is a side
+    observation of an operation, not a precondition for it, so any I/O
+    failure here (e.g. agents.log left root-owned by a previous
+    `sudo make web` run) is swallowed and reported as a warning instead of
+    crashing the caller. Programming errors (TypeError, etc.) still raise
+    normally -- only OSError (PermissionError, disk full, missing dir, ...)
+    is treated as best-effort.
+    """
+    try:
+        AGENTS_LOG.parent.mkdir(parents=True, exist_ok=True)
+        timestamp = datetime.now().isoformat()
+        with open(AGENTS_LOG, 'a') as f:
+            f.write(f"[{timestamp}] {msg}\n")
+    except OSError as e:
+        print(f"Warning: could not write to agents log {AGENTS_LOG}: {e}")
 
 
 AGENT_DEFINITIONS = {
@@ -75,10 +86,23 @@ class AgentsManager:
             pass
         return {}
 
-    def _save_state(self):
-        AGENTS_FILE.parent.mkdir(parents=True, exist_ok=True)
-        with open(AGENTS_FILE, 'w') as f:
-            json.dump(self.agents_state, f, indent=2)
+    def _save_state(self) -> bool:
+        """Persist agents state to disk. Unlike _log(), a failure here is
+        consequential (an agent run's bookkeeping would silently vanish), so
+        it must not be pretended-successful. It still must not crash the
+        caller mid-operation (e.g. after a real cleanup already ran) --
+        instead it is caught, warned about, and reported back via the
+        return value so callers can surface it to the user.
+        Returns True on success, False if the state could not be written.
+        """
+        try:
+            AGENTS_FILE.parent.mkdir(parents=True, exist_ok=True)
+            with open(AGENTS_FILE, 'w') as f:
+                json.dump(self.agents_state, f, indent=2)
+            return True
+        except OSError as e:
+            print(f"Warning: could not save agents state to {AGENTS_FILE}: {e}")
+            return False
 
     def get_agents(self) -> list:
         """Return all agents with their status."""
@@ -157,16 +181,26 @@ class AgentsManager:
         state["last_freed"] = freed
         state["total_freed"] = state.get("total_freed", 0) + freed
         state["run_count"] = state.get("run_count", 0) + 1
-        self._save_state()
+        state_saved = self._save_state()
 
         _log(f"Agent {agent_id} ran: freed {freed} bytes, {len(results)} commands")
 
-        return {
+        response = {
             "agent_id": agent_id,
             "dry_run": False,
             "freed": freed,
             "results": results,
+            "state_saved": state_saved,
         }
+        if not state_saved:
+            # Surface the persistence failure -- the cleanup itself already
+            # ran, but its bookkeeping (last_run/total_freed/run_count) was
+            # NOT recorded and may be lost.
+            response["warning"] = (
+                "La limpieza se ejecutó, pero no se pudo guardar el estado del "
+                "agente (revisa permisos de ~/.disk-analyzer)."
+            )
+        return response
 
     async def start_scheduler(self):
         """Start the background scheduler loop."""
