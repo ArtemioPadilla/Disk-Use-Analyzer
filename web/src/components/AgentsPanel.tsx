@@ -46,8 +46,20 @@ export default function AgentsPanel() {
       // of these commands (e.g. `rm -rf ~/Library/Caches/*`) are destructive
       // and irreversible.
       const dryRes = await fetch(`/api/agents/${id}/run`, { method: 'POST', headers: authHeaders() });
+      if (!dryRes.ok) {
+        // Fail closed: if we can't even confirm what this agent would do,
+        // never fall through to the destructive confirm=true call.
+        setLastOutcome(prev => ({ ...prev, [id]: { dry_run: true, error: `Could not check what this agent would do (HTTP ${dryRes.status}). Run cancelled.` } }));
+        return;
+      }
       const dry = await dryRes.json();
-      const commands: string[] = dry.would_run ?? [];
+      if (!Array.isArray(dry.would_run)) {
+        // Fail closed: an unexpected response shape is treated the same as a
+        // failed probe, NOT as "no commands, safe to skip the confirmation."
+        setLastOutcome(prev => ({ ...prev, [id]: { dry_run: true, error: 'Unexpected response while checking this agent. Run cancelled.' } }));
+        return;
+      }
+      const commands: string[] = dry.would_run;
 
       if (commands.length > 0) {
         const ok = window.confirm(
