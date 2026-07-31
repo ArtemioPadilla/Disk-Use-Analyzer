@@ -76,6 +76,13 @@ class AgentsManager:
     def __init__(self):
         self.agents_state: Dict = self._load_state()
         self._task: Optional[asyncio.Task] = None
+        # Throttling bookkeeping for the scheduler's dry-run log line (see
+        # start_scheduler()). Intentionally NOT persisted to AGENTS_FILE and
+        # NOT the same field as agents_state[...]["last_run"] -- it only
+        # controls log noise and must reset naturally on restart, whereas
+        # last_run must stay unset forever for the permanent-dry-run policy
+        # to keep working.
+        self._last_dry_run_notice: Dict[str, datetime] = {}
 
     def _load_state(self) -> Dict:
         try:
@@ -122,15 +129,20 @@ class AgentsManager:
             })
         return result
 
-    def toggle_agent(self, agent_id: str, enabled: bool):
-        """Enable or disable an agent."""
+    def toggle_agent(self, agent_id: str, enabled: bool) -> dict:
+        """Enable or disable an agent. Returns whether the change was
+        actually persisted, so callers (the API endpoint) can tell the
+        difference between "saved" and "lives only in memory until the next
+        write or process restart" -- consistent with run_agent()'s
+        state_saved/warning fields."""
         if agent_id not in AGENT_DEFINITIONS:
             raise ValueError(f"Unknown agent: {agent_id}")
         if agent_id not in self.agents_state:
             self.agents_state[agent_id] = {}
         self.agents_state[agent_id]["enabled"] = enabled
-        self._save_state()
+        state_saved = self._save_state()
         _log(f"Agent {agent_id} {'enabled' if enabled else 'disabled'}")
+        return {"state_saved": state_saved}
 
     def run_agent(self, agent_id: str, dry_run: bool = True) -> dict:
         """Run an agent. dry_run=True (default) reports what WOULD run without
@@ -222,6 +234,24 @@ class AgentsManager:
                 # real deletion is a product decision deferred to a later
                 # phase; users can trigger a real run on demand via
                 # POST /api/agents/{id}/run?confirm=true.
+                #
+                # Throttling: dry-run intentionally never sets last_run (see
+                # comment above), so the "time to run" branch above would
+                # otherwise trip on *every* hourly tick forever once an agent
+                # is enabled -- writing an identical "[dry-run] ..." line to
+                # agents.log 24x/day (and drowning /api/digest's log tail in
+                # noise), in a tool whose whole point is flagging runaway
+                # disk usage. `_last_dry_run_notice` is separate, in-memory,
+                # log-only throttling state: it limits the notice to once per
+                # the agent's own interval_hours, without touching
+                # `last_run`/agents_state (which must stay as-is for the
+                # permanent-dry-run policy above and for persistence).
+                last_notice = self._last_dry_run_notice.get(agent_id)
+                if last_notice:
+                    since_notice = (datetime.now() - last_notice).total_seconds() / 3600
+                    if since_notice < defn["interval_hours"]:
+                        continue
+                self._last_dry_run_notice[agent_id] = datetime.now()
                 _log(f"Scheduler running agent (dry-run): {agent_id}")
                 try:
                     self.run_agent(agent_id, dry_run=True)

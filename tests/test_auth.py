@@ -54,6 +54,56 @@ class TestHttpAuth:
         resp = client.get("/api/system/info")
         assert resp.status_code == 200
 
+    def test_non_ascii_token_header_is_401_not_500(self, monkeypatch):
+        """secrets.compare_digest() raises TypeError on non-ASCII `str` args,
+        and Starlette decodes headers as latin-1 -- a hostile
+        "X-Auth-Token: café" header must fail closed (401), not crash the
+        request with an unhandled TypeError (500). httpx/TestClient refuses
+        to even build a request with a non-ASCII str header value, so this
+        drives _token_is_valid() directly with the same kind of string
+        Starlette would hand it (a latin-1 decode of UTF-8 bytes)."""
+        module, _ = _load_app(monkeypatch, token="secret1")
+        hostile = "café".encode("utf-8").decode("latin-1")
+        assert module._token_is_valid(hostile) is False
+
+    def test_non_ascii_token_header_via_raw_asgi_is_401(self, monkeypatch):
+        """End-to-end version of the above via a raw ASGI request (bypassing
+        httpx's client-side header validation) to prove the whole request
+        path -- not just the helper function -- fails closed instead of 500."""
+        import asyncio
+
+        module, _ = _load_app(monkeypatch, token="secret1")
+
+        async def _raw_get(app, headers):
+            scope = {
+                "type": "http",
+                "method": "GET",
+                "path": "/api/system/info",
+                "raw_path": b"/api/system/info",
+                "query_string": b"",
+                "headers": headers,
+                "http_version": "1.1",
+                "scheme": "http",
+                "server": ("testserver", 80),
+                "client": ("testclient", 123),
+                "root_path": "",
+            }
+            messages = []
+
+            async def receive():
+                return {"type": "http.request", "body": b"", "more_body": False}
+
+            async def send(message):
+                messages.append(message)
+
+            await app(scope, receive, send)
+            return next(m["status"] for m in messages if m["type"] == "http.response.start")
+
+        status = asyncio.run(
+            _raw_get(module.app, [(b"x-auth-token", "café".encode("utf-8"))])
+        )
+        assert status == 401
+
 
 import contextlib
 

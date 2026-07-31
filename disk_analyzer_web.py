@@ -49,7 +49,20 @@ def _token_is_valid(provided: str | None) -> bool:
         return True
     if not AUTH_TOKEN or not provided:
         return False
-    return secrets.compare_digest(provided, AUTH_TOKEN)
+    # secrets.compare_digest() raises TypeError on `str` arguments containing
+    # non-ASCII characters. Starlette decodes request headers as latin-1, so
+    # a hostile "X-Auth-Token" header (or WS "token" query param) containing
+    # non-ASCII bytes reaches this function as a `str` that trips that
+    # restriction -- an unauthenticated crash on the very function whose job
+    # is rejecting hostile input. Comparing as bytes sidesteps the ASCII-only
+    # restriction entirely and still runs in constant time.
+    try:
+        return secrets.compare_digest(
+            provided.encode("utf-8", "surrogateescape"),
+            AUTH_TOKEN.encode("utf-8", "surrogateescape"),
+        )
+    except TypeError:
+        return False
 
 
 def require_token(request: Request) -> None:
@@ -105,7 +118,18 @@ agents_manager = AgentsManager()
 # Session persistence
 SESSIONS_FILE = Path("sessions_metadata.json")
 RESULTS_DIR = Path.home() / ".disk-analyzer" / "results"
-RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+try:
+    RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+except OSError as e:
+    # ~/.disk-analyzer can be root-owned (e.g. left behind by a previous
+    # `sudo make web` run) while results/ doesn't exist yet under it -- mkdir()
+    # then raises PermissionError at *import time*, which crashes the server
+    # before it can bind a socket (and crash-loops the uvicorn --reload
+    # worker). save_analysis_results()/load_analysis_results() already
+    # degrade gracefully (best-effort try/except) when RESULTS_DIR isn't
+    # writable, so it's safe to just warn here and let the server boot
+    # without result persistence.
+    print(f"Warning: No se pudo crear {RESULTS_DIR}: {e}. Los resultados de análisis no se guardarán en disco.")
 MAX_STORED_RESULTS = 10
 
 def save_session_metadata():
@@ -1188,8 +1212,22 @@ async def list_agents():
 @app.post("/api/agents/{agent_id}/toggle")
 async def toggle_agent(agent_id: str, enabled: bool = True):
     try:
-        agents_manager.toggle_agent(agent_id, enabled)
-        return {"status": "ok", "agent_id": agent_id, "enabled": enabled}
+        result = agents_manager.toggle_agent(agent_id, enabled)
+        response = {
+            "status": "ok",
+            "agent_id": agent_id,
+            "enabled": enabled,
+            "state_saved": result["state_saved"],
+        }
+        if not result["state_saved"]:
+            # The toggle took effect in memory but the change did not reach
+            # disk -- it will silently revert on the next restart. Surface
+            # that instead of pretending the change is durable.
+            response["warning"] = (
+                "El cambio se aplicó, pero no se pudo guardar el estado del "
+                "agente (revisa permisos de ~/.disk-analyzer)."
+            )
+        return response
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
 
@@ -1335,18 +1373,38 @@ async def get_persona():
 
 @app.get("/{path:path}")
 async def serve_astro(path: str):
-    """Serve Astro frontend pages. API routes take priority (registered first)."""
+    """Serve Astro frontend pages. API routes take priority (registered first).
+
+    SECURITY: `path` comes straight from the URL. A normal FastAPI TestClient
+    (httpx) normalizes ".." out of URLs before they reach the app, but a raw
+    ASGI request (or a real uvicorn socket) does not -- `path` can legitimately
+    be "../../../../etc/passwd". `Path.is_file()` happily resolves ".." at the
+    OS level, so without the containment check below this endpoint is an
+    unauthenticated arbitrary file read. Every candidate is resolved and must
+    stay inside `astro_dist` before being served; unmatched/out-of-bounds
+    paths fall through to the normal SPA-fallback (index.html), same as any
+    other unknown route.
+    """
     astro_dist = Path(__file__).parent / "web" / "dist"
     if not astro_dist.exists():
         return FileResponse(str(Path(__file__).parent / "static" / "index.html"))
 
-    for candidate in [
-        astro_dist / path / "index.html",
-        astro_dist / f"{path}.html",
-        astro_dist / path,
-    ]:
-        if candidate.is_file():
-            return FileResponse(str(candidate))
+    base = astro_dist.resolve()
+
+    # Belt-and-braces: reject any path containing a ".." segment outright,
+    # in addition to the resolve()+containment check on each candidate below.
+    if ".." not in Path(path).parts:
+        for candidate in [
+            astro_dist / path / "index.html",
+            astro_dist / f"{path}.html",
+            astro_dist / path,
+        ]:
+            try:
+                resolved = candidate.resolve()
+            except OSError:
+                continue
+            if resolved.is_relative_to(base) and resolved.is_file():
+                return FileResponse(str(resolved))
 
     index = astro_dist / "index.html"
     if index.is_file():

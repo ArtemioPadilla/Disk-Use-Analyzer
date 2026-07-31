@@ -1,6 +1,9 @@
 """Tests for agents safety (dry-run + confirmation)."""
+import asyncio
 import sys
 from pathlib import Path
+
+import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
@@ -189,6 +192,24 @@ class TestSaveStateFailureDoesNotCrash:
         captured = capsys.readouterr()
         assert "Warning" in (captured.out + captured.err)
 
+    def test_toggle_agent_reports_persistence_failure(self, tmp_path, monkeypatch):
+        """toggle_agent() must not silently pretend the change was saved when
+        _save_state() fails -- the in-memory flip happened but would vanish
+        on restart, and callers need to know that."""
+        mgr = _make_manager(tmp_path, monkeypatch)
+        self._break_state_open(monkeypatch)
+
+        result = mgr.toggle_agent("cache_cleaner", True)
+
+        assert result["state_saved"] is False
+        # The in-memory toggle still took effect even though persistence failed.
+        assert mgr.agents_state["cache_cleaner"]["enabled"] is True
+
+    def test_toggle_agent_reports_persistence_success(self, tmp_path, monkeypatch):
+        mgr = _make_manager(tmp_path, monkeypatch)
+        result = mgr.toggle_agent("cache_cleaner", True)
+        assert result["state_saved"] is True
+
     def test_real_run_survives_save_state_permission_error(self, tmp_path, monkeypatch, capsys):
         mgr = _make_manager(tmp_path, monkeypatch)
         called = []
@@ -218,3 +239,73 @@ class TestSaveStateFailureDoesNotCrash:
     def test_save_state_returns_true_on_success(self, tmp_path, monkeypatch):
         mgr = _make_manager(tmp_path, monkeypatch)
         assert mgr._save_state() is True
+
+
+def _drive_scheduler_iterations(mgr, iterations, monkeypatch):
+    """Run start_scheduler()'s infinite `while True: await sleep(); ...` loop
+    for exactly `iterations` passes over the agent list, then break out via
+    CancelledError -- same pattern test_terminal_api.py uses for the idle
+    reaper's identical infinite-loop shape."""
+    calls = {"sleep": 0}
+
+    async def fake_sleep(_seconds):
+        calls["sleep"] += 1
+        if calls["sleep"] > iterations:
+            raise asyncio.CancelledError()
+
+    monkeypatch.setattr(agents_manager_module.asyncio, "sleep", fake_sleep)
+
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(mgr.start_scheduler())
+
+
+class TestSchedulerDryRunGuarantee:
+    """Pins the most security-relevant line in this file: the unattended
+    scheduler must NEVER execute a real (dry_run=False) agent command.
+    Today, deleting `dry_run=True` from start_scheduler()'s
+    `self.run_agent(agent_id, dry_run=True)` call breaks no test -- this
+    closes that gap."""
+
+    def test_scheduler_only_ever_calls_run_agent_with_dry_run_true(self, tmp_path, monkeypatch):
+        mgr = _make_manager(tmp_path, monkeypatch)
+        mgr.agents_state["cache_cleaner"] = {"enabled": True}
+
+        calls = []
+
+        def fake_run_agent(agent_id, dry_run=True):
+            calls.append((agent_id, dry_run))
+            return {"agent_id": agent_id, "dry_run": dry_run}
+
+        monkeypatch.setattr(mgr, "run_agent", fake_run_agent)
+
+        _drive_scheduler_iterations(mgr, iterations=1, monkeypatch=monkeypatch)
+
+        assert calls, "expected the scheduler to call run_agent for an enabled agent"
+        assert all(dry_run is True for _, dry_run in calls), (
+            f"scheduler must only ever run agents in dry-run mode, got: {calls}"
+        )
+
+
+class TestSchedulerDryRunThrottling:
+    """Regression test: an enabled agent used to get a fresh '[dry-run] ...'
+    log line on every single hourly tick forever (dry-run never sets
+    last_run, so the interval gate never trips) -- unbounded growth of
+    agents.log and pure noise in /api/digest's log tail."""
+
+    def test_repeated_ticks_do_not_call_run_agent_every_hour(self, tmp_path, monkeypatch):
+        mgr = _make_manager(tmp_path, monkeypatch)
+        mgr.agents_state["cache_cleaner"] = {"enabled": True}
+
+        calls = []
+        monkeypatch.setattr(
+            mgr, "run_agent",
+            lambda agent_id, dry_run=True: calls.append((agent_id, dry_run)) or {},
+        )
+
+        # cache_cleaner's interval_hours is 168 (weekly); drive 5 hourly
+        # ticks. Without throttling this would call run_agent 5 times.
+        _drive_scheduler_iterations(mgr, iterations=5, monkeypatch=monkeypatch)
+
+        assert len(calls) == 1, (
+            f"expected exactly one dry-run notice within the throttle window, got {calls}"
+        )
