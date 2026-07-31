@@ -308,7 +308,8 @@ install-web:
 	@echo ""
 	@echo "$(YELLOW)Para usar la interfaz web:$(NC)"
 	@echo "  1. Ejecuta: $(BLUE)make web$(NC)"
-	@echo "  2. Abre tu navegador en: $(BLUE)http://localhost:8000$(NC)"
+	@echo "  2. Abre el enlace con $(BLUE)?token=...$(NC) que imprime el servidor (no una"
+	@echo "     URL http://localhost:8000 sin token, ahí la auth está activada por defecto)"
 
 web-build:
 	@echo "$(GREEN)🔨 Compilando frontend Astro...$(NC)"
@@ -344,7 +345,8 @@ web:
 		cd web && npm run build; \
 	fi
 	@echo "$(GREEN)✅ Servidor iniciando en http://localhost:8000$(NC)"
-	@echo "$(BLUE)📚 API Docs en http://localhost:8000/docs$(NC)"
+	@echo "$(YELLOW)⚠️  Con auth activada (por defecto), espera el enlace con ?token=... que$(NC)"
+	@echo "$(YELLOW)   imprime el servidor abajo y usa ese enlace, no la URL de arriba$(NC)"
 	@echo "$(YELLOW)Presiona Ctrl+C para detener el servidor$(NC)"
 	@echo ""
 	@. venv-web/bin/activate && python disk_analyzer_web.py $(if $(min_size),--min-size $(min_size),)
