@@ -1,0 +1,201 @@
+"""Characterization tests: pin the engine's CURRENT behavior before refactoring.
+
+These describe what the code does today, not what it ideally should do.
+A failure here during the shared-engine extraction means the refactor changed
+behavior -- fix the refactor, not the test.
+"""
+import os
+import sys
+from pathlib import Path
+
+import pytest
+
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
+from disk_analyzer_core import DiskAnalyzerCore, KB, MB, GB
+
+
+@pytest.fixture
+def tree(tmp_path):
+    """A small, predictable directory tree."""
+    (tmp_path / "big.bin").write_bytes(b"x" * (3 * 1024 * 1024))   # 3 MB
+    (tmp_path / "small.txt").write_text("hello")
+    sub = tmp_path / "sub"
+    sub.mkdir()
+    (sub / "nested.bin").write_bytes(b"y" * (2 * 1024 * 1024))     # 2 MB
+    ignored = tmp_path / "node_modules"
+    ignored.mkdir()
+    (ignored / "junk.bin").write_bytes(b"z" * (5 * 1024 * 1024))
+    return tmp_path
+
+
+class TestFormatSize:
+    def test_bytes(self):
+        core = DiskAnalyzerCore(".")
+        assert core.format_size(0) == "0.00 B"
+
+    def test_kilobytes(self):
+        core = DiskAnalyzerCore(".")
+        assert core.format_size(1536).endswith("KB")
+
+    def test_gigabytes(self):
+        core = DiskAnalyzerCore(".")
+        assert core.format_size(5 * GB).startswith("5.00")
+
+
+class TestScanDirectory:
+    def test_finds_large_files_above_min_size(self, tree):
+        core = DiskAnalyzerCore(str(tree), min_size_mb=1)
+        core.scan_directory(tree)
+        names = {Path(f["path"]).name for f in core.large_files}
+        assert "big.bin" in names
+        assert "small.txt" not in names
+
+    def test_uses_real_disk_blocks_not_logical_size(self, tree):
+        # Pad a file with a sparse hole so logical size and on-disk size
+        # provably diverge -- this makes the test fail loudly if scan_directory
+        # is ever changed to use st_size instead of st_blocks * 512.
+        sparse = tree / "sparse.bin"
+        with open(sparse, "wb") as fh:
+            fh.write(b"a" * (1024 * 1024))  # 1 MB of real data
+            fh.truncate(20 * 1024 * 1024)   # logical size 20 MB, mostly a hole
+
+        core = DiskAnalyzerCore(str(tree), min_size_mb=1)
+        core.scan_directory(tree)
+        entry = next(f for f in core.large_files if Path(f["path"]).name == "sparse.bin")
+        stat = sparse.stat()
+        on_disk = stat.st_blocks * 512 if hasattr(stat, "st_blocks") else stat.st_size
+        assert entry["size"] == on_disk
+        # The whole point of using st_blocks: on a sparse file, on-disk size
+        # must be materially smaller than the logical size it was truncated to.
+        if hasattr(stat, "st_blocks"):
+            assert entry["size"] < stat.st_size
+
+    def test_skips_ignored_directories(self, tree):
+        core = DiskAnalyzerCore(str(tree), min_size_mb=1)
+        core.scan_directory(tree)
+        paths = " ".join(f["path"] for f in core.large_files)
+        assert "node_modules" not in paths
+
+    def test_does_not_follow_symlinks(self, tmp_path):
+        target = tmp_path / "real"
+        target.mkdir()
+        (target / "file.bin").write_bytes(b"a" * (2 * 1024 * 1024))
+        link = tmp_path / "link"
+        try:
+            link.symlink_to(target, target_is_directory=True)
+        except OSError:
+            pytest.skip("symlinks not supported here")
+        core = DiskAnalyzerCore(str(tmp_path), min_size_mb=1)
+        core.scan_directory(tmp_path)
+        # The file is found once (through the real dir), not twice via the link
+        matches = [f for f in core.large_files if Path(f["path"]).name == "file.bin"]
+        assert len(matches) == 1
+
+    def test_records_file_type_stats(self, tree):
+        core = DiskAnalyzerCore(str(tree), min_size_mb=1)
+        core.scan_directory(tree)
+        assert ".bin" in core.file_type_stats
+
+
+class TestProtectedPaths:
+    @pytest.mark.parametrize("path,expected", [
+        ("/System/Library/Kernels/kernel", True),
+        ("/usr/lib/libSystem.dylib", True),
+        ("/bin", True),
+        ("/sbin", True),
+        ("/Applications/Foo.app/Contents/MacOS/Foo", True),
+        ("/private/var/vm/sleepimage", True),
+        (str(Path.home() / "Downloads" / "movie.mp4"), False),
+        (str(Path.home() / "Library" / "Caches" / "something"), False),
+    ])
+    def test_protection_table(self, path, expected):
+        core = DiskAnalyzerCore(".")
+        assert core.is_protected_path(path) is expected
+
+    def test_prefix_match_not_substring(self):
+        """A path merely CONTAINING a protected prefix is not protected."""
+        core = DiskAnalyzerCore(".")
+        assert core.is_protected_path(str(Path.home() / "my/System/notes.txt")) is False
+
+
+class TestCacheClassification:
+    """Pins the CURRENT labels of both implementations, which differ.
+
+    Task 4 unifies them; these tests are what proves the unification did not
+    silently drop a category.
+    """
+
+    @pytest.mark.parametrize("path,expected", [
+        (Path.home() / "Library/Caches/com.docker.docker", "Docker"),
+        # NOTE: categorize_cache checks the 'code'/'vscode' substring BEFORE
+        # the 'xcode' substring, and "xcode" itself contains the substring
+        # "code". So DerivedData is misclassified as "VS Code Cache", never
+        # reaching the 'xcode' branch. This looks like a bug (see report) but
+        # is today's real behavior -- pinned here, not fixed here.
+        (Path.home() / "Library/Developer/Xcode/DerivedData", "VS Code Cache"),
+        (Path.home() / "Library/Caches/com.microsoft.VSCode", "VS Code Cache"),
+        (Path.home() / ".npm", "NPM Cache"),
+        (Path.home() / ".Trash", "Papelera"),
+    ])
+    def test_core_labels(self, path, expected):
+        core = DiskAnalyzerCore(".")
+        assert core.categorize_cache(path) == expected
+
+    def test_cli_labels_differ_from_core(self):
+        """Documents the divergence Task 4 removes."""
+        from disk_analyzer import DiskAnalyzer
+        cli = DiskAnalyzer(".")
+        core = DiskAnalyzerCore(".")
+        vscode = Path.home() / "Library/Caches/com.microsoft.VSCode"
+        assert cli.classify_cache(vscode) == "VS Code"
+        assert core.categorize_cache(vscode) == "VS Code Cache"
+
+    def test_cli_does_not_have_the_xcode_bug(self):
+        """The CLI checks 'xcode' before 'code'/'vscode', so it does NOT
+        misclassify DerivedData the way core.categorize_cache does. This is
+        the concrete divergence between the two implementations' precedence
+        order, not just their label spelling.
+        """
+        from disk_analyzer import DiskAnalyzer
+        cli = DiskAnalyzer(".")
+        xcode = Path.home() / "Library/Developer/Xcode/DerivedData"
+        assert cli.classify_cache(xcode) == "Xcode Development"
+
+
+class TestRecommendations:
+    def test_recommendations_have_required_shape(self):
+        core = DiskAnalyzerCore(".")
+        core.cache_locations = [
+            {"path": "/fake/npm", "size": 3 * GB, "type": "NPM Cache"},
+            {"path": "/fake/code", "size": 2 * GB, "type": "VS Code Cache"},
+        ]
+        recs = core.generate_recommendations()
+        assert recs, "expected recommendations for large known caches"
+        for rec in recs:
+            assert "type" in rec
+            assert "space" in rec
+            assert "tier" in rec
+
+    def test_recommendations_sorted_by_tier_then_size(self):
+        # Tier 1 total (12 GB) exceeds the Tier 2 Docker entry (a lone 20 GB
+        # reclaim) so a naive "sort by size" would put Docker first. Real
+        # sort key is (tier, -space): tier wins, size only breaks ties within
+        # a tier. This is what would break if someone "simplified" the sort
+        # to `key=lambda x: -x['space']` during the refactor.
+        core = DiskAnalyzerCore(".")
+        core.cache_locations = [
+            {"path": "/fake/npm", "size": 3 * GB, "type": "NPM Cache"},
+            {"path": "/fake/code", "size": 9 * GB, "type": "VS Code Cache"},
+        ]
+        core.docker_stats = {"available": True, "reclaimable": 20 * GB}
+        recs = core.generate_recommendations()
+
+        tiers = [r["tier"] for r in recs]
+        assert tiers == sorted(tiers)
+        # Tier 1 items (smaller, combined) must all precede the larger Tier 2 item.
+        assert [r["type"] for r in recs] == ["Cache de VS Code", "Cache de npm", "Docker"]
+        # Within tier 1, the larger entry (VS Code, 9 GB) sorts before the
+        # smaller one (npm, 3 GB): descending by space, not insertion order.
+        tier1 = [r for r in recs if r["tier"] == 1]
+        assert [r["space"] for r in tier1] == sorted((r["space"] for r in tier1), reverse=True)
