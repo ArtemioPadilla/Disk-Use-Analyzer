@@ -7,13 +7,13 @@ cuál es la siguiente acción y cómo ejecutarla.
 
 ## Estado de un vistazo
 
-Última actualización: 15 de julio de 2026. Tests: **57 passed**.
+Última actualización: 15 de julio de 2026. Tests: **79 passed**.
 
 | Fase | Alcance | Plan | Estado |
 |---|---|---|---|
 | 0 | Higiene del repo (destrackear `.pyc`, borrar ~12 MB de reportes) | En el roadmap, sin plan TDD | Pendiente |
 | 1 | Bugs críticos del backend (6 fixes) | [Fase 1](2026-07-15-mejoras-fase1-bugs-criticos.md) | ✅ Completa, mergeada a `main` (PR #5) |
-| 2 | Seguridad (auth, CORS, agents, fds del PTY) | [Fase 2](2026-07-15-mejoras-fase2-seguridad.md) | ✅ Implementación completa en `feat/fase2-seguridad`, sin mergear |
+| 2 | Seguridad (auth, CORS, agents, fds del PTY) | [Fase 2](2026-07-15-mejoras-fase2-seguridad.md) | ✅ Completa y verificada en `feat/fase2-seguridad`, sin mergear |
 | 3 | Motor compartido (deduplicar CLI vs core) | Solo esbozo en el roadmap | Pendiente |
 | 4 | Frontend (cleanup runner, sesiones, tipos, código muerto) | Solo esbozo en el roadmap | Pendiente |
 | 5 | Tests del motor y CI | Solo esbozo en el roadmap | Pendiente |

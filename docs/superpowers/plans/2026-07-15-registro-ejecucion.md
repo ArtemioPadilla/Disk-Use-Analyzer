@@ -75,8 +75,8 @@ Todos se triaron en la revisión final. Ninguno bloquea:
 
 ## Fase 2 — Seguridad
 
-**Estado:** los 5 tasks de implementación están completos en la rama
-`feat/fase2-seguridad`, creada desde `main` (`6c633df`). Tests: 39 → 57.
+**Estado:** completa y verificada en la rama `feat/fase2-seguridad`, creada
+desde `main` (`6c633df`). Sin mergear. Tests: 39 → 79.
 
 | Task | Qué hace | Estado |
 |---|---|---|
@@ -85,7 +85,46 @@ Todos se triaron en la revisión final. Ninguno bloquea:
 | 3 | Agents en modo simulación por defecto; `/run` exige `confirm=true` | ✅ `2bf082c` |
 | 4 | El frontend adjunta el token en REST y WebSockets | ✅ `ff44e7a`, `078915c`, `abbbb2b` |
 | 5 | El shell del PTY no hereda descriptores de archivo del servidor | ✅ `e601638` |
-| 6 | Verificación integral y revisión final de la rama | En curso |
+| 6 | Verificación integral y revisión final de la rama | ✅ `c7123a0`, `75d90f4`, `77ec058`, `bd70763`, `5ce9416` |
+
+### Lo que encontró la verificación final
+
+Los tests unitarios pasaban en verde mientras dos fallos serios seguían vivos.
+Los encontraron la prueba de humo contra un servidor real y la revisión final de
+la rama, no la suite:
+
+- **Un 500 en `/api/agents/{id}/run`.** `_log()` reventaba con `PermissionError`
+  porque `~/.disk-analyzer/agents.log` había quedado propiedad de `root` por una
+  corrida previa con `sudo`. Un fallo al escribir el log tumbaba la operación
+  entera. Arreglado en `c7123a0`: escribir el log nunca propaga un error de E/S,
+  y los fallos al guardar estado se reportan en la respuesta (`state_saved`,
+  `warning`) en vez de fingir éxito.
+- **Lectura de archivos arbitrarios sin autenticación (crítico).** La ruta
+  catch-all que sirve el SPA unía la ruta de la URL a `web/dist` sin contención,
+  y `.is_file()` resuelve los `..` a nivel del sistema. Verificado en vivo contra
+  un servidor real: `curl --path-as-is` con suficientes `../` devolvía
+  `/etc/hosts` y `sessions_metadata.json`, con 200 y sin token. Como el token se
+  imprime por stdout, quien hubiera redirigido esa salida a un archivo lo
+  entregaba por el mismo hueco, y con el token se llega al terminal. Arreglado en
+  `75d90f4` con `resolve()` más `is_relative_to()`.
+
+  Esto merece registrarse como lección, no solo como arreglo: las restricciones
+  del plan afirmaban que las rutas estáticas y del SPA eran seguras de dejar
+  abiertas porque "solo sirven JS y CSS". Nadie verificó esa premisa, y era falsa
+  — justo la premisa sobre la que se apoyaba todo el diseño de autenticación.
+  Además el `TestClient` de Starlette normaliza los `..` de las URLs, así que un
+  test normal habría pasado igual contra el código vulnerable: el test de
+  regresión construye el scope ASGI a mano.
+
+También se corrigieron en la misma ola: un 500 sin autenticar ante un token con
+caracteres no ASCII (`compare_digest` no acepta `str` no ASCII), un `mkdir` sin
+protección en tiempo de importación que impedía arrancar si `~/.disk-analyzer`
+era de `root`, el `toggle_agent` que ignoraba si el estado se había guardado, el
+frontend que ante un token vencido fallaba en silencio y reconectaba sin fin
+(`bd70763`), y tres detalles de higiene del PTY (`5ce9416`): el shell ya no ve el
+token en su entorno, el `closerange` quedó acotado —`SC_OPEN_MAX` en esta máquina
+es 1.048.576, así que eran un millón de `close()` por terminal— y una salida
+segura si `execvp` falla.
 
 ### Alcance añadido durante la ejecución
 
@@ -105,8 +144,6 @@ porque la propia fase las rompió:
   descartó deliberadamente la alternativa de aceptar el token como query param
   en el backend: filtraría el token a los logs del servidor y al historial del
   navegador, y tocar la puerta de autenticación arriesga abrir un bypass.
-
-### Decisiones de diseño de la fase
 
 ### Decisiones de diseño de la fase
 
