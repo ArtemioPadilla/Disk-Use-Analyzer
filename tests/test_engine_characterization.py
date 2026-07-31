@@ -118,6 +118,29 @@ class TestProtectedPaths:
         core = DiskAnalyzerCore(".")
         assert core.is_protected_path(str(Path.home() / "my/System/notes.txt")) is False
 
+    def test_full_prefix_as_inner_substring_not_protected(self):
+        """A path that embeds a COMPLETE protected-prefix string
+        ('/System/Library/') as an inner substring, without starting with it,
+        must not be protected. `my/System/notes.txt` above never contains a
+        full prefix string (only a partial '/System/' fragment), so it can't
+        catch a `startswith(prefix)` -> `prefix in file_path` regression --
+        this one can, because '/System/Library/' does appear verbatim inside
+        the path.
+        """
+        core = DiskAnalyzerCore(".")
+        path = str(Path.home() / "backup/System/Library/notes.txt")
+        assert core.is_protected_path(path) is False
+
+    def test_root_dir_as_inner_path_segment_not_protected(self):
+        """A path containing '/bin' as a non-root, inner path segment must
+        not be protected -- only an exact top-level '/bin' or '/sbin'
+        component counts. Catches a PROTECTED_ROOT_DIRS exact-match ->
+        substring regression that neither of the two tests above exercises.
+        """
+        core = DiskAnalyzerCore(".")
+        path = str(Path.home() / "trash/bin/file.txt")
+        assert core.is_protected_path(path) is False
+
 
 class TestCacheClassification:
     """Pins the CURRENT labels of both implementations, which differ.
@@ -183,10 +206,19 @@ class TestRecommendations:
         # sort key is (tier, -space): tier wins, size only breaks ties within
         # a tier. This is what would break if someone "simplified" the sort
         # to `key=lambda x: -x['space']` during the refactor.
+        #
+        # Sizes are picked so insertion order and sorted order DIFFER: the
+        # source code's TIER 1 block appends the VS Code Cache entry before
+        # the NPM Cache entry regardless of size (see generate_recommendations
+        # in disk_analyzer_core.py), so making npm the larger of the two
+        # means the correctly-sorted output (npm first, by size descending)
+        # is the *opposite* of append order. That is what makes this test
+        # able to catch `sorted(...)` being deleted outright, not just
+        # replaced with the wrong key -- verified by mutation (see report).
         core = DiskAnalyzerCore(".")
         core.cache_locations = [
-            {"path": "/fake/npm", "size": 3 * GB, "type": "NPM Cache"},
-            {"path": "/fake/code", "size": 9 * GB, "type": "VS Code Cache"},
+            {"path": "/fake/npm", "size": 9 * GB, "type": "NPM Cache"},
+            {"path": "/fake/code", "size": 3 * GB, "type": "VS Code Cache"},
         ]
         core.docker_stats = {"available": True, "reclaimable": 20 * GB}
         recs = core.generate_recommendations()
@@ -194,8 +226,9 @@ class TestRecommendations:
         tiers = [r["tier"] for r in recs]
         assert tiers == sorted(tiers)
         # Tier 1 items (smaller, combined) must all precede the larger Tier 2 item.
-        assert [r["type"] for r in recs] == ["Cache de VS Code", "Cache de npm", "Docker"]
-        # Within tier 1, the larger entry (VS Code, 9 GB) sorts before the
-        # smaller one (npm, 3 GB): descending by space, not insertion order.
+        assert [r["type"] for r in recs] == ["Cache de npm", "Cache de VS Code", "Docker"]
+        # Within tier 1, the larger entry (npm, 9 GB) sorts before the
+        # smaller one (VS Code, 3 GB): descending by space, not insertion
+        # order (insertion order appends VS Code first).
         tier1 = [r for r in recs if r["tier"] == 1]
         assert [r["space"] for r in tier1] == sorted((r["space"] for r in tier1), reverse=True)
