@@ -1,6 +1,6 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
 import { api } from '../lib/api';
-import { withToken } from '../lib/auth';
+import { withToken, notifyAuthInvalid } from '../lib/auth';
 import { emit } from '../lib/events';
 
 export function useTerminal() {
@@ -31,7 +31,13 @@ export function useTerminal() {
         onDataRef.current?.(event.data);
       }
     };
-    ws.onclose = () => setConnected(false);
+    ws.onclose = (event) => {
+      setConnected(false);
+      // No reconnect loop here to short-circuit (this hook doesn't retry),
+      // but still surface the same explanation as everywhere else if the
+      // token was the reason the terminal socket got rejected.
+      if (event.code === 1008) notifyAuthInvalid();
+    };
     ws.onerror = () => ws.close();
   }, []);
 

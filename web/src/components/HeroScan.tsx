@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { api } from '../lib/api';
-import { authHeaders } from '../lib/auth';
+import { authHeaders, notifyAuthInvalid } from '../lib/auth';
 import { on, emit } from '../lib/events';
 
 export default function HeroScan() {
@@ -10,6 +10,16 @@ export default function HeroScan() {
   useEffect(() => {
     // Check if there are any completed results
     fetch('/api/analysis/latest', { headers: authHeaders() }).then(r => {
+      if (r.status === 401) {
+        // This is the canonical "dashboard renders empty with no message"
+        // case: a stale token makes this look like "no results yet" instead
+        // of the actual problem. Notify, but still fall through to the
+        // existing hasResults=false rendering below — the banner explains
+        // the real state on top of it.
+        notifyAuthInvalid();
+        setHasResults(false);
+        return;
+      }
       if (r.ok) {
         r.json().then(data => {
           setHasResults(true);

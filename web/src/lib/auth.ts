@@ -14,6 +14,25 @@
 // and this is a no-op.
 const KEY = 'da_token';
 
+// Event fired when the server rejects the current token (HTTP 401 on a REST
+// call, or WebSocket close code 1008). The server mints a brand-new token on
+// every restart while the browser keeps the old one in sessionStorage, so
+// this fires on the ordinary "restart the server, reload the tab" flow.
+export const AUTH_INVALID_EVENT = 'auth:invalid';
+
+// Several requests/sockets can fail around the same moment (e.g. a handful
+// of parallel REST calls right after a server restart), so dedupe to a
+// single notification per page load instead of one per failed call. This
+// resets naturally on navigation/reload since it's plain module state and
+// the app is a multi-page Astro site (see MainLayout.astro).
+let authInvalidNotified = false;
+
+export function notifyAuthInvalid(): void {
+  if (typeof window === 'undefined' || authInvalidNotified) return;
+  authInvalidNotified = true;
+  window.dispatchEvent(new CustomEvent(AUTH_INVALID_EVENT));
+}
+
 function bootstrap(): void {
   if (typeof window === 'undefined') return;
   const params = new URLSearchParams(window.location.search);

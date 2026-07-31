@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { formatBytes } from '../lib/format';
-import { authHeaders } from '../lib/auth';
+import { authHeaders, notifyAuthInvalid } from '../lib/auth';
 
 interface Agent {
   id: string;
@@ -27,13 +27,20 @@ export default function AgentsPanel() {
   const [lastOutcome, setLastOutcome] = useState<Record<string, RunOutcome>>({});
 
   const loadAgents = () => {
-    fetch('/api/agents', { headers: authHeaders() }).then(r => r.json()).then(setAgents).catch(console.error);
+    fetch('/api/agents', { headers: authHeaders() }).then(r => {
+      if (r.status === 401) {
+        notifyAuthInvalid();
+        throw new Error('Unauthorized');
+      }
+      return r.json();
+    }).then(setAgents).catch(console.error);
   };
 
   useEffect(() => { loadAgents(); }, []);
 
   const toggle = async (id: string, enabled: boolean) => {
-    await fetch(`/api/agents/${id}/toggle?enabled=${enabled}`, { method: 'POST', headers: authHeaders() });
+    const res = await fetch(`/api/agents/${id}/toggle?enabled=${enabled}`, { method: 'POST', headers: authHeaders() });
+    if (res.status === 401) notifyAuthInvalid();
     loadAgents();
   };
 
@@ -46,6 +53,7 @@ export default function AgentsPanel() {
       // of these commands (e.g. `rm -rf ~/Library/Caches/*`) are destructive
       // and irreversible.
       const dryRes = await fetch(`/api/agents/${id}/run`, { method: 'POST', headers: authHeaders() });
+      if (dryRes.status === 401) notifyAuthInvalid();
       if (!dryRes.ok) {
         // Fail closed: if we can't even confirm what this agent would do,
         // never fall through to the destructive confirm=true call.
@@ -71,6 +79,7 @@ export default function AgentsPanel() {
       }
 
       const res = await fetch(`/api/agents/${id}/run?confirm=true`, { method: 'POST', headers: authHeaders() });
+      if (res.status === 401) notifyAuthInvalid();
       const outcome: RunOutcome = await res.json();
       setLastOutcome(prev => ({ ...prev, [id]: outcome }));
       loadAgents();

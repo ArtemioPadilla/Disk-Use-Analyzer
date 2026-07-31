@@ -1,4 +1,4 @@
-import { authHeaders } from './auth';
+import { authHeaders, notifyAuthInvalid } from './auth';
 
 const BASE = '/api';
 
@@ -86,6 +86,14 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
     ...options,
     headers: { 'Content-Type': 'application/json', ...authHeaders(), ...(options?.headers ?? {}) },
   });
+  if (res.status === 401) {
+    // Stale/invalid token — most commonly because the server was restarted
+    // (it mints a new token per run) and this tab still has the old one in
+    // sessionStorage. Surface this distinctly instead of letting it look
+    // like a generic failure (e.g. "empty dashboard, no explanation").
+    notifyAuthInvalid();
+    throw new Error(`API 401: invalid or expired token`);
+  }
   if (!res.ok) {
     const body = await res.text();
     throw new Error(`API ${res.status}: ${body}`);
@@ -114,6 +122,10 @@ function filenameFromContentDisposition(header: string | null): string | null {
  */
 export async function downloadExport(id: string, format: 'json' | 'csv' | 'html'): Promise<void> {
   const res = await fetch(`${BASE}/export/${id}/${format}`, { headers: authHeaders() });
+  if (res.status === 401) {
+    notifyAuthInvalid();
+    throw new Error('Export failed (401): invalid or expired token');
+  }
   if (!res.ok) {
     const body = await res.text().catch(() => '');
     throw new Error(`Export failed (${res.status}): ${body || res.statusText}`);
