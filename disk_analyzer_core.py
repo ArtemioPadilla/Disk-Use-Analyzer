@@ -16,103 +16,12 @@ from datetime import datetime
 from collections import defaultdict
 from typing import Dict, List, Tuple, Optional, Callable
 
-# Configuración de tamaños
-KB = 1024
-MB = KB * 1024
-GB = MB * 1024
-
-# Detección del sistema operativo
-SYSTEM = platform.system()
-IS_WINDOWS = SYSTEM == 'Windows'
-IS_MACOS = SYSTEM == 'Darwin'
-IS_LINUX = SYSTEM == 'Linux'
-
-# Directorios típicos con archivos temporales o cache por sistema
-if IS_WINDOWS:
-    CACHE_DIRS = [
-        "~/AppData/Local/Temp",
-        "~/AppData/Local/Microsoft/Windows/INetCache",
-        "~/AppData/Local/Microsoft/Windows/Explorer",
-        "~/AppData/Roaming/Code/Cache",
-        "~/AppData/Roaming/Code/CachedData",
-        "~/AppData/Local/Google/Chrome/User Data/Default/Cache",
-        "~/AppData/Local/Mozilla/Firefox/Profiles",
-        "~/.npm",
-        "~/.cache",
-        "~/Downloads",
-        "$RECYCLE.BIN",
-        "C:/Windows/Temp",
-        "~/AppData/Local/Docker",
-        "~/.docker",
-    ]
-elif IS_MACOS:
-    CACHE_DIRS = [
-        "~/Library/Caches",
-        "~/Library/Logs",
-        "~/Library/Application Support/Code/Cache",
-        "~/Library/Application Support/Code/CachedData",
-        "~/Library/Developer/Xcode/DerivedData",
-        "~/Library/Developer/Xcode/Archives",
-        "~/Library/Developer/CoreSimulator/Devices",
-        "~/.npm",
-        "~/.cache",
-        "~/Downloads",
-        "~/.Trash",
-        "/private/var/folders",
-        "~/Library/Containers/com.docker.docker/Data",
-        "~/.docker",
-    ]
-else:  # Linux
-    CACHE_DIRS = [
-        "~/.cache",
-        "~/.local/share/Trash",
-        "/tmp",
-        "/var/tmp",
-        "~/.config/Code/Cache",
-        "~/.config/Code/CachedData",
-        "~/.mozilla/firefox",
-        "~/.cache/google-chrome",
-        "~/.npm",
-        "~/Downloads",
-        "/var/cache",
-        "~/.docker",
-        "/var/lib/docker",
-    ]
-
-# Extensiones de archivos grandes comunes
-LARGE_FILE_EXTENSIONS = {
-    '.dmg', '.iso', '.pkg', '.zip', '.rar', '.7z',
-    '.mov', '.mp4', '.avi', '.mkv', '.mpg',
-    '.psd', '.ai', '.sketch',
-    '.vmdk', '.vdi', '.qcow2'
-}
-
-# Archivos/carpetas a ignorar
-IGNORE_PATTERNS = {
-    '.DS_Store', '.localized', 'node_modules', '__pycache__',
-    '.git/objects', 'venv', 'env', '.virtualenv', 'Docker.raw'
-}
-
-# Volúmenes APFS a excluir en macOS para evitar doble conteo por firmlinks
-MACOS_APFS_SKIP_DIRS = {
-    '/System/Volumes/Data',
-    '/System/Volumes/VM',
-    '/System/Volumes/Preboot',
-    '/System/Volumes/Update',
-    '/System/Volumes/xarts',
-    '/System/Volumes/iSCPreboot',
-    '/System/Volumes/Hardware',
-}
-
-# Protección de archivos del sistema
-PROTECTED_PATH_PREFIXES = [
-    '/System/Volumes/', '/private/var/vm/', '/var/vm/',
-    '/System/Library/', '/usr/lib/', '/usr/bin/', '/usr/sbin/',
-    '/Library/Updates/', '/private/var/folders/',
-]
-PROTECTED_APP_MARKERS = ['.app/', '.AppBundle/']
-PROTECTED_FILENAMES = {'sleepimage', 'swapfile'}
-PROTECTED_ROOT_DIRS = {'/bin', '/sbin'}
+from analyzer.constants import (
+    KB, MB, GB, SYSTEM, IS_WINDOWS, IS_MACOS, IS_LINUX,
+    CACHE_DIRS, LARGE_FILE_EXTENSIONS, IGNORE_PATTERNS, MACOS_APFS_SKIP_DIRS,
+    PROTECTED_PATH_PREFIXES, PROTECTED_APP_MARKERS, PROTECTED_FILENAMES,
+    PROTECTED_ROOT_DIRS,
+)
 
 class DiskAnalyzerCore:
     """Core disk analysis functionality with progress callback support"""
