@@ -194,6 +194,31 @@ class TestPTYManager:
             os.close(r)
             os.close(w)
 
+    def test_child_does_not_inherit_auth_token(self, monkeypatch):
+        # Phase 2 Task 5 closed the fd leak into the spawned shell, but the
+        # env channel was left open: DISK_ANALYZER_TOKEN (and the --no-auth
+        # bypass flag) were inherited via os.environ into the child, so
+        # `env | grep DISK_ANALYZER` in the web terminal would print the
+        # server's auth token. The child must see these scrubbed while
+        # still inheriting normal vars like PATH/HOME/TERM.
+        monkeypatch.setenv("DISK_ANALYZER_TOKEN", "super-secret-token")
+        monkeypatch.setenv("DISK_ANALYZER_NO_AUTH", "1")
+        # Quoted so zsh doesn't try to glob-expand the literal brackets.
+        probe = 'echo "TOKEN=[$DISK_ANALYZER_TOKEN] NOAUTH=[$DISK_ANALYZER_NO_AUTH]"'
+        pty_id = self.manager.create_session(command=probe)
+        deadline = time.time() + 3.0
+        output = ""
+        while time.time() < deadline and "TOKEN=[" not in output:
+            time.sleep(0.1)
+            output += self.manager.read_output(pty_id)
+        assert "TOKEN=[]" in output, (
+            f"child saw DISK_ANALYZER_TOKEN in its environment; output:\n{output!r}"
+        )
+        assert "NOAUTH=[]" in output, (
+            f"child saw DISK_ANALYZER_NO_AUTH in its environment; output:\n{output!r}"
+        )
+        self.manager.kill_session(pty_id)
+
     def test_command_logging(self, tmp_path):
         log_file = tmp_path / "terminal.log"
         manager = PTYManager(max_sessions=2, log_file=str(log_file))

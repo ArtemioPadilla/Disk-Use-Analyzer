@@ -21,6 +21,21 @@ from typing import Dict, List, Optional
 KILL_REAP_TIMEOUT = 2.0
 KILL_REAP_POLL_INTERVAL = 0.05
 
+# Environment variables that must never reach the spawned shell: the auth
+# token that guards the whole app, and the flag that disables auth
+# enforcement. The PTY child is already fully privileged, so this isn't an
+# escalation, but leaking the token into shell scrollback / subprocess
+# environments is gratuitous exposure of the credential.
+ENV_VARS_TO_SCRUB = ("DISK_ANALYZER_TOKEN", "DISK_ANALYZER_NO_AUTH")
+
+# Upper bound on the fd range we closerange() between fork and exec. Some
+# dev machines raise the soft nofile limit to 65536 or higher; closing that
+# many fds one syscall at a time on every terminal spawn is needlessly slow
+# (and with an effectively unbounded limit it can stall). We only ever open
+# a handful of fds ourselves, so anything beyond this is scrubbed for
+# hygiene, not because we expect fds to actually be open up there.
+MAX_CLOSERANGE_FD = 65536
+
 BLOCKED_PATTERNS = [
     "rm -rf /",
     "rm -rf ~",
@@ -74,13 +89,34 @@ class PTYSession:
             if slave_fd > 2:
                 os.close(slave_fd)
             # Close any inherited fds (other sessions' PTY masters, the uvicorn
-            # socket, etc.) so the spawned shell can't touch them.
+            # socket, etc.) so the spawned shell can't touch them. Clamp the
+            # upper bound: SC_OPEN_MAX reflects the (possibly very high)
+            # nofile limit, not how many fds are actually open, and closing
+            # tens of thousands of fds one syscall at a time between fork
+            # and exec is needless overhead on every terminal spawn.
             try:
-                max_fd = os.sysconf("SC_OPEN_MAX")
+                max_fd = min(os.sysconf("SC_OPEN_MAX"), MAX_CLOSERANGE_FD)
             except (AttributeError, ValueError):
                 max_fd = 1024
             os.closerange(3, max_fd)
-            os.execvp(args[0], args)
+            # Scrub the auth token / no-auth flag from the child's
+            # environment before exec: the shell is already fully
+            # privileged, but there's no reason for the credential that
+            # guards the app to sit in its scrollback or leak into every
+            # subprocess it spawns. Everything else (PATH, HOME, TERM, ...)
+            # is passed through unchanged.
+            child_env = {
+                k: v for k, v in os.environ.items() if k not in ENV_VARS_TO_SCRUB
+            }
+            try:
+                os.execvpe(args[0], args, child_env)
+            except BaseException:
+                # If exec fails (bad shell path, ENOENT, ...) we are still
+                # the forked child with all fds >= 3 closed. Returning
+                # normally would fall back into the parent's Python code
+                # and run it a second time as a duplicate process. Bail out
+                # immediately without running any cleanup/atexit handlers.
+                os._exit(127)
         else:
             # Parent process
             os.close(slave_fd)
