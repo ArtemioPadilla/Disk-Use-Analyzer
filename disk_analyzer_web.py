@@ -28,6 +28,7 @@ import uvicorn
 
 # Import our core analyzer
 from disk_analyzer_core import DiskAnalyzerCore, MB, GB, IS_MACOS, IS_WINDOWS
+from analyzer.protection import is_protected_path
 from pty_manager import PTYManager
 from agents_manager import AgentsManager
 from persona_detector import detect_personas, generate_persona_recommendations
@@ -886,14 +887,13 @@ def _perform_cleanup_deletes(actions: list) -> tuple:
     unlink()/shutil.rmtree() on large directories can block for a while, so
     this is run via asyncio.to_thread instead of inline in the async handler.
     """
-    checker = DiskAnalyzerCore(str(Path.home()))
     deleted: list[dict] = []
     errors: list[dict] = []
     freed_size = 0
 
     for action in actions:
         target = Path(action["path"]).resolve()
-        if checker.is_protected_path(str(target)):
+        if is_protected_path(str(target)):
             errors.append({"path": str(target), "error": "Ruta protegida del sistema"})
             continue
         try:
@@ -1039,10 +1039,8 @@ async def delete_file(request: DeleteFileRequest):
             raise HTTPException(status_code=400, detail="Path is not a file")
         
         # 4. Prevent deletion of system files using shared protection logic
-        from disk_analyzer_core import DiskAnalyzerCore
-        checker = DiskAnalyzerCore.__new__(DiskAnalyzerCore)
         path_str = str(resolved_path)
-        if checker.is_protected_path(path_str):
+        if is_protected_path(path_str):
             raise HTTPException(
                 status_code=403,
                 detail="Cannot delete system files"

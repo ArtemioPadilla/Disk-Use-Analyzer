@@ -21,9 +21,8 @@ from typing import Dict, List, Tuple, Optional
 from analyzer.constants import (
     KB, MB, GB, SYSTEM, IS_WINDOWS, IS_MACOS, IS_LINUX,
     CACHE_DIRS, LARGE_FILE_EXTENSIONS, IGNORE_PATTERNS, MACOS_APFS_SKIP_DIRS,
-    PROTECTED_PATH_PREFIXES, PROTECTED_APP_MARKERS, PROTECTED_FILENAMES,
-    PROTECTED_ROOT_DIRS,
 )
+from analyzer import protection
 
 class DiskAnalyzer:
     def __init__(self, start_path: str, min_size_mb: float = 10):
@@ -598,21 +597,8 @@ class DiskAnalyzer:
         }
     
     def is_protected_path(self, file_path: str) -> bool:
-        """Determina si un archivo es del sistema y no debe borrarse"""
-        # Prefijos de rutas del sistema
-        if any(file_path.startswith(prefix) for prefix in PROTECTED_PATH_PREFIXES):
-            return True
-        # Rutas raíz del sistema (/bin, /sbin - no /Users/robin/)
-        parts = Path(file_path).parts
-        if len(parts) >= 2 and '/' + parts[1] in PROTECTED_ROOT_DIRS:
-            return True
-        # Internos de aplicaciones (.app/Contents/... o .AppBundle/Contents/...)
-        if '/Contents/' in file_path and any(m in file_path for m in PROTECTED_APP_MARKERS):
-            return True
-        # Nombres de archivo del sistema (match exacto)
-        if Path(file_path).name in PROTECTED_FILENAMES:
-            return True
-        return False
+        """Delegates to the shared implementation (kept for callers)."""
+        return protection.is_protected_path(file_path)
 
     def _categorize_path(self, dir_path: str) -> str:
         """Asigna una categoría a un directorio basado en su ruta"""

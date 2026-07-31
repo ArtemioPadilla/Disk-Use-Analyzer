@@ -19,9 +19,8 @@ from typing import Dict, List, Tuple, Optional, Callable
 from analyzer.constants import (
     KB, MB, GB, SYSTEM, IS_WINDOWS, IS_MACOS, IS_LINUX,
     CACHE_DIRS, LARGE_FILE_EXTENSIONS, IGNORE_PATTERNS, MACOS_APFS_SKIP_DIRS,
-    PROTECTED_PATH_PREFIXES, PROTECTED_APP_MARKERS, PROTECTED_FILENAMES,
-    PROTECTED_ROOT_DIRS,
 )
+from analyzer import protection
 
 class DiskAnalyzerCore:
     """Core disk analysis functionality with progress callback support"""
@@ -98,17 +97,8 @@ class DiskAnalyzerCore:
         return any(pattern in path_str for pattern in IGNORE_PATTERNS)
 
     def is_protected_path(self, file_path: str) -> bool:
-        """Determina si un archivo es del sistema y no debe borrarse"""
-        if any(file_path.startswith(prefix) for prefix in PROTECTED_PATH_PREFIXES):
-            return True
-        parts = Path(file_path).parts
-        if len(parts) >= 2 and '/' + parts[1] in PROTECTED_ROOT_DIRS:
-            return True
-        if '/Contents/' in file_path and any(m in file_path for m in PROTECTED_APP_MARKERS):
-            return True
-        if Path(file_path).name in PROTECTED_FILENAMES:
-            return True
-        return False
+        """Delegates to the shared implementation (kept for callers)."""
+        return protection.is_protected_path(file_path)
     
     def get_home_dir(self) -> Path:
         """Obtiene el directorio home según el sistema"""
