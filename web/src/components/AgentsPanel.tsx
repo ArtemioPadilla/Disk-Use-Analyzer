@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { formatBytes } from '../lib/format';
+import { authHeaders, notifyAuthInvalid } from '../lib/auth';
 
 interface Agent {
   id: string;
@@ -13,26 +14,78 @@ interface Agent {
   run_count: number;
 }
 
+interface RunOutcome {
+  dry_run: boolean;
+  freed?: number;
+  results?: { command: string; success: boolean; error?: string }[];
+  error?: string;
+}
+
 export default function AgentsPanel() {
   const [agents, setAgents] = useState<Agent[]>([]);
   const [running, setRunning] = useState<Set<string>>(new Set());
+  const [lastOutcome, setLastOutcome] = useState<Record<string, RunOutcome>>({});
 
   const loadAgents = () => {
-    fetch('/api/agents').then(r => r.json()).then(setAgents).catch(console.error);
+    fetch('/api/agents', { headers: authHeaders() }).then(r => {
+      if (r.status === 401) {
+        notifyAuthInvalid();
+        throw new Error('Unauthorized');
+      }
+      return r.json();
+    }).then(setAgents).catch(console.error);
   };
 
   useEffect(() => { loadAgents(); }, []);
 
   const toggle = async (id: string, enabled: boolean) => {
-    await fetch(`/api/agents/${id}/toggle?enabled=${enabled}`, { method: 'POST' });
+    const res = await fetch(`/api/agents/${id}/toggle?enabled=${enabled}`, { method: 'POST', headers: authHeaders() });
+    if (res.status === 401) notifyAuthInvalid();
     loadAgents();
   };
 
   const runNow = async (id: string) => {
     setRunning(prev => new Set(prev).add(id));
     try {
-      await fetch(`/api/agents/${id}/run`, { method: 'POST' });
+      // The endpoint dry-runs by default (no confirm=true) and reports back
+      // what it *would* do without touching anything. Use that to build an
+      // honest confirmation prompt before actually executing anything — some
+      // of these commands (e.g. `rm -rf ~/Library/Caches/*`) are destructive
+      // and irreversible.
+      const dryRes = await fetch(`/api/agents/${id}/run`, { method: 'POST', headers: authHeaders() });
+      if (dryRes.status === 401) notifyAuthInvalid();
+      if (!dryRes.ok) {
+        // Fail closed: if we can't even confirm what this agent would do,
+        // never fall through to the destructive confirm=true call.
+        setLastOutcome(prev => ({ ...prev, [id]: { dry_run: true, error: `Could not check what this agent would do (HTTP ${dryRes.status}). Run cancelled.` } }));
+        return;
+      }
+      const dry = await dryRes.json();
+      if (!Array.isArray(dry.would_run)) {
+        // Fail closed: an unexpected response shape is treated the same as a
+        // failed probe, NOT as "no commands, safe to skip the confirmation."
+        setLastOutcome(prev => ({ ...prev, [id]: { dry_run: true, error: 'Unexpected response while checking this agent. Run cancelled.' } }));
+        return;
+      }
+      const commands: string[] = dry.would_run;
+
+      if (commands.length > 0) {
+        const ok = window.confirm(
+          `Run "${agents.find(a => a.id === id)?.name ?? id}" for real?\n\n` +
+          `This will execute:\n${commands.map(c => `  ${c}`).join('\n')}\n\n` +
+          `This cannot be undone. Continue?`
+        );
+        if (!ok) return;
+      }
+
+      const res = await fetch(`/api/agents/${id}/run?confirm=true`, { method: 'POST', headers: authHeaders() });
+      if (res.status === 401) notifyAuthInvalid();
+      const outcome: RunOutcome = await res.json();
+      setLastOutcome(prev => ({ ...prev, [id]: outcome }));
       loadAgents();
+    } catch (e) {
+      console.error(e);
+      setLastOutcome(prev => ({ ...prev, [id]: { dry_run: false, error: 'Request failed' } }));
     } finally {
       setRunning(prev => { const n = new Set(prev); n.delete(id); return n; });
     }
@@ -94,6 +147,24 @@ export default function AgentsPanel() {
                 {agent.total_freed > 0 && ` · Total: ${formatBytes(agent.total_freed)}`}
               </div>
             )}
+            {lastOutcome[agent.id] && (() => {
+              const outcome = lastOutcome[agent.id];
+              const failed = outcome.results?.filter(r => !r.success) ?? [];
+              return (
+                <div style={{ fontSize: '0.7rem', marginTop: '0.3rem', marginLeft: '52px' }}>
+                  {outcome.error && <span style={{ color: 'var(--danger)' }}>{outcome.error}</span>}
+                  {!outcome.error && outcome.results !== undefined && (
+                    <span style={{ color: failed.length > 0 ? 'var(--danger)' : 'var(--success)' }}>
+                      {outcome.results.length === 0
+                        ? 'Ran — no commands to execute for this agent.'
+                        : failed.length > 0
+                          ? `Ran with ${failed.length} error(s): ${failed.map(r => r.error).join('; ')}`
+                          : `Done — freed ${formatBytes(outcome.freed ?? 0)}.`}
+                    </span>
+                  )}
+                </div>
+              );
+            })()}
           </div>
         ))}
       </div>

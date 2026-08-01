@@ -2,6 +2,16 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Active Work: Improvement Plan
+
+There is a phased improvement plan in progress. **Before starting work on the backend, security, or the web UI, read `docs/superpowers/plans/README.md`** — it holds the current state, the next action, and the gotchas of the intermediate state (the plan documents are in Spanish).
+
+- `docs/superpowers/plans/README.md` — entry point: status table, next action, how to execute a plan, verification commands
+- `docs/superpowers/plans/2026-07-15-roadmap-mejoras.md` — the deep assessment (19 verified findings) and the scope of the 6 phases
+- `docs/superpowers/plans/2026-07-15-registro-ejecucion.md` — what was actually implemented, with commits, approved plan deviations, and deferred findings
+
+Current state: Phase 1 (backend bugs) is merged to `main`; Phase 2 (security) is in progress on `feat/fase2-seguridad`, and the frontend token task has landed. Auth is on by default: the server prints a link with a one-time token (`http://localhost:8000/?token=...`) on startup, the frontend stores it in `sessionStorage` and strips it from the URL, and a new token is minted on every restart — reopen the printed link after restarting the server. Use `--no-auth` to disable this on an isolated network.
+
 ## Build and Test Commands
 
 ```bash
@@ -66,7 +76,8 @@ This is a **macOS Disk Usage Analyzer** - a powerful standalone Python tool for 
 ├── static/                 # Legacy web static assets (fallback)
 ├── docs/                   # Documentation
 │   ├── FAQ.md              # Frequently Asked Questions
-│   └── examples/           # Usage examples
+│   ├── examples/           # Usage examples
+│   └── superpowers/plans/  # Phased improvement plan (start at README.md)
 └── utils/                  # Helper scripts
 ```
 
@@ -145,6 +156,7 @@ The project has three interfaces: CLI, GUI, and Web.
   - `@tanstack/react-virtual` for virtual-scrolling the file table
 - **Build:** `cd web && npm run build` → static files in `web/dist/` → served by FastAPI
 - **Dev mode:** `make web-dev` runs Astro dev server (port 3000) with Vite proxy to FastAPI (port 8000)
+- **Auth:** on by default. All `/api/*` routes require the `X-Auth-Token` header; both WebSockets require `?token=`. CORS is restricted to the dev origins (`localhost:3000`, `127.0.0.1:3000`), not `*`. A fresh token is generated on each server start and printed as part of the access URL; the frontend reads it from the URL once, stores it in `sessionStorage`, and strips it from the address bar. `--no-auth` disables all of it for an isolated network. Caveats: the WebSocket token travels in the query string over plain `ws://` (browsers can't set WS headers) and can land in the `uvicorn` access log; the PTY terminal's dangerous-command blocklist only checks the initial command, not what you type interactively afterward; `/docs` and `/openapi.json` are not behind auth. Background agents (`agents_manager.py`) are simulate-by-default — `POST /api/agents/{id}/run` only executes with `?confirm=true`, and the scheduler stays permanently dry-run.
 
 ### GUI (CustomTkinter, legacy)
 - **`disk_analyzer_gui.py`** - Desktop GUI using CustomTkinter
@@ -185,7 +197,7 @@ The project has three interfaces: CLI, GUI, and Web.
 - **Python Version**: Requires Python 3.6+ with type hints
 - **No pip install needed**: Core CLI uses only standard library modules
 - **Docker**: Optional dependency for Docker analysis features
-- **Permissions (sudo)**: Scanning `~/` works without sudo — you own your home directory. Scanning `/` or `/Library` requires `sudo` for full visibility; without it, restricted directories are skipped and the report shows a "Sin permisos (sudo)" gap. Use `sudo make full path=/` or `sudo make web` for complete system scans. **Warning**: `sudo make web` gives the floating terminal root access — only use on a trusted LAN.
+- **Permissions (sudo)**: Scanning `~/` works without sudo — you own your home directory. Scanning `/` or `/Library` requires `sudo` for full visibility; without it, restricted directories are skipped and the report shows a "Sin permisos (sudo)" gap. Use `sudo make full path=/` or `sudo make web` for complete system scans. **Warning**: `sudo make web` gives the floating terminal root access — only use on a trusted LAN. Token auth (see above) gates who can reach that terminal and the agents endpoints at all, but anyone holding the printed token has full access to both, so treat the token link itself as root-equivalent on that LAN.
 
 ## Testing Changes
 

@@ -158,6 +158,67 @@ class TestPTYManager:
         except ChildProcessError:
             pass  # correctly killed and reaped
 
+    def test_child_does_not_inherit_extra_fds(self):
+        # The PTY child forks then execvp's the shell. Since Python 3.4
+        # (PEP 446) marks fds it creates as non-inheritable by default, a
+        # plain os.pipe() fd would already be auto-closed by exec() with
+        # or without our fix -- that would give a false-negative (test
+        # passes for the wrong reason). To actually exercise the
+        # os.closerange() fix, mark the sentinel fd explicitly inheritable
+        # so it WOULD survive execvp absent the fix. This models the real
+        # risk: any fd that is (or becomes) inheritable -- other sessions'
+        # PTY masters, the uvicorn socket, or fds from code/libraries that
+        # don't opt into PEP 446 -- must not reach the spawned shell.
+        #
+        # The check itself uses a shell builtin fd-redirection probe
+        # (`: 1>&N`) instead of `ls -l /dev/fd` or a python subprocess:
+        # it runs directly in the exec'd shell with no extra fork+exec
+        # hop, so it deterministically reports whether fd N is still
+        # open, without depending on /dev/fd listing format (which
+        # doesn't exist on macOS the way it does on Linux's /proc).
+        r, w = os.pipe()
+        os.set_inheritable(w, True)
+        try:
+            probe = f"( : 1>&{w} ) 2>/dev/null && echo FD_ALIVE || echo FD_CLOSED"
+            pty_id = self.manager.create_session(command=probe)
+            deadline = time.time() + 3.0
+            output = ""
+            while time.time() < deadline and "FD_" not in output:
+                time.sleep(0.1)
+                output += self.manager.read_output(pty_id)
+            assert "FD_CLOSED" in output, (
+                f"child leaked inheritable sentinel fd {w} past execvp; output:\n{output!r}"
+            )
+            self.manager.kill_session(pty_id)
+        finally:
+            os.close(r)
+            os.close(w)
+
+    def test_child_does_not_inherit_auth_token(self, monkeypatch):
+        # Phase 2 Task 5 closed the fd leak into the spawned shell, but the
+        # env channel was left open: DISK_ANALYZER_TOKEN (and the --no-auth
+        # bypass flag) were inherited via os.environ into the child, so
+        # `env | grep DISK_ANALYZER` in the web terminal would print the
+        # server's auth token. The child must see these scrubbed while
+        # still inheriting normal vars like PATH/HOME/TERM.
+        monkeypatch.setenv("DISK_ANALYZER_TOKEN", "super-secret-token")
+        monkeypatch.setenv("DISK_ANALYZER_NO_AUTH", "1")
+        # Quoted so zsh doesn't try to glob-expand the literal brackets.
+        probe = 'echo "TOKEN=[$DISK_ANALYZER_TOKEN] NOAUTH=[$DISK_ANALYZER_NO_AUTH]"'
+        pty_id = self.manager.create_session(command=probe)
+        deadline = time.time() + 3.0
+        output = ""
+        while time.time() < deadline and "TOKEN=[" not in output:
+            time.sleep(0.1)
+            output += self.manager.read_output(pty_id)
+        assert "TOKEN=[]" in output, (
+            f"child saw DISK_ANALYZER_TOKEN in its environment; output:\n{output!r}"
+        )
+        assert "NOAUTH=[]" in output, (
+            f"child saw DISK_ANALYZER_NO_AUTH in its environment; output:\n{output!r}"
+        )
+        self.manager.kill_session(pty_id)
+
     def test_command_logging(self, tmp_path):
         log_file = tmp_path / "terminal.log"
         manager = PTYManager(max_sessions=2, log_file=str(log_file))

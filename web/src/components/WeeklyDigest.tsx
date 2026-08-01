@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { formatBytes } from '../lib/format';
+import { authHeaders, notifyAuthInvalid } from '../lib/auth';
 
 interface Digest {
   generated_at: string;
@@ -15,8 +16,15 @@ export default function WeeklyDigest() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    fetch('/api/digest')
-      .then(r => r.json())
+    fetch('/api/digest', { headers: authHeaders() })
+      .then(r => {
+        if (r.status === 401) {
+          notifyAuthInvalid();
+          throw new Error('Unauthorized');
+        }
+        if (!r.ok) throw new Error(`Digest request failed: ${r.status}`);
+        return r.json();
+      })
       .then(setDigest)
       .catch(console.error)
       .finally(() => setLoading(false));

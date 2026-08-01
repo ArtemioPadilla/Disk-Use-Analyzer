@@ -2,13 +2,19 @@
 
 Evaluación a profundidad realizada el 2026-07-15 (3 revisiones paralelas: backend Python, frontend web, duplicación de motores). Este documento es el índice: resume los hallazgos verificados y define las fases. Cada fase con código se detalla en su propio plan ejecutable (formato writing-plans).
 
-**Estado de planes:**
+> **Para retomar el trabajo:** empieza por el [punto de entrada](README.md), que
+> tiene el estado actual y la siguiente acción. Lo que ya se implementó, con sus
+> commits y desviaciones, está en el
+> [registro de ejecución](2026-07-15-registro-ejecucion.md). Este documento es la
+> evaluación y el alcance de las fases: el *por qué*, no el estado.
+
+**Estado de planes** (al 15 de julio de 2026):
 
 | Fase | Plan detallado | Estado |
 |---|---|---|
 | 0 — Higiene del repo | (comandos abajo, no requiere plan TDD) | pendiente |
-| 1 — Bugs críticos backend | `2026-07-15-mejoras-fase1-bugs-criticos.md` | ✅ escrito |
-| 2 — Seguridad | pendiente de escribir | pendiente |
+| 1 — Bugs críticos backend | `2026-07-15-mejoras-fase1-bugs-criticos.md` | ✅ ejecutada y mergeada a `main` (PR #5) |
+| 2 — Seguridad | `2026-07-15-mejoras-fase2-seguridad.md` | 🔄 en curso (1 de 6 tasks) en `feat/fase2-seguridad` |
 | 3 — Motor compartido (dedup) | pendiente de escribir | pendiente |
 | 4 — Frontend | pendiente de escribir | pendiente |
 | 5 — Tests y CI | pendiente de escribir | pendiente |
@@ -74,13 +80,15 @@ sudo rm -f disk_report_*.html disk_report_*.json firebase-debug.log
 
 Decisión del usuario: los `disk_report_*` root-owned se borran con sudo o se `chown` primero. No borrar `sessions_metadata.json` (estado vivo del servidor web).
 
-## Fase 1 — Bugs críticos backend ✅ plan escrito
+## Fase 1 — Bugs críticos backend ✅ ejecutada
 
 Ver `2026-07-15-mejoras-fase1-bugs-criticos.md`. 7 tasks TDD: cleanup endpoints, parse_docker_size, etiquetas de recomendaciones, idle reaper, sesiones interrumpidas, zombies, verificación integral. Hallazgos #1, #6, #7, #11, #12, #13.
 
-## Fase 2 — Seguridad (plan detallado pendiente)
+Completada y mergeada a `main` (PR #5, 11 commits, tests 18 → 39). El detalle de lo implementado está en el [registro de ejecución](2026-07-15-registro-ejecucion.md#fase-1--bugs-críticos-del-backend).
 
-Alcance y dirección (hallazgos #2, #3, #4, #8):
+## Fase 2 — Seguridad 🔄 en curso
+
+Ver `2026-07-15-mejoras-fase2-seguridad.md` (plan detallado escrito, 6 tasks). Task 1 completado: auth por token para `/api/*`, CORS restringido, flag `--no-auth`. Alcance y dirección (hallazgos #2, #3, #4, #8):
 
 1. **Token de sesión**: generar token aleatorio al arrancar, imprimirlo en la URL de inicio (`http://host:8000/?token=...`), middleware que exige el token (header `X-Auth-Token` o cookie) en toda ruta mutante (`POST/DELETE`) y en los WebSockets; el frontend lo guarda de la query a localStorage y lo adjunta en `api.ts`. Flag `--no-auth` para conservar el comportamiento actual explícitamente.
 2. **CORS**: restringir `allow_origins` al origen propio (mismo host/puerto) en producción; mantener `localhost:3000` para `make web-dev`.

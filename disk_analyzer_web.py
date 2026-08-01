@@ -16,10 +16,13 @@ from typing import Dict, List, Optional, Any
 from concurrent.futures import ThreadPoolExecutor
 import threading
 
+import secrets
+
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, BackgroundTasks, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse, Response
+from starlette.responses import JSONResponse as _StarletteJSONResponse
 from pydantic import BaseModel, Field
 import uvicorn
 
@@ -36,13 +39,66 @@ app = FastAPI(
     version="1.0.0"
 )
 
-# Enable CORS for web frontend
+# --- Auth configuration (read at module import so the uvicorn reload worker sees it) ---
+NO_AUTH = os.environ.get("DISK_ANALYZER_NO_AUTH") == "1"
+AUTH_TOKEN = None if NO_AUTH else os.environ.get("DISK_ANALYZER_TOKEN")
+
+
+def _token_is_valid(provided: str | None) -> bool:
+    if NO_AUTH:
+        return True
+    if not AUTH_TOKEN or not provided:
+        return False
+    # secrets.compare_digest() raises TypeError on `str` arguments containing
+    # non-ASCII characters. Starlette decodes request headers as latin-1, so
+    # a hostile "X-Auth-Token" header (or WS "token" query param) containing
+    # non-ASCII bytes reaches this function as a `str` that trips that
+    # restriction -- an unauthenticated crash on the very function whose job
+    # is rejecting hostile input. Comparing as bytes sidesteps the ASCII-only
+    # restriction entirely and still runs in constant time.
+    try:
+        return secrets.compare_digest(
+            provided.encode("utf-8", "surrogateescape"),
+            AUTH_TOKEN.encode("utf-8", "surrogateescape"),
+        )
+    except TypeError:
+        return False
+
+
+def require_token(request: Request) -> None:
+    """Reusable validation for the HTTP auth gate (WS variant is Task 2)."""
+    if NO_AUTH:
+        return
+    provided = request.headers.get("X-Auth-Token")
+    if not _token_is_valid(provided):
+        raise HTTPException(status_code=401, detail="Token inválido o ausente")
+
+
+@app.middleware("http")
+async def auth_middleware(request: Request, call_next):
+    """Require a valid token for /api/* routes; static/SPA routes stay open."""
+    if request.url.path.startswith("/api/"):
+        try:
+            require_token(request)
+        except HTTPException as exc:
+            return _StarletteJSONResponse(
+                {"detail": exc.detail}, status_code=exc.status_code
+            )
+    return await call_next(request)
+
+
+# CORS: only the Astro dev server needs cross-origin access (make web-dev).
+# In production the frontend is served same-origin from web/dist/.
+# Registered AFTER auth_middleware so it becomes the OUTERMOST layer (Starlette
+# executes middleware in reverse registration order) — this way CORS headers
+# are attached even to 401 responses short-circuited by the auth gate, which
+# the dev browser needs to be able to read the rejection at all.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # In production, specify your domain
+    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
     allow_credentials=False,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "DELETE"],
+    allow_headers=["X-Auth-Token", "Content-Type"],
 )
 
 # Global storage for analysis sessions
@@ -62,7 +118,18 @@ agents_manager = AgentsManager()
 # Session persistence
 SESSIONS_FILE = Path("sessions_metadata.json")
 RESULTS_DIR = Path.home() / ".disk-analyzer" / "results"
-RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+try:
+    RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+except OSError as e:
+    # ~/.disk-analyzer can be root-owned (e.g. left behind by a previous
+    # `sudo make web` run) while results/ doesn't exist yet under it -- mkdir()
+    # then raises PermissionError at *import time*, which crashes the server
+    # before it can bind a socket (and crash-loops the uvicorn --reload
+    # worker). save_analysis_results()/load_analysis_results() already
+    # degrade gracefully (best-effort try/except) when RESULTS_DIR isn't
+    # writable, so it's safe to just warn here and let the server boot
+    # without result persistence.
+    print(f"Warning: No se pudo crear {RESULTS_DIR}: {e}. Los resultados de análisis no se guardarán en disco.")
 MAX_STORED_RESULTS = 10
 
 def save_session_metadata():
@@ -731,6 +798,9 @@ async def get_latest_results():
 @app.websocket("/ws/{session_id}")
 async def websocket_endpoint(websocket: WebSocket, session_id: str):
     """WebSocket for real-time progress updates"""
+    if not _token_is_valid(websocket.query_params.get("token")):
+        await websocket.close(code=1008)
+        return
     await websocket.accept()
     
     # Add to connection pool
@@ -1094,6 +1164,9 @@ async def kill_terminal(pty_id: str):
 @app.websocket("/ws/terminal/{pty_id}")
 async def terminal_websocket(websocket: WebSocket, pty_id: str):
     """Bidirectional WebSocket: stdin from browser -> PTY, stdout from PTY -> browser."""
+    if not _token_is_valid(websocket.query_params.get("token")):
+        await websocket.close(code=1008)
+        return
     if pty_id not in pty_manager.sessions:
         await websocket.close(code=4004, reason="No such session")
         return
@@ -1139,15 +1212,32 @@ async def list_agents():
 @app.post("/api/agents/{agent_id}/toggle")
 async def toggle_agent(agent_id: str, enabled: bool = True):
     try:
-        agents_manager.toggle_agent(agent_id, enabled)
-        return {"status": "ok", "agent_id": agent_id, "enabled": enabled}
+        result = agents_manager.toggle_agent(agent_id, enabled)
+        response = {
+            "status": "ok",
+            "agent_id": agent_id,
+            "enabled": enabled,
+            "state_saved": result["state_saved"],
+        }
+        if not result["state_saved"]:
+            # The toggle took effect in memory but the change did not reach
+            # disk -- it will silently revert on the next restart. Surface
+            # that instead of pretending the change is durable.
+            response["warning"] = (
+                "El cambio se aplicó, pero no se pudo guardar el estado del "
+                "agente (revisa permisos de ~/.disk-analyzer)."
+            )
+        return response
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
 
 @app.post("/api/agents/{agent_id}/run")
-async def run_agent(agent_id: str):
+async def run_agent(agent_id: str, confirm: bool = False):
+    """Run an agent. Without confirm=true this is a dry-run (nothing is deleted)."""
     try:
-        result = agents_manager.run_agent(agent_id)
+        result = await asyncio.to_thread(
+            agents_manager.run_agent, agent_id, not confirm
+        )
         return result
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
@@ -1283,18 +1373,38 @@ async def get_persona():
 
 @app.get("/{path:path}")
 async def serve_astro(path: str):
-    """Serve Astro frontend pages. API routes take priority (registered first)."""
+    """Serve Astro frontend pages. API routes take priority (registered first).
+
+    SECURITY: `path` comes straight from the URL. A normal FastAPI TestClient
+    (httpx) normalizes ".." out of URLs before they reach the app, but a raw
+    ASGI request (or a real uvicorn socket) does not -- `path` can legitimately
+    be "../../../../etc/passwd". `Path.is_file()` happily resolves ".." at the
+    OS level, so without the containment check below this endpoint is an
+    unauthenticated arbitrary file read. Every candidate is resolved and must
+    stay inside `astro_dist` before being served; unmatched/out-of-bounds
+    paths fall through to the normal SPA-fallback (index.html), same as any
+    other unknown route.
+    """
     astro_dist = Path(__file__).parent / "web" / "dist"
     if not astro_dist.exists():
         return FileResponse(str(Path(__file__).parent / "static" / "index.html"))
 
-    for candidate in [
-        astro_dist / path / "index.html",
-        astro_dist / f"{path}.html",
-        astro_dist / path,
-    ]:
-        if candidate.is_file():
-            return FileResponse(str(candidate))
+    base = astro_dist.resolve()
+
+    # Belt-and-braces: reject any path containing a ".." segment outright,
+    # in addition to the resolve()+containment check on each candidate below.
+    if ".." not in Path(path).parts:
+        for candidate in [
+            astro_dist / path / "index.html",
+            astro_dist / f"{path}.html",
+            astro_dist / path,
+        ]:
+            try:
+                resolved = candidate.resolve()
+            except OSError:
+                continue
+            if resolved.is_relative_to(base) and resolved.is_file():
+                return FileResponse(str(resolved))
 
     index = astro_dist / "index.html"
     if index.is_file():
@@ -1308,39 +1418,48 @@ if __name__ == "__main__":
     parser.add_argument("--min-size", type=float, default=10,
                         help="Default minimum file size in MB (default: 10, use 0 for all files)")
     parser.add_argument("--port", type=int, default=8000, help="Server port (default: 8000)")
+    parser.add_argument("--no-auth", action="store_true",
+                        help="Disable token auth (only on a fully trusted, isolated network)")
     args = parser.parse_args()
 
-    # Store default min_size so the API can serve it
     app.state.default_min_size_mb = args.min_size
 
-    # Print startup information
+    # Propagate auth config via env vars so the uvicorn reload worker (a fresh
+    # process that re-imports the module) sees the same token/flag.
+    if args.no_auth:
+        os.environ["DISK_ANALYZER_NO_AUTH"] = "1"
+        token = None
+    else:
+        os.environ["DISK_ANALYZER_NO_AUTH"] = "0"
+        token = os.environ.get("DISK_ANALYZER_TOKEN") or secrets.token_urlsafe(32)
+        os.environ["DISK_ANALYZER_TOKEN"] = token
+
     print("\n" + "="*60)
     print("🌐 Disk Analyzer Web Server")
     print("="*60)
-
-    # Get local IP
     local_ip = get_local_ip()
-    
     print(f"\n⚙️  Default min file size: {args.min_size} MB")
-    print("\n🚀 Server starting...")
-    print(f"\n📍 Access the web interface at:")
-    print(f"   Local:   http://localhost:{args.port}")
+    if args.no_auth:
+        print("\n⚠️  Auth DESHABILITADA (--no-auth): cualquiera en tu red puede")
+        print("    leer/borrar archivos y abrir una terminal. Úsalo solo en una red aislada.")
+        suffix = ""
+    else:
+        print("\n🔑 Auth activada. Abre el enlace con token (no lo compartas):")
+        suffix = f"/?token={token}"
+    print(f"\n📍 Accede a la interfaz web en:")
+    print(f"   Local:   http://localhost:{args.port}{suffix}")
     if local_ip != "localhost":
-        print(f"   Network: http://{local_ip}:{args.port}")
-    print(f"\n📚 API documentation:")
-    print(f"   http://localhost:{args.port}/docs")
-    print(f"\nℹ️  Press Ctrl+C to stop the server")
+        print(f"   Network: http://{local_ip}:{args.port}{suffix}")
+    print(f"\nℹ️  Presiona Ctrl+C para detener el servidor")
     print("="*60 + "\n")
-    
-    # Run the server
+
     uvicorn.run(
         "disk_analyzer_web:app",
         host="0.0.0.0",
         port=args.port,
         reload=True,
         log_level="info",
-        # WebSocket settings to reduce buffering
         ws_ping_interval=20,
         ws_ping_timeout=20,
-        ws_max_size=16777216  # 16MB
+        ws_max_size=16777216
     )

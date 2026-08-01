@@ -14,10 +14,21 @@ AGENTS_LOG = Path.home() / ".disk-analyzer" / "agents.log"
 
 
 def _log(msg: str):
-    AGENTS_LOG.parent.mkdir(parents=True, exist_ok=True)
-    timestamp = datetime.now().isoformat()
-    with open(AGENTS_LOG, 'a') as f:
-        f.write(f"[{timestamp}] {msg}\n")
+    """Append a line to the agents log. Best-effort: logging is a side
+    observation of an operation, not a precondition for it, so any I/O
+    failure here (e.g. agents.log left root-owned by a previous
+    `sudo make web` run) is swallowed and reported as a warning instead of
+    crashing the caller. Programming errors (TypeError, etc.) still raise
+    normally -- only OSError (PermissionError, disk full, missing dir, ...)
+    is treated as best-effort.
+    """
+    try:
+        AGENTS_LOG.parent.mkdir(parents=True, exist_ok=True)
+        timestamp = datetime.now().isoformat()
+        with open(AGENTS_LOG, 'a') as f:
+            f.write(f"[{timestamp}] {msg}\n")
+    except OSError as e:
+        print(f"Warning: could not write to agents log {AGENTS_LOG}: {e}")
 
 
 AGENT_DEFINITIONS = {
@@ -65,6 +76,13 @@ class AgentsManager:
     def __init__(self):
         self.agents_state: Dict = self._load_state()
         self._task: Optional[asyncio.Task] = None
+        # Throttling bookkeeping for the scheduler's dry-run log line (see
+        # start_scheduler()). Intentionally NOT persisted to AGENTS_FILE and
+        # NOT the same field as agents_state[...]["last_run"] -- it only
+        # controls log noise and must reset naturally on restart, whereas
+        # last_run must stay unset forever for the permanent-dry-run policy
+        # to keep working.
+        self._last_dry_run_notice: Dict[str, datetime] = {}
 
     def _load_state(self) -> Dict:
         try:
@@ -75,10 +93,23 @@ class AgentsManager:
             pass
         return {}
 
-    def _save_state(self):
-        AGENTS_FILE.parent.mkdir(parents=True, exist_ok=True)
-        with open(AGENTS_FILE, 'w') as f:
-            json.dump(self.agents_state, f, indent=2)
+    def _save_state(self) -> bool:
+        """Persist agents state to disk. Unlike _log(), a failure here is
+        consequential (an agent run's bookkeeping would silently vanish), so
+        it must not be pretended-successful. It still must not crash the
+        caller mid-operation (e.g. after a real cleanup already ran) --
+        instead it is caught, warned about, and reported back via the
+        return value so callers can surface it to the user.
+        Returns True on success, False if the state could not be written.
+        """
+        try:
+            AGENTS_FILE.parent.mkdir(parents=True, exist_ok=True)
+            with open(AGENTS_FILE, 'w') as f:
+                json.dump(self.agents_state, f, indent=2)
+            return True
+        except OSError as e:
+            print(f"Warning: could not save agents state to {AGENTS_FILE}: {e}")
+            return False
 
     def get_agents(self) -> list:
         """Return all agents with their status."""
@@ -98,22 +129,40 @@ class AgentsManager:
             })
         return result
 
-    def toggle_agent(self, agent_id: str, enabled: bool):
-        """Enable or disable an agent."""
+    def toggle_agent(self, agent_id: str, enabled: bool) -> dict:
+        """Enable or disable an agent. Returns whether the change was
+        actually persisted, so callers (the API endpoint) can tell the
+        difference between "saved" and "lives only in memory until the next
+        write or process restart" -- consistent with run_agent()'s
+        state_saved/warning fields."""
         if agent_id not in AGENT_DEFINITIONS:
             raise ValueError(f"Unknown agent: {agent_id}")
         if agent_id not in self.agents_state:
             self.agents_state[agent_id] = {}
         self.agents_state[agent_id]["enabled"] = enabled
-        self._save_state()
+        state_saved = self._save_state()
         _log(f"Agent {agent_id} {'enabled' if enabled else 'disabled'}")
+        return {"state_saved": state_saved}
 
-    def run_agent(self, agent_id: str) -> dict:
-        """Run an agent immediately. Returns result."""
+    def run_agent(self, agent_id: str, dry_run: bool = True) -> dict:
+        """Run an agent. dry_run=True (default) reports what WOULD run without
+        executing anything -- no subprocess is invoked. Pass dry_run=False to
+        actually execute the agent's commands."""
         if agent_id not in AGENT_DEFINITIONS:
             raise ValueError(f"Unknown agent: {agent_id}")
 
         defn = AGENT_DEFINITIONS[agent_id]
+
+        if dry_run:
+            _log(f"[dry-run] agent {agent_id}: would run {defn['commands']}")
+            return {
+                "agent_id": agent_id,
+                "dry_run": True,
+                "would_run": list(defn["commands"]),
+                "freed": 0,
+                "results": [],
+            }
+
         usage_before = shutil.disk_usage("/").used
 
         results = []
@@ -144,15 +193,26 @@ class AgentsManager:
         state["last_freed"] = freed
         state["total_freed"] = state.get("total_freed", 0) + freed
         state["run_count"] = state.get("run_count", 0) + 1
-        self._save_state()
+        state_saved = self._save_state()
 
         _log(f"Agent {agent_id} ran: freed {freed} bytes, {len(results)} commands")
 
-        return {
+        response = {
             "agent_id": agent_id,
+            "dry_run": False,
             "freed": freed,
             "results": results,
+            "state_saved": state_saved,
         }
+        if not state_saved:
+            # Surface the persistence failure -- the cleanup itself already
+            # ran, but its bookkeeping (last_run/total_freed/run_count) was
+            # NOT recorded and may be lost.
+            response["warning"] = (
+                "La limpieza se ejecutó, pero no se pudo guardar el estado del "
+                "agente (revisa permisos de ~/.disk-analyzer)."
+            )
+        return response
 
     async def start_scheduler(self):
         """Start the background scheduler loop."""
@@ -168,10 +228,33 @@ class AgentsManager:
                     elapsed = (datetime.now() - datetime.fromisoformat(last_run)).total_seconds() / 3600
                     if elapsed < defn["interval_hours"]:
                         continue
-                # Time to run
-                _log(f"Scheduler running agent: {agent_id}")
+                # Time to run.
+                # Design decision (Phase 2): the scheduler stays in permanent
+                # dry-run -- it only logs what it would delete. Unattended
+                # real deletion is a product decision deferred to a later
+                # phase; users can trigger a real run on demand via
+                # POST /api/agents/{id}/run?confirm=true.
+                #
+                # Throttling: dry-run intentionally never sets last_run (see
+                # comment above), so the "time to run" branch above would
+                # otherwise trip on *every* hourly tick forever once an agent
+                # is enabled -- writing an identical "[dry-run] ..." line to
+                # agents.log 24x/day (and drowning /api/digest's log tail in
+                # noise), in a tool whose whole point is flagging runaway
+                # disk usage. `_last_dry_run_notice` is separate, in-memory,
+                # log-only throttling state: it limits the notice to once per
+                # the agent's own interval_hours, without touching
+                # `last_run`/agents_state (which must stay as-is for the
+                # permanent-dry-run policy above and for persistence).
+                last_notice = self._last_dry_run_notice.get(agent_id)
+                if last_notice:
+                    since_notice = (datetime.now() - last_notice).total_seconds() / 3600
+                    if since_notice < defn["interval_hours"]:
+                        continue
+                self._last_dry_run_notice[agent_id] = datetime.now()
+                _log(f"Scheduler running agent (dry-run): {agent_id}")
                 try:
-                    self.run_agent(agent_id)
+                    self.run_agent(agent_id, dry_run=True)
                 except Exception as e:
                     _log(f"Scheduler error for {agent_id}: {e}")
 

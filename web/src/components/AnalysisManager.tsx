@@ -5,6 +5,7 @@
  */
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { api, type AnalysisSession, type SessionResults } from '../lib/api';
+import { withToken, notifyAuthInvalid } from '../lib/auth';
 import { on, emit } from '../lib/events';
 
 export default function AnalysisManager() {
@@ -46,7 +47,7 @@ export default function AnalysisManager() {
   useEffect(() => {
     if (!sessionId) return;
 
-    const wsUrl = `ws://${window.location.host}/ws/${sessionId}`;
+    const wsUrl = withToken(`ws://${window.location.host}/ws/${sessionId}`);
     const ws = new WebSocket(wsUrl);
     wsRef.current = ws;
 
@@ -89,8 +90,16 @@ export default function AnalysisManager() {
       }
     };
 
-    ws.onclose = () => {
+    ws.onclose = (event) => {
       console.log(`[AnalysisManager] WS closed for session ${sessionId}`);
+      if (event.code === 1008) {
+        // Server rejected the token — looping the reconnect/toast every 2s
+        // forever would never succeed and would spam the user. Surface the
+        // real problem once and stop tracking this session instead.
+        notifyAuthInvalid();
+        setSessionId(null);
+        return;
+      }
       // Only warn if we still expected to be connected
       if (sessionIdRef.current === sessionId) {
         emit('toast:show', { message: 'Connection lost. Reconnecting...', type: 'error' });

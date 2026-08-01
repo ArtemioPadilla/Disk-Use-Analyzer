@@ -1,4 +1,5 @@
 import { useEffect, useRef, useCallback, useState } from 'react';
+import { withToken, notifyAuthInvalid } from '../lib/auth';
 
 interface UseWebSocketOptions {
   url: string;
@@ -14,7 +15,7 @@ export function useWebSocket({ url, onMessage, onClose, enabled = true }: UseWeb
 
   const connect = useCallback(() => {
     if (!enabled) return;
-    const wsUrl = `ws://${window.location.host}${url}`;
+    const wsUrl = withToken(`ws://${window.location.host}${url}`);
     const ws = new WebSocket(wsUrl);
     wsRef.current = ws;
 
@@ -32,9 +33,16 @@ export function useWebSocket({ url, onMessage, onClose, enabled = true }: UseWeb
       }
     };
 
-    ws.onclose = () => {
+    ws.onclose = (event) => {
       setConnected(false);
       onClose?.();
+      if (event.code === 1008) {
+        // Server rejected the token (e.g. it restarted and minted a new
+        // one). Retrying with the same stale token forever would never
+        // succeed — tell the user instead of looping.
+        notifyAuthInvalid();
+        return;
+      }
       const delay = Math.min(1000 * Math.pow(2, retriesRef.current), 30000);
       retriesRef.current++;
       setTimeout(connect, delay);
