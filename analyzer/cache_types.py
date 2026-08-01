@@ -32,14 +32,24 @@ ALL_LABELS = (
 # Categories safe to delete without human review. Downloads holds user data and
 # GENERAL is by definition unclassified, so neither is ever auto-cleanable.
 #
-# This is an exact translation of the CLI's pre-unification clean_cache
-# safelist ({'Logs del Sistema', 'VS Code', 'Node.js/npm', 'Xcode Development',
-# 'Python Cache'}) to the unified label set -- same five categories, no more,
-# no fewer. In particular TEMP ('Archivos Temporales') is deliberately
-# excluded: it's a core-only category the old CLI safelist never included, and
-# adding a new category to a safelist that deletes files is a behavior change
-# that must not happen silently as a side effect of this refactor.
-SAFE_TO_CLEAN = frozenset({LOGS, VSCODE, NPM, XCODE, PYTHON})
+# This restores true behavioral parity with what the old CLI actually DID,
+# not with what its dead safelist text said. The pre-unification clean_cache
+# safelist was {'Logs del Sistema', 'VS Code', 'Node.js/npm',
+# 'Xcode Development', 'Python Cache'} -- but the old CLI's classify_cache
+# had no python-specific branch, so it never produced 'Python Cache' for
+# anything; python paths always fell through to 'Cache General' and were
+# never cleaned. Now that PYTHON is a real, reachable label (from the
+# unified classifier), including it here would newly enable actual deletion
+# of python caches -- and clean_cache's directory branch does a permanent
+# rglob().unlink(), not a move to Trash (see task-4-report.md, "Fix round
+# 1"), so this would be irreversible. That's a real behavior change and is
+# deliberately deferred to an explicit owner decision, not introduced as a
+# side effect of this refactor. Do not add PYTHON back without that decision
+# -- see the test that pins its absence in tests/test_cache_labels.py.
+#
+# TEMP ('Archivos Temporales') is excluded for the same reason: it's a
+# core-only category the old CLI safelist never included at all.
+SAFE_TO_CLEAN = frozenset({LOGS, VSCODE, NPM, XCODE})
 
 
 def classify(path: Path) -> str:
@@ -51,8 +61,13 @@ def classify(path: Path) -> str:
     Cache and leave the Xcode branch unreachable. This was a real bug in
     DiskAnalyzerCore.categorize_cache prior to unification (see
     task-4-report.md); fixed here by moving the more specific pattern first.
-    All other branch precedence is preserved verbatim from the core's
-    original categorize_cache.
+    The relative order of the other 11 branches is preserved verbatim from
+    the core's original categorize_cache. Note this is NOT a no-op for every
+    path, though: a path matching both 'xcode' and a later keyword (e.g. an
+    Xcode project with node_modules copied into DerivedData, matching both
+    'xcode' and 'node') now resolves to XCODE where the pre-fix code would
+    have hit that later branch (e.g. NPM) instead. Only single-keyword paths
+    are guaranteed unaffected by moving 'xcode' to the front.
     """
     path_str = str(path).lower()
 

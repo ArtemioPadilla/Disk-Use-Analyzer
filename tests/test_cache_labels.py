@@ -37,3 +37,22 @@ def test_downloads_and_general_are_never_auto_cleanable():
     """Deleting Downloads or an unclassified cache automatically is unsafe."""
     assert cache_types.DOWNLOADS not in cache_types.SAFE_TO_CLEAN
     assert cache_types.GENERAL not in cache_types.SAFE_TO_CLEAN
+
+
+def test_python_cache_is_not_auto_cleanable():
+    """PYTHON must stay OUT of SAFE_TO_CLEAN -- do not casually re-add it.
+
+    The pre-unification CLI safelist literally contained the string
+    'Python Cache', but the pre-unification CLI classifier never produced
+    that label (no python-specific branch), so it was dead text: python
+    caches always fell through to 'Cache General' and were never cleaned.
+    Now that the unified classifier has a real, reachable PYTHON branch,
+    adding it to SAFE_TO_CLEAN would newly enable deletion of python caches
+    -- and clean_cache's directory-deletion branch does a permanent
+    rglob().unlink() with NO move to Trash (see task-4-report.md, "Fix round
+    1"), so that deletion would be irreversible. This is deliberately
+    deferred to an explicit owner decision, not something a refactor should
+    introduce as a side effect. If you're re-adding PYTHON here, get that
+    decision first and delete this test as part of making it.
+    """
+    assert cache_types.PYTHON not in cache_types.SAFE_TO_CLEAN
