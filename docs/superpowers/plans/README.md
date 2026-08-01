@@ -7,14 +7,14 @@ cuál es la siguiente acción y cómo ejecutarla.
 
 ## Estado de un vistazo
 
-Última actualización: 15 de julio de 2026. Tests: **79 passed**.
+Última actualización: 31 de julio de 2026. Tests: **137 passed**.
 
 | Fase | Alcance | Plan | Estado |
 |---|---|---|---|
 | 0 | Higiene del repo (destrackear `.pyc`, borrar ~12 MB de reportes) | En el roadmap, sin plan TDD | Pendiente |
 | 1 | Bugs críticos del backend (6 fixes) | [Fase 1](2026-07-15-mejoras-fase1-bugs-criticos.md) | ✅ Completa, mergeada a `main` (PR #5) |
 | 2 | Seguridad (auth, CORS, agents, fds del PTY) | [Fase 2](2026-07-15-mejoras-fase2-seguridad.md) | ✅ Completa y verificada en `feat/fase2-seguridad`, sin mergear |
-| 3 | Motor compartido (deduplicar CLI vs core) | Solo esbozo en el roadmap | Pendiente |
+| 3 | Motor compartido (deduplicar CLI vs core) | [Fase 3](2026-07-30-mejoras-fase3-motor-compartido.md) | ✅ Completa y verificada en `feat/fase3-motor-compartido`, sin mergear |
 | 4 | Frontend (cleanup runner, sesiones, tipos, código muerto) | Solo esbozo en el roadmap | Pendiente |
 | 5 | Tests del motor y CI | Solo esbozo en el roadmap | Pendiente |
 
@@ -29,16 +29,26 @@ Documentos de referencia:
 
 ## Siguiente acción
 
-La Fase 2 está implementada y verificada en `feat/fase2-seguridad`, pero **sin
-mergear**: falta decidir si se abre un pull request hacia `main` (como se hizo
-con la Fase 1) o se sigue trabajando sobre la rama.
+Hay **dos ramas terminadas y sin mergear**, apiladas una sobre otra:
 
-Después de eso, la siguiente pieza de trabajo es escribir el plan detallado de
-una de las fases pendientes. Recomendación: la **Fase 3** (motor compartido),
-porque la duplicación entre `disk_analyzer.py` y `disk_analyzer_core.py` es la
-que hace que cada bug haya que arreglarlo dos veces. Su alcance está en el
-[roadmap](2026-07-15-roadmap-mejoras.md#fase-3--motor-compartido-plan-detallado-pendiente).
-La Fase 0 (higiene) son 15 minutos y no necesita plan.
+```
+main ← feat/fase2-seguridad ← feat/fase3-motor-compartido
+```
+
+La Fase 3 se ramificó desde la 2, así que contiene ambas. Decidir cómo
+integrarlas es lo primero: un pull request por fase (respetando el orden) o uno
+solo con las dos. Ambas están verificadas y con la suite en verde.
+
+Después de integrarlas, quedan pendientes de escribir su plan detallado la
+**Fase 4** (frontend) y la **Fase 5** (tests del motor y CI); su alcance está en
+el [roadmap](2026-07-15-roadmap-mejoras.md). La Fase 0 (higiene) son 15 minutos,
+no necesita plan, y requiere `sudo` porque hay archivos que quedaron propiedad
+de `root`.
+
+Hay además una decisión de producto pendiente, registrada en el
+[registro de ejecución](2026-07-15-registro-ejecucion.md#la-decisión-sobre-las-cachés-de-python):
+si `--clean-cache` debe borrar o no las cachés de Python. Hoy no las borra, que
+es lo que hacía antes.
 
 ## Cómo ejecutar un plan
 

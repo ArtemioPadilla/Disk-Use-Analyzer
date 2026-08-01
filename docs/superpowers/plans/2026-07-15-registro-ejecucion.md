@@ -187,7 +187,78 @@ contra descriptores que sí sean heredables, presentes o futuros, sin depender d
 que cada punto del código recuerde marcarlos. Vale registrarlo así para que
 nadie sobrevalore la severidad al leer el historial.
 
-## Fases 0 y 3 a 5
+## Fase 3 — Motor compartido
+
+**Estado:** completa y verificada en la rama `feat/fase3-motor-compartido`,
+creada desde `feat/fase2-seguridad`. Sin mergear. Tests: 79 → 137.
+
+| Task | Qué hace | Estado |
+|---|---|---|
+| 1 | Red de tests de caracterización del motor (antes no había ninguno) | ✅ `cbf7bc5`, `5455a18` |
+| 2 | Constantes compartidas en `analyzer/constants.py` | ✅ `36b15fe` |
+| 3 | `is_protected_path` en `analyzer/protection.py` | ✅ `acd3395` |
+| 4 | Una sola clasificación de cachés con etiquetas como constantes | ✅ `102c678`, `871eb6c` |
+| 5 | Una sola forma de medir directorios y un solo umbral de cachés | ✅ `0374706` |
+| 6 | Verificación integral | ✅ |
+
+Resultado: `disk_analyzer.py` 4.882 → 4.737 líneas, `disk_analyzer_core.py` 762
+→ 630, más 281 líneas de paquete `analyzer/` compartido. La cifra neta importa
+menos que el hecho de que constantes, protección de rutas, clasificación de
+cachés y medición de directorios ahora existen **una sola vez**.
+
+### Lo que encontró la red de caracterización
+
+Escribir los tests antes de mover nada era el paso obligatorio del plan, y se
+pagó solo: destapó un bug real en el motor que usan la web y la GUI.
+`categorize_cache` evaluaba `'code' in path_str` antes que `'xcode'`, y como
+"code" es substring de "xcode", toda ruta de Xcode se clasificaba como
+`'VS Code Cache'` y la rama de Xcode era código muerto. Los usuarios de web y
+GUI veían sus cachés de Xcode mal etiquetadas y la recomendación específica de
+Xcode nunca disparaba. El CLI lo hacía bien. El Task 4 lo arregló al unificar.
+
+También durante la revisión: dos tests de caracterización resultaron ser vacuos
+(no fallaban ante la mutación que decían detectar) y se reforzaron; y el Task 3
+destapó que `/api/files/delete` usaba `DiskAnalyzerCore.__new__(DiskAnalyzerCore)`
+para saltarse el `__init__` entero, un rodeo peor que el que el plan había
+detectado.
+
+### Decisiones de diseño de la fase
+
+| Decisión | Alternativas | Motivo |
+|---|---|---|
+| Conservar el conjunto de 12 etiquetas del core | Las 8 del CLI | Es el más granular y el que ya ven la web y la GUI; las recomendaciones del core se le alinearon en la Fase 1 |
+| Medir directorios con `rglob` + `st_blocks` | `du -sk` por subproceso, como hacía el CLI | Coherente con cómo mide el resto del motor y sin depender de un subproceso. Consecuencia medida: sobre este repo da +3,29 % frente a `du`, porque `du` cuenta los enlaces duros una vez y el recorrido los cuenta por cada entrada (npm crea enlaces duros en `node_modules`) |
+| Umbral de cachés en `> MB` | El `> 0` del core | Una caché de 3 KB no es accionable y solo ensucia la lista |
+| **No** hacer borrables las cachés de Python | Incluir `PYTHON` en `SAFE_TO_CLEAN` | Ver abajo |
+
+### La decisión sobre las cachés de Python
+
+El safelist viejo del CLI contenía literalmente `'Python Cache'`, pero su
+clasificador nunca producía esa etiqueta: era una entrada muerta, y las cachés
+de Python siempre caían en `'Cache General'` y no se limpiaban nunca. Al
+unificar, el clasificador compartido sí produce esa etiqueta, así que incluirla
+en el safelist las habría hecho borrables por primera vez.
+
+Se decidió **excluirlas**, y conviene registrar por qué, porque el primer
+razonamiento fue equivocado. La justificación inicial para dejarlo pasar era que
+`clean_cache` manda a la Papelera en macOS y pide confirmación. Al verificar el
+código resultó falso a medias: la rama de Papelera solo aplica a archivos
+sueltos; para **directorios** —que es exactamente lo que son las cachés de
+Python— hace `item.unlink()`, borrado permanente. Y la confirmación es una sola
+para todo el lote, no por categoría.
+
+Así que se restauró la paridad real de comportamiento (lo que el CLI *hacía*, no
+lo que su texto muerto decía) y queda como decisión explícita del dueño del
+proyecto, no como efecto colateral de un refactor.
+
+### Hallazgo pendiente que vale la pena no perder
+
+`clean_cache` borra directorios con `unlink()` permanente para **todas** las
+categorías del safelist, no solo las de Python, y eso contradice su propio
+comentario "Mover a Trash en macOS". Afecta a logs, VS Code, npm y Xcode.
+Candidato claro para una fase posterior.
+
+## Fases 0, 4 y 5
 
 Sin ejecutar. El alcance, la secuencia recomendada y los criterios de
 aceptación de cada una están en el

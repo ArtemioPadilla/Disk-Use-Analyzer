@@ -74,10 +74,11 @@ class TestCleanupExecute:
             def find_cache_locations(self):
                 pass
 
-            def is_protected_path(self, path):
-                return path.startswith("/System")
-
         monkeypatch.setattr(disk_analyzer_web, "DiskAnalyzerCore", FakeAnalyzer)
+        # _perform_cleanup_deletes now calls the shared analyzer.protection.is_protected_path
+        # free function directly (imported into this module's namespace), instead of a
+        # DiskAnalyzerCore instance method -- patch it at its new call site.
+        monkeypatch.setattr(disk_analyzer_web, "is_protected_path", lambda path: path.startswith("/System"))
         resp = self.client.post(
             "/api/cleanup/execute",
             json={"paths": [str(tmp_path)], "dry_run": False},

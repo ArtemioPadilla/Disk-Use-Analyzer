@@ -18,119 +18,13 @@ from datetime import datetime
 from collections import defaultdict
 from typing import Dict, List, Tuple, Optional
 
-# Configuración de tamaños
-KB = 1024
-MB = KB * 1024
-GB = MB * 1024
-
-# Detección del sistema operativo
-SYSTEM = platform.system()
-IS_WINDOWS = SYSTEM == 'Windows'
-IS_MACOS = SYSTEM == 'Darwin'
-IS_LINUX = SYSTEM == 'Linux'
-
-# Directorios típicos con archivos temporales o cache por sistema
-if IS_WINDOWS:
-    CACHE_DIRS = [
-        "~/AppData/Local/Temp",
-        "~/AppData/Local/Microsoft/Windows/INetCache",
-        "~/AppData/Local/Microsoft/Windows/Explorer",
-        "~/AppData/Roaming/Code/Cache",
-        "~/AppData/Roaming/Code/CachedData",
-        "~/AppData/Local/Google/Chrome/User Data/Default/Cache",
-        "~/AppData/Local/Mozilla/Firefox/Profiles",
-        "~/.npm",
-        "~/.cache",
-        "~/Downloads",
-        "$RECYCLE.BIN",
-        "C:/Windows/Temp",
-        "~/AppData/Local/Docker",
-        "~/.docker",
-    ]
-elif IS_MACOS:
-    CACHE_DIRS = [
-        "~/Library/Caches",
-        "~/Library/Logs",
-        "~/Library/Application Support/Code/Cache",
-        "~/Library/Application Support/Code/CachedData",
-        "~/Library/Developer/Xcode/DerivedData",
-        "~/Library/Developer/Xcode/Archives",
-        "~/Library/Developer/CoreSimulator/Devices",
-        "~/.npm",
-        "~/.cache",
-        "~/Downloads",
-        "~/.Trash",
-        "/private/var/folders",
-        "~/Library/Containers/com.docker.docker/Data",
-        "~/.docker",
-    ]
-else:  # Linux
-    CACHE_DIRS = [
-        "~/.cache",
-        "~/.local/share/Trash",
-        "/tmp",
-        "/var/tmp",
-        "~/.config/Code/Cache",
-        "~/.config/Code/CachedData",
-        "~/.mozilla/firefox",
-        "~/.cache/google-chrome",
-        "~/.npm",
-        "~/Downloads",
-        "/var/cache",
-        "~/.docker",
-        "/var/lib/docker",
-    ]
-
-# Extensiones de archivos grandes comunes
-LARGE_FILE_EXTENSIONS = {
-    '.dmg', '.iso', '.pkg', '.zip', '.rar', '.7z',
-    '.mov', '.mp4', '.avi', '.mkv', '.mpg',
-    '.psd', '.ai', '.sketch',
-    '.vmdk', '.vdi', '.qcow2'
-}
-
-# Archivos/carpetas a ignorar
-IGNORE_PATTERNS = {
-    '.DS_Store', '.localized', 'node_modules', '__pycache__',
-    '.git/objects', 'venv', 'env', '.virtualenv', 'Docker.raw'
-}
-
-# Volúmenes APFS a excluir en macOS para evitar doble conteo por firmlinks
-MACOS_APFS_SKIP_DIRS = {
-    '/System/Volumes/Data',
-    '/System/Volumes/VM',
-    '/System/Volumes/Preboot',
-    '/System/Volumes/Update',
-    '/System/Volumes/xarts',
-    '/System/Volumes/iSCPreboot',
-    '/System/Volumes/Hardware',
-}
-
-# Prefijos de rutas del sistema que nunca deben tener comandos de borrado
-# Estas se comparan con startswith() para evitar falsos positivos por substring
-PROTECTED_PATH_PREFIXES = [
-    # Volúmenes del sistema macOS
-    '/System/Volumes/',
-    '/private/var/vm/',
-    '/var/vm/',
-    # Bibliotecas y frameworks del sistema
-    '/System/Library/',
-    '/usr/lib/',
-    '/usr/bin/',
-    '/usr/sbin/',
-    '/Library/Updates/',
-    '/private/var/folders/',
-]
-
-# Prefijos que protegen internos de apps (Contents/ dentro de un .app o .AppBundle)
-# pero NO el .app en sí (el usuario puede borrar una app entera)
-PROTECTED_APP_MARKERS = ['.app/', '.AppBundle/']
-
-# Nombres de archivo del sistema (match exacto contra el nombre, no la ruta)
-PROTECTED_FILENAMES = {'sleepimage', 'swapfile'}
-
-# Rutas raíz del sistema (match exacto de los primeros componentes)
-PROTECTED_ROOT_DIRS = {'/bin', '/sbin'}
+from analyzer.constants import (
+    KB, MB, GB, SYSTEM, IS_WINDOWS, IS_MACOS, IS_LINUX,
+    CACHE_DIRS, LARGE_FILE_EXTENSIONS, IGNORE_PATTERNS, MACOS_APFS_SKIP_DIRS,
+)
+from analyzer import protection
+from analyzer import cache_types
+from analyzer import measurement
 
 class DiskAnalyzer:
     def __init__(self, start_path: str, min_size_mb: float = 10):
@@ -385,24 +279,10 @@ class DiskAnalyzer:
                     pass
     
     def classify_cache(self, path: Path) -> str:
-        """Clasifica el tipo de cache"""
-        path_str = str(path).lower()
-        if 'docker' in path_str:
-            return 'Docker'
-        elif 'xcode' in path_str:
-            return 'Xcode Development'
-        elif 'code' in path_str or 'vscode' in path_str:
-            return 'VS Code'
-        elif 'npm' in path_str or 'node' in path_str:
-            return 'Node.js/npm'
-        elif 'downloads' in path_str:
-            return 'Downloads'
-        elif 'trash' in path_str:
-            return 'Papelera'
-        elif 'logs' in path_str:
-            return 'Logs del Sistema'
-        else:
-            return 'Cache General'
+        """Clasifica el tipo de cache. Delega en el clasificador compartido
+        (analyzer.cache_types) para que CLI, web y GUI usen las mismas
+        etiquetas."""
+        return cache_types.classify(path)
     
     def analyze_docker(self):
         """Analiza el uso de espacio de Docker"""
@@ -551,19 +431,10 @@ class DiskAnalyzer:
         return 0
     
     def get_directory_size(self, path: Path) -> int:
-        """Obtiene el tamaño de un directorio usando du"""
-        try:
-            # du -sk es POSIX (macOS + Linux), du -sb es solo GNU/Linux
-            result = subprocess.run(
-                ['du', '-sk', str(path)],
-                capture_output=True,
-                text=True
-            )
-            if result.returncode == 0 and result.stdout.strip():
-                return int(result.stdout.split()[0]) * 1024
-        except:
-            pass
-        return 0
+        """Calcula el tamaño de un directorio (delega en analyzer.measurement,
+        la misma implementación que usa el core; antes usaba `du -sk`, ver
+        Task 5 de la Fase 3 para el motivo de la reconciliación)."""
+        return measurement.get_directory_size(path)
     
     def get_disk_usage(self, path: Optional[str] = None) -> Dict:
         """Obtiene el uso total del disco de forma multiplataforma"""
@@ -705,21 +576,8 @@ class DiskAnalyzer:
         }
     
     def is_protected_path(self, file_path: str) -> bool:
-        """Determina si un archivo es del sistema y no debe borrarse"""
-        # Prefijos de rutas del sistema
-        if any(file_path.startswith(prefix) for prefix in PROTECTED_PATH_PREFIXES):
-            return True
-        # Rutas raíz del sistema (/bin, /sbin - no /Users/robin/)
-        parts = Path(file_path).parts
-        if len(parts) >= 2 and '/' + parts[1] in PROTECTED_ROOT_DIRS:
-            return True
-        # Internos de aplicaciones (.app/Contents/... o .AppBundle/Contents/...)
-        if '/Contents/' in file_path and any(m in file_path for m in PROTECTED_APP_MARKERS):
-            return True
-        # Nombres de archivo del sistema (match exacto)
-        if Path(file_path).name in PROTECTED_FILENAMES:
-            return True
-        return False
+        """Delegates to the shared implementation (kept for callers)."""
+        return protection.is_protected_path(file_path)
 
     def _categorize_path(self, dir_path: str) -> str:
         """Asigna una categoría a un directorio basado en su ruta"""
@@ -1021,13 +879,13 @@ class DiskAnalyzer:
 
         # ── TIER 1: Seguro (auto-limpiable, sin revisión) ──
         # Logs del sistema
-        log_locs = [l for l in self.cache_locations if l['type'] == 'Logs del Sistema']
+        log_locs = [l for l in self.cache_locations if l['type'] == cache_types.LOGS]
         if log_locs:
             size = sum(l['size'] for l in log_locs)
             if size > 10 * MB:
                 recommendations.append({
                     'tier': 1, 'priority': 'Seguro',
-                    'type': 'Logs del Sistema',
+                    'type': cache_types.LOGS,
                     'description': f'{self.format_size(size)} en logs del sistema',
                     'space': size,
                     'command': ' && '.join(f"rm -rf '{l['path']}/*'" for l in log_locs)
@@ -1046,7 +904,7 @@ class DiskAnalyzer:
             })
 
         # VS Code caches
-        vscode_locs = [l for l in self.cache_locations if l['type'] == 'VS Code']
+        vscode_locs = [l for l in self.cache_locations if l['type'] == cache_types.VSCODE]
         if vscode_locs:
             size = sum(l['size'] for l in vscode_locs)
             if size > 10 * MB:
@@ -1059,7 +917,7 @@ class DiskAnalyzer:
                 })
 
         # npm cache
-        npm_locs = [l for l in self.cache_locations if l['type'] == 'Node.js/npm']
+        npm_locs = [l for l in self.cache_locations if l['type'] == cache_types.NPM]
         if npm_locs:
             size = sum(l['size'] for l in npm_locs)
             if size > 50 * MB:
@@ -1111,7 +969,7 @@ class DiskAnalyzer:
         # ── TIER 3: Agresivo (puede requerir re-descargas) ──
         # ~/.cache (huggingface, pip, etc.)
         cache_general = [l for l in self.cache_locations
-                         if l['type'] == 'Cache General' and '/.cache' in l['path']]
+                         if l['type'] == cache_types.GENERAL and '/.cache' in l['path']]
         if cache_general:
             size = sum(l['size'] for l in cache_general)
             if size > 100 * MB:
@@ -1124,7 +982,7 @@ class DiskAnalyzer:
                 })
 
         # Xcode DerivedData
-        xcode_locs = [l for l in self.cache_locations if l['type'] == 'Xcode Development']
+        xcode_locs = [l for l in self.cache_locations if l['type'] == cache_types.XCODE]
         if xcode_locs:
             size = sum(l['size'] for l in xcode_locs)
             if size > 100 * MB:
@@ -4636,10 +4494,7 @@ class DiskAnalyzer:
             path = Path(cache_loc['path'])
             
             # Solo limpiar caches seguros — NUNCA Downloads ni Cache General
-            safe_to_clean = cache_loc['type'] in {
-                'Logs del Sistema', 'VS Code', 'Node.js/npm',
-                'Xcode Development', 'Python Cache'
-            }
+            safe_to_clean = cache_loc['type'] in cache_types.SAFE_TO_CLEAN
 
             if safe_to_clean and path.exists():
                 if dry_run:

@@ -16,103 +16,13 @@ from datetime import datetime
 from collections import defaultdict
 from typing import Dict, List, Tuple, Optional, Callable
 
-# Configuración de tamaños
-KB = 1024
-MB = KB * 1024
-GB = MB * 1024
-
-# Detección del sistema operativo
-SYSTEM = platform.system()
-IS_WINDOWS = SYSTEM == 'Windows'
-IS_MACOS = SYSTEM == 'Darwin'
-IS_LINUX = SYSTEM == 'Linux'
-
-# Directorios típicos con archivos temporales o cache por sistema
-if IS_WINDOWS:
-    CACHE_DIRS = [
-        "~/AppData/Local/Temp",
-        "~/AppData/Local/Microsoft/Windows/INetCache",
-        "~/AppData/Local/Microsoft/Windows/Explorer",
-        "~/AppData/Roaming/Code/Cache",
-        "~/AppData/Roaming/Code/CachedData",
-        "~/AppData/Local/Google/Chrome/User Data/Default/Cache",
-        "~/AppData/Local/Mozilla/Firefox/Profiles",
-        "~/.npm",
-        "~/.cache",
-        "~/Downloads",
-        "$RECYCLE.BIN",
-        "C:/Windows/Temp",
-        "~/AppData/Local/Docker",
-        "~/.docker",
-    ]
-elif IS_MACOS:
-    CACHE_DIRS = [
-        "~/Library/Caches",
-        "~/Library/Logs",
-        "~/Library/Application Support/Code/Cache",
-        "~/Library/Application Support/Code/CachedData",
-        "~/Library/Developer/Xcode/DerivedData",
-        "~/Library/Developer/Xcode/Archives",
-        "~/Library/Developer/CoreSimulator/Devices",
-        "~/.npm",
-        "~/.cache",
-        "~/Downloads",
-        "~/.Trash",
-        "/private/var/folders",
-        "~/Library/Containers/com.docker.docker/Data",
-        "~/.docker",
-    ]
-else:  # Linux
-    CACHE_DIRS = [
-        "~/.cache",
-        "~/.local/share/Trash",
-        "/tmp",
-        "/var/tmp",
-        "~/.config/Code/Cache",
-        "~/.config/Code/CachedData",
-        "~/.mozilla/firefox",
-        "~/.cache/google-chrome",
-        "~/.npm",
-        "~/Downloads",
-        "/var/cache",
-        "~/.docker",
-        "/var/lib/docker",
-    ]
-
-# Extensiones de archivos grandes comunes
-LARGE_FILE_EXTENSIONS = {
-    '.dmg', '.iso', '.pkg', '.zip', '.rar', '.7z',
-    '.mov', '.mp4', '.avi', '.mkv', '.mpg',
-    '.psd', '.ai', '.sketch',
-    '.vmdk', '.vdi', '.qcow2'
-}
-
-# Archivos/carpetas a ignorar
-IGNORE_PATTERNS = {
-    '.DS_Store', '.localized', 'node_modules', '__pycache__',
-    '.git/objects', 'venv', 'env', '.virtualenv', 'Docker.raw'
-}
-
-# Volúmenes APFS a excluir en macOS para evitar doble conteo por firmlinks
-MACOS_APFS_SKIP_DIRS = {
-    '/System/Volumes/Data',
-    '/System/Volumes/VM',
-    '/System/Volumes/Preboot',
-    '/System/Volumes/Update',
-    '/System/Volumes/xarts',
-    '/System/Volumes/iSCPreboot',
-    '/System/Volumes/Hardware',
-}
-
-# Protección de archivos del sistema
-PROTECTED_PATH_PREFIXES = [
-    '/System/Volumes/', '/private/var/vm/', '/var/vm/',
-    '/System/Library/', '/usr/lib/', '/usr/bin/', '/usr/sbin/',
-    '/Library/Updates/', '/private/var/folders/',
-]
-PROTECTED_APP_MARKERS = ['.app/', '.AppBundle/']
-PROTECTED_FILENAMES = {'sleepimage', 'swapfile'}
-PROTECTED_ROOT_DIRS = {'/bin', '/sbin'}
+from analyzer.constants import (
+    KB, MB, GB, SYSTEM, IS_WINDOWS, IS_MACOS, IS_LINUX,
+    CACHE_DIRS, LARGE_FILE_EXTENSIONS, IGNORE_PATTERNS, MACOS_APFS_SKIP_DIRS,
+)
+from analyzer import protection
+from analyzer import cache_types
+from analyzer import measurement
 
 class DiskAnalyzerCore:
     """Core disk analysis functionality with progress callback support"""
@@ -189,17 +99,8 @@ class DiskAnalyzerCore:
         return any(pattern in path_str for pattern in IGNORE_PATTERNS)
 
     def is_protected_path(self, file_path: str) -> bool:
-        """Determina si un archivo es del sistema y no debe borrarse"""
-        if any(file_path.startswith(prefix) for prefix in PROTECTED_PATH_PREFIXES):
-            return True
-        parts = Path(file_path).parts
-        if len(parts) >= 2 and '/' + parts[1] in PROTECTED_ROOT_DIRS:
-            return True
-        if '/Contents/' in file_path and any(m in file_path for m in PROTECTED_APP_MARKERS):
-            return True
-        if Path(file_path).name in PROTECTED_FILENAMES:
-            return True
-        return False
+        """Delegates to the shared implementation (kept for callers)."""
+        return protection.is_protected_path(file_path)
     
     def get_home_dir(self) -> Path:
         """Obtiene el directorio home según el sistema"""
@@ -369,7 +270,7 @@ class DiskAnalyzerCore:
                         phase="cache_scan"
                     )
                     size = self.get_directory_size(path)
-                    if size > 0:
+                    if size > MB:  # Solo reportar si es mayor a 1MB (igual que el CLI)
                         cache_type = self.categorize_cache(path)
                         self.cache_locations.append({
                             'path': str(path),
@@ -386,48 +287,15 @@ class DiskAnalyzerCore:
                     pass
     
     def get_directory_size(self, directory: Path) -> int:
-        """Calcula el tamaño de un directorio"""
-        total_size = 0
-        try:
-            for entry in directory.rglob('*'):
-                if entry.is_file(follow_symlinks=False):
-                    try:
-                        stat = entry.stat(follow_symlinks=False)
-                        total_size += stat.st_blocks * 512 if hasattr(stat, 'st_blocks') else stat.st_size
-                    except:
-                        pass
-        except:
-            pass
-        return total_size
+        """Calcula el tamaño de un directorio (delega en analyzer.measurement,
+        la misma implementación que usa el CLI)."""
+        return measurement.get_directory_size(directory)
     
     def categorize_cache(self, path: Path) -> str:
-        """Categoriza el tipo de cache"""
-        path_str = str(path).lower()
-        
-        if 'code' in path_str or 'vscode' in path_str:
-            return 'VS Code Cache'
-        elif 'chrome' in path_str:
-            return 'Chrome Cache'
-        elif 'firefox' in path_str or 'mozilla' in path_str:
-            return 'Firefox Cache'
-        elif 'npm' in path_str or 'node' in path_str:
-            return 'NPM Cache'
-        elif 'pip' in path_str or 'python' in path_str:
-            return 'Python Cache'
-        elif 'xcode' in path_str:
-            return 'Xcode Cache'
-        elif 'docker' in path_str:
-            return 'Docker'
-        elif 'trash' in path_str or 'recycle' in path_str:
-            return 'Papelera'
-        elif 'temp' in path_str or 'tmp' in path_str:
-            return 'Archivos Temporales'
-        elif 'log' in path_str:
-            return 'Logs del Sistema'
-        elif 'download' in path_str:
-            return 'Downloads'
-        else:
-            return 'Cache General'
+        """Categoriza el tipo de cache. Delega en el clasificador compartido
+        (analyzer.cache_types) para que CLI, web y GUI usen las mismas
+        etiquetas."""
+        return cache_types.classify(path)
     
     def get_disk_usage(self, path: Optional[str] = None) -> Dict:
         """Obtiene el uso total del disco de forma multiplataforma"""
@@ -690,9 +558,9 @@ class DiskAnalyzerCore:
         recommendations = []
 
         # TIER 1: Seguro
-        log_locs = [l for l in self.cache_locations if l['type'] == 'Logs del Sistema']
+        log_locs = [l for l in self.cache_locations if l['type'] == cache_types.LOGS]
         if log_locs and sum(l['size'] for l in log_locs) > 10 * MB:
-            recommendations.append({'tier': 1, 'priority': 'Seguro', 'type': 'Logs del Sistema',
+            recommendations.append({'tier': 1, 'priority': 'Seguro', 'type': cache_types.LOGS,
                 'description': f'{self.format_size(sum(l["size"] for l in log_locs))} en logs',
                 'space': sum(l['size'] for l in log_locs),
                 'command': ' && '.join(f"rm -rf '{l['path']}/*'" for l in log_locs)})
@@ -704,14 +572,14 @@ class DiskAnalyzerCore:
                 'description': f'{len(brew_files)} descargas ({self.format_size(size)})',
                 'space': size, 'command': 'brew cleanup --prune=all'})
 
-        vscode_locs = [l for l in self.cache_locations if l['type'] == 'VS Code Cache']
+        vscode_locs = [l for l in self.cache_locations if l['type'] == cache_types.VSCODE]
         if vscode_locs and sum(l['size'] for l in vscode_locs) > 10 * MB:
             recommendations.append({'tier': 1, 'priority': 'Seguro', 'type': 'Cache de VS Code',
                 'description': f'{self.format_size(sum(l["size"] for l in vscode_locs))} en cache',
                 'space': sum(l['size'] for l in vscode_locs),
                 'command': ' && '.join(f"rm -rf '{l['path']}/*'" for l in vscode_locs)})
 
-        npm_locs = [l for l in self.cache_locations if l['type'] == 'NPM Cache']
+        npm_locs = [l for l in self.cache_locations if l['type'] == cache_types.NPM]
         if npm_locs and sum(l['size'] for l in npm_locs) > 50 * MB:
             recommendations.append({'tier': 1, 'priority': 'Seguro', 'type': 'Cache de npm',
                 'description': f'{self.format_size(sum(l["size"] for l in npm_locs))} en cache',
@@ -739,7 +607,7 @@ class DiskAnalyzerCore:
                 'space': self.docker_stats['reclaimable'], 'command': 'docker system prune -a -f'})
 
         # TIER 3: Agresivo
-        cache_general = [l for l in self.cache_locations if l['type'] == 'Cache General' and '/.cache' in l['path']]
+        cache_general = [l for l in self.cache_locations if l['type'] == cache_types.GENERAL and '/.cache' in l['path']]
         if cache_general and sum(l['size'] for l in cache_general) > 100 * MB:
             recommendations.append({'tier': 3, 'priority': 'Agresivo', 'type': 'Cache General (~/.cache)',
                 'description': f'{self.format_size(sum(l["size"] for l in cache_general))} (modelos ML, pip, etc.)',
