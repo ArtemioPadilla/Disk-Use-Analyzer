@@ -143,20 +143,24 @@ class TestProtectedPaths:
 
 
 class TestCacheClassification:
-    """Pins the CURRENT labels of both implementations, which differ.
+    """Task 4 unified both classifiers behind analyzer.cache_types.classify().
 
-    Task 4 unifies them; these tests are what proves the unification did not
-    silently drop a category.
+    These tests used to pin the pre-unification divergence between the CLI's
+    classify_cache and the core's categorize_cache (different label sets, and
+    a precedence bug in the core's classifier -- see below). That divergence
+    is now deliberately gone: this is the ONE authorized characterization-test
+    change in this phase, and it is intentional, not a regression.
     """
 
     @pytest.mark.parametrize("path,expected", [
         (Path.home() / "Library/Caches/com.docker.docker", "Docker"),
-        # NOTE: categorize_cache checks the 'code'/'vscode' substring BEFORE
-        # the 'xcode' substring, and "xcode" itself contains the substring
-        # "code". So DerivedData is misclassified as "VS Code Cache", never
-        # reaching the 'xcode' branch. This looks like a bug (see report) but
-        # is today's real behavior -- pinned here, not fixed here.
-        (Path.home() / "Library/Developer/Xcode/DerivedData", "VS Code Cache"),
+        # FIXED by Task 4 (was a real bug): categorize_cache used to check the
+        # 'code'/'vscode' substring BEFORE the 'xcode' substring, and "xcode"
+        # itself contains the substring "code". So DerivedData was
+        # misclassified as "VS Code Cache" and the 'xcode' branch was
+        # unreachable. analyzer.cache_types.classify() checks 'xcode' first,
+        # so this now correctly returns "Xcode Cache".
+        (Path.home() / "Library/Developer/Xcode/DerivedData", "Xcode Cache"),
         (Path.home() / "Library/Caches/com.microsoft.VSCode", "VS Code Cache"),
         (Path.home() / ".npm", "NPM Cache"),
         (Path.home() / ".Trash", "Papelera"),
@@ -165,25 +169,30 @@ class TestCacheClassification:
         core = DiskAnalyzerCore(".")
         assert core.categorize_cache(path) == expected
 
-    def test_cli_labels_differ_from_core(self):
-        """Documents the divergence Task 4 removes."""
+    def test_cli_and_core_labels_now_match(self):
+        """Was test_cli_labels_differ_from_core, which documented the
+        pre-unification divergence. Task 4 made both classes delegate to the
+        same analyzer.cache_types.classify(), so they now agree -- this test
+        is renamed and its assertion flipped on purpose."""
         from disk_analyzer import DiskAnalyzer
         cli = DiskAnalyzer(".")
         core = DiskAnalyzerCore(".")
         vscode = Path.home() / "Library/Caches/com.microsoft.VSCode"
-        assert cli.classify_cache(vscode) == "VS Code"
-        assert core.categorize_cache(vscode) == "VS Code Cache"
+        assert cli.classify_cache(vscode) == core.categorize_cache(vscode) == "VS Code Cache"
 
-    def test_cli_does_not_have_the_xcode_bug(self):
-        """The CLI checks 'xcode' before 'code'/'vscode', so it does NOT
-        misclassify DerivedData the way core.categorize_cache does. This is
-        the concrete divergence between the two implementations' precedence
-        order, not just their label spelling.
+    def test_xcode_bug_is_fixed_for_both_cli_and_core(self):
+        """Was test_cli_does_not_have_the_xcode_bug, which asserted the CLI's
+        OLD label ('Xcode Development') to document that only the CLI's
+        classifier had correct 'xcode'-before-'code' precedence. Task 4
+        unified both classifiers behind the fixed analyzer.cache_types.classify(),
+        so now BOTH correctly return the shared 'Xcode Cache' label -- the bug
+        is fixed everywhere, not just avoided in one implementation.
         """
         from disk_analyzer import DiskAnalyzer
         cli = DiskAnalyzer(".")
+        core = DiskAnalyzerCore(".")
         xcode = Path.home() / "Library/Developer/Xcode/DerivedData"
-        assert cli.classify_cache(xcode) == "Xcode Development"
+        assert cli.classify_cache(xcode) == core.categorize_cache(xcode) == "Xcode Cache"
 
 
 class TestRecommendations:

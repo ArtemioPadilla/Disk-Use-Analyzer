@@ -21,6 +21,7 @@ from analyzer.constants import (
     CACHE_DIRS, LARGE_FILE_EXTENSIONS, IGNORE_PATTERNS, MACOS_APFS_SKIP_DIRS,
 )
 from analyzer import protection
+from analyzer import cache_types
 
 class DiskAnalyzerCore:
     """Core disk analysis functionality with progress callback support"""
@@ -300,33 +301,10 @@ class DiskAnalyzerCore:
         return total_size
     
     def categorize_cache(self, path: Path) -> str:
-        """Categoriza el tipo de cache"""
-        path_str = str(path).lower()
-        
-        if 'code' in path_str or 'vscode' in path_str:
-            return 'VS Code Cache'
-        elif 'chrome' in path_str:
-            return 'Chrome Cache'
-        elif 'firefox' in path_str or 'mozilla' in path_str:
-            return 'Firefox Cache'
-        elif 'npm' in path_str or 'node' in path_str:
-            return 'NPM Cache'
-        elif 'pip' in path_str or 'python' in path_str:
-            return 'Python Cache'
-        elif 'xcode' in path_str:
-            return 'Xcode Cache'
-        elif 'docker' in path_str:
-            return 'Docker'
-        elif 'trash' in path_str or 'recycle' in path_str:
-            return 'Papelera'
-        elif 'temp' in path_str or 'tmp' in path_str:
-            return 'Archivos Temporales'
-        elif 'log' in path_str:
-            return 'Logs del Sistema'
-        elif 'download' in path_str:
-            return 'Downloads'
-        else:
-            return 'Cache General'
+        """Categoriza el tipo de cache. Delega en el clasificador compartido
+        (analyzer.cache_types) para que CLI, web y GUI usen las mismas
+        etiquetas."""
+        return cache_types.classify(path)
     
     def get_disk_usage(self, path: Optional[str] = None) -> Dict:
         """Obtiene el uso total del disco de forma multiplataforma"""
@@ -589,9 +567,9 @@ class DiskAnalyzerCore:
         recommendations = []
 
         # TIER 1: Seguro
-        log_locs = [l for l in self.cache_locations if l['type'] == 'Logs del Sistema']
+        log_locs = [l for l in self.cache_locations if l['type'] == cache_types.LOGS]
         if log_locs and sum(l['size'] for l in log_locs) > 10 * MB:
-            recommendations.append({'tier': 1, 'priority': 'Seguro', 'type': 'Logs del Sistema',
+            recommendations.append({'tier': 1, 'priority': 'Seguro', 'type': cache_types.LOGS,
                 'description': f'{self.format_size(sum(l["size"] for l in log_locs))} en logs',
                 'space': sum(l['size'] for l in log_locs),
                 'command': ' && '.join(f"rm -rf '{l['path']}/*'" for l in log_locs)})
@@ -603,14 +581,14 @@ class DiskAnalyzerCore:
                 'description': f'{len(brew_files)} descargas ({self.format_size(size)})',
                 'space': size, 'command': 'brew cleanup --prune=all'})
 
-        vscode_locs = [l for l in self.cache_locations if l['type'] == 'VS Code Cache']
+        vscode_locs = [l for l in self.cache_locations if l['type'] == cache_types.VSCODE]
         if vscode_locs and sum(l['size'] for l in vscode_locs) > 10 * MB:
             recommendations.append({'tier': 1, 'priority': 'Seguro', 'type': 'Cache de VS Code',
                 'description': f'{self.format_size(sum(l["size"] for l in vscode_locs))} en cache',
                 'space': sum(l['size'] for l in vscode_locs),
                 'command': ' && '.join(f"rm -rf '{l['path']}/*'" for l in vscode_locs)})
 
-        npm_locs = [l for l in self.cache_locations if l['type'] == 'NPM Cache']
+        npm_locs = [l for l in self.cache_locations if l['type'] == cache_types.NPM]
         if npm_locs and sum(l['size'] for l in npm_locs) > 50 * MB:
             recommendations.append({'tier': 1, 'priority': 'Seguro', 'type': 'Cache de npm',
                 'description': f'{self.format_size(sum(l["size"] for l in npm_locs))} en cache',
@@ -638,7 +616,7 @@ class DiskAnalyzerCore:
                 'space': self.docker_stats['reclaimable'], 'command': 'docker system prune -a -f'})
 
         # TIER 3: Agresivo
-        cache_general = [l for l in self.cache_locations if l['type'] == 'Cache General' and '/.cache' in l['path']]
+        cache_general = [l for l in self.cache_locations if l['type'] == cache_types.GENERAL and '/.cache' in l['path']]
         if cache_general and sum(l['size'] for l in cache_general) > 100 * MB:
             recommendations.append({'tier': 3, 'priority': 'Agresivo', 'type': 'Cache General (~/.cache)',
                 'description': f'{self.format_size(sum(l["size"] for l in cache_general))} (modelos ML, pip, etc.)',

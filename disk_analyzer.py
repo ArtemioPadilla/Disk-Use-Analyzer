@@ -23,6 +23,7 @@ from analyzer.constants import (
     CACHE_DIRS, LARGE_FILE_EXTENSIONS, IGNORE_PATTERNS, MACOS_APFS_SKIP_DIRS,
 )
 from analyzer import protection
+from analyzer import cache_types
 
 class DiskAnalyzer:
     def __init__(self, start_path: str, min_size_mb: float = 10):
@@ -277,24 +278,10 @@ class DiskAnalyzer:
                     pass
     
     def classify_cache(self, path: Path) -> str:
-        """Clasifica el tipo de cache"""
-        path_str = str(path).lower()
-        if 'docker' in path_str:
-            return 'Docker'
-        elif 'xcode' in path_str:
-            return 'Xcode Development'
-        elif 'code' in path_str or 'vscode' in path_str:
-            return 'VS Code'
-        elif 'npm' in path_str or 'node' in path_str:
-            return 'Node.js/npm'
-        elif 'downloads' in path_str:
-            return 'Downloads'
-        elif 'trash' in path_str:
-            return 'Papelera'
-        elif 'logs' in path_str:
-            return 'Logs del Sistema'
-        else:
-            return 'Cache General'
+        """Clasifica el tipo de cache. Delega en el clasificador compartido
+        (analyzer.cache_types) para que CLI, web y GUI usen las mismas
+        etiquetas."""
+        return cache_types.classify(path)
     
     def analyze_docker(self):
         """Analiza el uso de espacio de Docker"""
@@ -900,13 +887,13 @@ class DiskAnalyzer:
 
         # ── TIER 1: Seguro (auto-limpiable, sin revisión) ──
         # Logs del sistema
-        log_locs = [l for l in self.cache_locations if l['type'] == 'Logs del Sistema']
+        log_locs = [l for l in self.cache_locations if l['type'] == cache_types.LOGS]
         if log_locs:
             size = sum(l['size'] for l in log_locs)
             if size > 10 * MB:
                 recommendations.append({
                     'tier': 1, 'priority': 'Seguro',
-                    'type': 'Logs del Sistema',
+                    'type': cache_types.LOGS,
                     'description': f'{self.format_size(size)} en logs del sistema',
                     'space': size,
                     'command': ' && '.join(f"rm -rf '{l['path']}/*'" for l in log_locs)
@@ -925,7 +912,7 @@ class DiskAnalyzer:
             })
 
         # VS Code caches
-        vscode_locs = [l for l in self.cache_locations if l['type'] == 'VS Code']
+        vscode_locs = [l for l in self.cache_locations if l['type'] == cache_types.VSCODE]
         if vscode_locs:
             size = sum(l['size'] for l in vscode_locs)
             if size > 10 * MB:
@@ -938,7 +925,7 @@ class DiskAnalyzer:
                 })
 
         # npm cache
-        npm_locs = [l for l in self.cache_locations if l['type'] == 'Node.js/npm']
+        npm_locs = [l for l in self.cache_locations if l['type'] == cache_types.NPM]
         if npm_locs:
             size = sum(l['size'] for l in npm_locs)
             if size > 50 * MB:
@@ -990,7 +977,7 @@ class DiskAnalyzer:
         # ── TIER 3: Agresivo (puede requerir re-descargas) ──
         # ~/.cache (huggingface, pip, etc.)
         cache_general = [l for l in self.cache_locations
-                         if l['type'] == 'Cache General' and '/.cache' in l['path']]
+                         if l['type'] == cache_types.GENERAL and '/.cache' in l['path']]
         if cache_general:
             size = sum(l['size'] for l in cache_general)
             if size > 100 * MB:
@@ -1003,7 +990,7 @@ class DiskAnalyzer:
                 })
 
         # Xcode DerivedData
-        xcode_locs = [l for l in self.cache_locations if l['type'] == 'Xcode Development']
+        xcode_locs = [l for l in self.cache_locations if l['type'] == cache_types.XCODE]
         if xcode_locs:
             size = sum(l['size'] for l in xcode_locs)
             if size > 100 * MB:
@@ -4515,10 +4502,7 @@ class DiskAnalyzer:
             path = Path(cache_loc['path'])
             
             # Solo limpiar caches seguros — NUNCA Downloads ni Cache General
-            safe_to_clean = cache_loc['type'] in {
-                'Logs del Sistema', 'VS Code', 'Node.js/npm',
-                'Xcode Development', 'Python Cache'
-            }
+            safe_to_clean = cache_loc['type'] in cache_types.SAFE_TO_CLEAN
 
             if safe_to_clean and path.exists():
                 if dry_run:
