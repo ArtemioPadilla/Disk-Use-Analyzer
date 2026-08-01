@@ -10,7 +10,7 @@ There is a phased improvement plan in progress. **Before starting work on the ba
 - `docs/superpowers/plans/2026-07-15-roadmap-mejoras.md` — the deep assessment (19 verified findings) and the scope of the 6 phases
 - `docs/superpowers/plans/2026-07-15-registro-ejecucion.md` — what was actually implemented, with commits, approved plan deviations, and deferred findings
 
-Current state: Phase 1 (backend bugs) is merged to `main`; Phase 2 (security) is in progress on `feat/fase2-seguridad`, and the frontend token task has landed. Auth is on by default: the server prints a link with a one-time token (`http://localhost:8000/?token=...`) on startup, the frontend stores it in `sessionStorage` and strips it from the URL, and a new token is minted on every restart — reopen the printed link after restarting the server. Use `--no-auth` to disable this on an isolated network.
+Current state: Phases 1 (backend bugs), 2 (security) and 3 (shared engine) are all merged to `main`. Auth is on by default: the server prints a link with a one-time token (`http://localhost:8000/?token=...`) on startup, the frontend stores it in `sessionStorage` and strips it from the URL, and a new token is minted on every restart — reopen the printed link after restarting the server. Use `--no-auth` to disable this on an isolated network.
 
 ## Build and Test Commands
 

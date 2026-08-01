@@ -13,8 +13,8 @@ cuál es la siguiente acción y cómo ejecutarla.
 |---|---|---|---|
 | 0 | Higiene del repo (destrackear `.pyc`, borrar ~12 MB de reportes) | En el roadmap, sin plan TDD | Pendiente |
 | 1 | Bugs críticos del backend (6 fixes) | [Fase 1](2026-07-15-mejoras-fase1-bugs-criticos.md) | ✅ Completa, mergeada a `main` (PR #5) |
-| 2 | Seguridad (auth, CORS, agents, fds del PTY) | [Fase 2](2026-07-15-mejoras-fase2-seguridad.md) | ✅ Completa y verificada en `feat/fase2-seguridad`, sin mergear |
-| 3 | Motor compartido (deduplicar CLI vs core) | [Fase 3](2026-07-30-mejoras-fase3-motor-compartido.md) | ✅ Completa y verificada en `feat/fase3-motor-compartido`, sin mergear |
+| 2 | Seguridad (auth, CORS, agents, fds del PTY) | [Fase 2](2026-07-15-mejoras-fase2-seguridad.md) | ✅ Completa, mergeada a `main` (PR #6) |
+| 3 | Motor compartido (deduplicar CLI vs core) | [Fase 3](2026-07-30-mejoras-fase3-motor-compartido.md) | ✅ Completa, mergeada a `main` (PR #7) |
 | 4 | Frontend (cleanup runner, sesiones, tipos, código muerto) | Solo esbozo en el roadmap | Pendiente |
 | 5 | Tests del motor y CI | Solo esbozo en el roadmap | Pendiente |
 
@@ -29,26 +29,32 @@ Documentos de referencia:
 
 ## Siguiente acción
 
-Hay **dos ramas terminadas y sin mergear**, apiladas una sobre otra:
+Las fases 1, 2 y 3 están mergeadas a `main`. Quedan tres caminos, en el orden
+que recomiendo:
 
-```
-main ← feat/fase2-seguridad ← feat/fase3-motor-compartido
-```
+1. **Fase 5 (tests del motor y CI).** Es la más barata y la que más protege lo
+   ya hecho: hoy no hay CI, así que nada impide que un cambio rompa los 137
+   tests sin que nadie se entere. Su alcance está en el
+   [roadmap](2026-07-15-roadmap-mejoras.md).
+2. **Fase 4 (frontend).** La más grande de las que quedan: unificar los cinco
+   flujos de limpieza, arreglar la carga de sesiones históricas, reconectar el
+   análisis al navegar y quitar el código muerto.
+3. **Fase 0 (higiene).** Quince minutos, sin plan, pero necesita `sudo`: hay
+   archivos en el repo y en `~/.disk-analyzer/` que quedaron propiedad de `root`
+   por corridas anteriores con `sudo`, y eso ya provocó un fallo real en
+   producción (un 500 al no poder escribir el log de agents).
 
-La Fase 3 se ramificó desde la 2, así que contiene ambas. Decidir cómo
-integrarlas es lo primero: un pull request por fase (respetando el orden) o uno
-solo con las dos. Ambas están verificadas y con la suite en verde.
+Las fases 4 y 5 necesitan que se les escriba su plan detallado antes de
+ejecutarse, con el mismo formato que las anteriores.
 
-Después de integrarlas, quedan pendientes de escribir su plan detallado la
-**Fase 4** (frontend) y la **Fase 5** (tests del motor y CI); su alcance está en
-el [roadmap](2026-07-15-roadmap-mejoras.md). La Fase 0 (higiene) son 15 minutos,
-no necesita plan, y requiere `sudo` porque hay archivos que quedaron propiedad
-de `root`.
+### Decisiones abiertas
 
-Hay además una decisión de producto pendiente, registrada en el
-[registro de ejecución](2026-07-15-registro-ejecucion.md#la-decisión-sobre-las-cachés-de-python):
-si `--clean-cache` debe borrar o no las cachés de Python. Hoy no las borra, que
-es lo que hacía antes.
+- **¿Debe `--clean-cache` borrar las cachés de Python?** Hoy no lo hace, igual
+  que antes del refactor. El contexto completo está en el
+  [registro de ejecución](2026-07-15-registro-ejecucion.md#la-decisión-sobre-las-cachés-de-python).
+- **`clean_cache` borra directorios de forma permanente** para todas las
+  categorías del safelist, pese a su propio comentario "Mover a Trash en macOS".
+  Conviene decidir si se arregla el código o el comentario.
 
 ## Cómo ejecutar un plan
 
