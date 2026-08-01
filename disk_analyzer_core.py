@@ -22,6 +22,7 @@ from analyzer.constants import (
 )
 from analyzer import protection
 from analyzer import cache_types
+from analyzer import measurement
 
 class DiskAnalyzerCore:
     """Core disk analysis functionality with progress callback support"""
@@ -269,7 +270,7 @@ class DiskAnalyzerCore:
                         phase="cache_scan"
                     )
                     size = self.get_directory_size(path)
-                    if size > 0:
+                    if size > MB:  # Solo reportar si es mayor a 1MB (igual que el CLI)
                         cache_type = self.categorize_cache(path)
                         self.cache_locations.append({
                             'path': str(path),
@@ -286,19 +287,9 @@ class DiskAnalyzerCore:
                     pass
     
     def get_directory_size(self, directory: Path) -> int:
-        """Calcula el tamaño de un directorio"""
-        total_size = 0
-        try:
-            for entry in directory.rglob('*'):
-                if entry.is_file(follow_symlinks=False):
-                    try:
-                        stat = entry.stat(follow_symlinks=False)
-                        total_size += stat.st_blocks * 512 if hasattr(stat, 'st_blocks') else stat.st_size
-                    except:
-                        pass
-        except:
-            pass
-        return total_size
+        """Calcula el tamaño de un directorio (delega en analyzer.measurement,
+        la misma implementación que usa el CLI)."""
+        return measurement.get_directory_size(directory)
     
     def categorize_cache(self, path: Path) -> str:
         """Categoriza el tipo de cache. Delega en el clasificador compartido

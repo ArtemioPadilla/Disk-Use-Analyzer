@@ -24,6 +24,7 @@ from analyzer.constants import (
 )
 from analyzer import protection
 from analyzer import cache_types
+from analyzer import measurement
 
 class DiskAnalyzer:
     def __init__(self, start_path: str, min_size_mb: float = 10):
@@ -430,19 +431,10 @@ class DiskAnalyzer:
         return 0
     
     def get_directory_size(self, path: Path) -> int:
-        """Obtiene el tamaño de un directorio usando du"""
-        try:
-            # du -sk es POSIX (macOS + Linux), du -sb es solo GNU/Linux
-            result = subprocess.run(
-                ['du', '-sk', str(path)],
-                capture_output=True,
-                text=True
-            )
-            if result.returncode == 0 and result.stdout.strip():
-                return int(result.stdout.split()[0]) * 1024
-        except:
-            pass
-        return 0
+        """Calcula el tamaño de un directorio (delega en analyzer.measurement,
+        la misma implementación que usa el core; antes usaba `du -sk`, ver
+        Task 5 de la Fase 3 para el motivo de la reconciliación)."""
+        return measurement.get_directory_size(path)
     
     def get_disk_usage(self, path: Optional[str] = None) -> Dict:
         """Obtiene el uso total del disco de forma multiplataforma"""
