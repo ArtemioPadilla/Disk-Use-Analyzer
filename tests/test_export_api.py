@@ -12,21 +12,10 @@ from disk_analyzer_web import app
 
 
 @pytest.fixture
-def completed_session(monkeypatch):
-    """Register a completed session with a minimal but realistic report.
-
-    The report dict must satisfy both the CSV export (which reads
-    large_files[*].{path,size,extension,age_days,is_cache}) and the HTML
-    export, which delegates to DiskAnalyzer.generate_html_report(). That
-    method indexes several summary/report keys directly (not via .get()),
-    so a report missing any of them raises a KeyError deep inside HTML
-    generation. The keys below were discovered by calling
-    generate_html_report() directly against a minimal fixture and adding
-    whatever key it complained about next (recoverable_space,
-    large_files_count, top_file_types, docker, disk_usage, ...) -- all
-    values are invented, nothing is read from the real machine.
-    """
-    session_id = "test-export-session"
+def completed_session_data():
+    """The raw report/results dict, shared by the fixture below and by
+    assertions that need to compare the response body against exactly what
+    was registered (rather than just checking the status code)."""
     report = {
         "summary": {
             "total_size": 1024,
@@ -51,9 +40,27 @@ def completed_session(monkeypatch):
         "docker": None,
         "disk_usage": None,
     }
+    return {"status": "completed", "results": [{"path": "/fake", "report": report}]}
+
+
+@pytest.fixture
+def completed_session(monkeypatch, completed_session_data):
+    """Register a completed session with a minimal but realistic report.
+
+    The report dict must satisfy both the CSV export (which reads
+    large_files[*].{path,size,extension,age_days,is_cache}) and the HTML
+    export, which delegates to DiskAnalyzer.generate_html_report(). That
+    method indexes several summary/report keys directly (not via .get()),
+    so a report missing any of them raises a KeyError deep inside HTML
+    generation. The keys below were discovered by calling
+    generate_html_report() directly against a minimal fixture and adding
+    whatever key it complained about next (recoverable_space,
+    large_files_count, top_file_types, docker, disk_usage, ...) -- all
+    values are invented, nothing is read from the real machine.
+    """
+    session_id = "test-export-session"
     monkeypatch.setitem(
-        disk_analyzer_web.analysis_sessions, session_id,
-        {"status": "completed", "results": [{"path": "/fake", "report": report}]},
+        disk_analyzer_web.analysis_sessions, session_id, completed_session_data,
     )
     return session_id
 
@@ -62,10 +69,14 @@ class TestExport:
     def setup_method(self):
         self.client = TestClient(app)
 
-    def test_json_export_returns_the_report(self, completed_session):
+    def test_json_export_returns_the_report(self, completed_session, completed_session_data):
         resp = self.client.get(f"/api/export/{completed_session}/json")
         assert resp.status_code == 200
         assert "attachment" in resp.headers["content-disposition"]
+        # export_results() returns session["results"] verbatim as the JSON
+        # body (disk_analyzer_web.py:965-971) -- assert the payload actually
+        # is what was registered, not just that *some* JSON came back.
+        assert resp.json() == completed_session_data["results"]
 
     def test_csv_export_has_a_header_and_the_files(self, completed_session):
         resp = self.client.get(f"/api/export/{completed_session}/csv")
@@ -77,7 +88,13 @@ class TestExport:
     def test_html_export_is_a_document(self, completed_session):
         resp = self.client.get(f"/api/export/{completed_session}/html")
         assert resp.status_code == 200
-        assert resp.text.lstrip().lower().startswith("<!doctype html")
+        body = resp.text
+        assert body.lstrip().lower().startswith("<!doctype html")
+        # A well-formed but unrelated/error page would also satisfy the
+        # doctype check above. Assert a fixture value actually made it into
+        # the generated report so this test fails if generate_html_report()
+        # silently drops or ignores the report's large_files.
+        assert "/fake/a.bin" in body
 
     def test_unknown_format_is_rejected(self, completed_session):
         resp = self.client.get(f"/api/export/{completed_session}/pdf")

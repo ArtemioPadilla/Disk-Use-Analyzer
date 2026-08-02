@@ -24,12 +24,27 @@ class TestDeleteFile:
         )
         assert resp.status_code == 400
 
-    def test_protected_path_is_refused(self, monkeypatch):
+    def test_protected_path_is_refused(self, tmp_path, monkeypatch):
+        # delete_file() resolves the path and checks existence BEFORE
+        # consulting is_protected_path (disk_analyzer_web.py:1029-1043), so
+        # a hardcoded system path like /System/Library/Kernels/kernel only
+        # reaches the mocked protection check if that exact file happens to
+        # exist on the machine running the suite -- a machine dependency
+        # this task must avoid (and the one most likely to bite once this
+        # suite runs in CI, per review). is_protected_path is fully mocked
+        # to return True, so any real, existing absolute path exercises the
+        # 403 branch identically; a plain tmp_path file removes the
+        # dependency entirely.
+        victim = tmp_path / "pretend_protected.bin"
+        victim.write_bytes(b"x" * 16)
         monkeypatch.setattr(disk_analyzer_web, "is_protected_path", lambda p: True)
         resp = self.client.request(
-            "DELETE", "/api/files/delete", json={"path": "/System/Library/Kernels/kernel"}
+            "DELETE", "/api/files/delete", json={"path": str(victim)}
         )
         assert resp.status_code == 403
+        # The more important half of the guarantee: a rejected path must
+        # NOT be deleted.
+        assert victim.exists()
 
     def test_missing_file_is_404(self):
         resp = self.client.request(
