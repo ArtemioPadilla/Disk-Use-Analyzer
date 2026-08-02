@@ -37,7 +37,7 @@ export default function ReverseView() {
         const reviewItems = recs.filter(r => (r.tier || 9) === 2 && r.command && !r.command.startsWith('#'));
         const carefulItems = recs.filter(r => (r.tier || 9) >= 3 && r.command && !r.command.startsWith('#'));
 
-        setTiers([
+        const newTiers: Tier[] = [
           {
             level: 'safe', label: 'SAFE', icon: '🟢', color: '#10b981', bgColor: '#10b98115',
             description: 'Caches, logs, trash. Rebuilds automatically.',
@@ -53,7 +53,8 @@ export default function ReverseView() {
             description: 'Review individually before deleting.',
             items: carefulItems, totalSpace: carefulItems.reduce((s, r) => s + (r.space || 0), 0),
           },
-        ].filter(t => t.items.length > 0));
+        ];
+        setTiers(newTiers.filter(t => t.items.length > 0));
 
         setFreedSpace(0);
         setCleanedTiers(new Set());

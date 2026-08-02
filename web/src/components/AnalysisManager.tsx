@@ -3,8 +3,8 @@
  * Manages WebSocket connection for analysis progress and emits events.
  * Does NOT unmount when modals close.
  */
-import { useState, useEffect, useRef, useCallback } from 'react';
-import { api, type AnalysisSession, type SessionResults } from '../lib/api';
+import { useState, useEffect, useRef } from 'react';
+import { api } from '../lib/api';
 import { withToken, notifyAuthInvalid } from '../lib/auth';
 import { on, emit } from '../lib/events';
 
@@ -69,7 +69,7 @@ export default function AnalysisManager() {
             api.getResults(sid).then(r => {
               emit('analysis:completed', r);
               setSessionId(null);
-            }).catch(err => {
+            }).catch(() => {
               emit('analysis:error', { message: 'Failed to fetch results' });
               setSessionId(null);
             });

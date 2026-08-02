@@ -13,7 +13,7 @@ export default function Settings() {
     if (local !== null) {
       setMinSize(Number(local));
     } else {
-      api.getSystemInfo().then((info: any) => {
+      api.getSystemInfo().then(info => {
         if (info.default_min_size_mb !== undefined) {
           setMinSize(info.default_min_size_mb);
         }

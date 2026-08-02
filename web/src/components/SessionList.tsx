@@ -1,26 +1,17 @@
 import { useState, useEffect } from 'react';
-import { api } from '../lib/api';
+import { api, type AnalysisSession } from '../lib/api';
 import { emit } from '../lib/events';
 import { formatBytes } from '../lib/format';
 
-interface SessionMeta {
-  id: string;
-  status: string;
-  paths: string[];
-  started_at: string;
-  completed_at?: string;
-}
-
 export default function SessionList() {
-  const [sessions, setSessions] = useState<SessionMeta[]>([]);
+  const [sessions, setSessions] = useState<AnalysisSession[]>([]);
   const [loading, setLoading] = useState(true);
   const [comparing, setComparing] = useState<string[]>([]);
   const [comparison, setComparison] = useState<any>(null);
 
   useEffect(() => {
     api.getSessions()
-      .then((data: any) => {
-        const list: SessionMeta[] = Array.isArray(data) ? data : data.sessions ?? [];
+      .then(({ sessions: list }) => {
         setSessions(list.sort((a, b) => new Date(b.started_at).getTime() - new Date(a.started_at).getTime()));
       })
       .catch(console.error)
@@ -139,10 +130,10 @@ export default function SessionList() {
               {new Date(session.started_at).toLocaleString()}
               {session.completed_at && ` \u00B7 Completed ${new Date(session.completed_at).toLocaleString()}`}
             </div>
-            {(session as any).disk_used && (
+            {session.disk_used && (
               <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>
-                Disk: {formatBytes((session as any).disk_used)} used
-                {(session as any).disk_total && ` of ${formatBytes((session as any).disk_total)}`}
+                Disk: {formatBytes(session.disk_used)} used
+                {session.disk_total && ` of ${formatBytes(session.disk_total)}`}
               </div>
             )}
           </div>

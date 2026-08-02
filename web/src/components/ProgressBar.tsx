@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { api } from '../lib/api';
 import { on, emit } from '../lib/events';
 
@@ -7,7 +7,9 @@ export default function ProgressBar() {
   const [progress, setProgress] = useState(0);
   const [message, setMessage] = useState('');
   const [filesScanned, setFilesScanned] = useState(0);
-  const [startTime, setStartTime] = useState<number | null>(null);
+  // Only ever read inside the ETA calculation below, never rendered directly
+  // — a ref avoids a pointless extra re-render on every "analysis:started".
+  const startTimeRef = useRef<number | null>(null);
   const [eta, setEta] = useState<string>('');
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [cancelling, setCancelling] = useState(false);
@@ -19,7 +21,7 @@ export default function ProgressBar() {
         setProgress(0);
         setMessage('Starting analysis...');
         setFilesScanned(0);
-        setStartTime(Date.now());
+        startTimeRef.current = Date.now();
         setEta('');
         setSessionId(data.id || null);
         setCancelling(false);
@@ -28,18 +30,13 @@ export default function ProgressBar() {
         if (data.progress !== undefined) {
           setProgress(data.progress);
           // Calculate ETA once we have enough progress data
-          if (data.progress > 5) {
-            setStartTime(prev => {
-              if (prev) {
-                const elapsed = (Date.now() - prev) / 1000;
-                const rate = data.progress / elapsed;
-                const remaining = (100 - data.progress) / rate;
-                if (remaining < 60) setEta(`~${Math.ceil(remaining)}s remaining`);
-                else if (remaining < 3600) setEta(`~${Math.ceil(remaining / 60)}min remaining`);
-                else setEta(`~${(remaining / 3600).toFixed(1)}h remaining`);
-              }
-              return prev;
-            });
+          if (data.progress > 5 && startTimeRef.current) {
+            const elapsed = (Date.now() - startTimeRef.current) / 1000;
+            const rate = data.progress / elapsed;
+            const remaining = (100 - data.progress) / rate;
+            if (remaining < 60) setEta(`~${Math.ceil(remaining)}s remaining`);
+            else if (remaining < 3600) setEta(`~${Math.ceil(remaining / 60)}min remaining`);
+            else setEta(`~${(remaining / 3600).toFixed(1)}h remaining`);
           }
         }
         if (data.current_path) setMessage(data.current_path);

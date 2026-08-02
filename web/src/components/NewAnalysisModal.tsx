@@ -18,7 +18,7 @@ export default function NewAnalysisModal() {
         setMinSize(Number(local));
         defaultLoaded.current = true;
       } else {
-        api.getSystemInfo().then((info: any) => {
+        api.getSystemInfo().then(info => {
           if (info.default_min_size_mb !== undefined) {
             setMinSize(info.default_min_size_mb);
           }

@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { on, emit } from '../lib/events';
+import { on } from '../lib/events';
 import { useTerminal } from '../hooks/useTerminal';
 
 export default function FloatingTerminal() {
