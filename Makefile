@@ -17,7 +17,7 @@ BLUE = \033[0;34m
 NC = \033[0m # No Color
 
 # Comandos principales
-.PHONY: help analyze quick full report clean-preview clean-cache clean-docker clean-all install gui install-gui check-gui web install-web web-build web-dev
+.PHONY: help analyze quick full report clean-preview clean-cache clean-docker clean-all install gui install-gui check-gui web install-web web-build web-dev test
 
 help:
 	@echo "$(BLUE)═══════════════════════════════════════════════════════════════$(NC)"
@@ -52,6 +52,9 @@ help:
 	@echo "  $(YELLOW)make web-dev$(NC)      - Modo desarrollo (hot-reload frontend)"
 	@echo "  $(YELLOW)make web-build$(NC)    - Solo compilar el frontend Astro"
 	@echo "  $(YELLOW)make install-web$(NC)  - Instalar dependencias (Python + Node)"
+	@echo ""
+	@echo "$(GREEN)Tests:$(NC)"
+	@echo "  $(YELLOW)make test$(NC)         - Ejecuta la suite de tests (backend + chequeo del frontend)"
 	@echo ""
 	@echo "$(GREEN)Interfaz GUI (legacy):$(NC)"
 	@echo "  $(YELLOW)make gui$(NC)          - Ejecutar interfaz gráfica CustomTkinter"
@@ -350,6 +353,14 @@ web:
 	@echo "$(YELLOW)Presiona Ctrl+C para detener el servidor$(NC)"
 	@echo ""
 	@. venv-web/bin/activate && python disk_analyzer_web.py $(if $(min_size),--min-size $(min_size),)
+
+# Tests (backend pytest + chequeo de tipos del frontend), lo mismo que corre en CI
+test: ## Ejecuta la suite de tests (backend + chequeo del frontend)
+	@echo "$(BLUE)🧪 Tests del backend...$(NC)"
+	@. venv-web/bin/activate && python -m pytest tests/ -v
+	@echo "$(BLUE)🧪 Chequeo de tipos del frontend...$(NC)"
+	@cd web && npm run check
+	@echo "$(GREEN)✅ Todo en verde$(NC)"
 
 # Comando por defecto
 .DEFAULT_GOAL := help
