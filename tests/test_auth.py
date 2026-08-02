@@ -9,15 +9,25 @@ two configurations exist. `auth_app` and `noauth_app` below are module-scoped
 so each configuration is loaded exactly once and shared by every test that
 needs it.
 
-IMPORTANT ordering constraint: NO_AUTH/AUTH_TOKEN are plain module globals
-that `_token_is_valid`/`auth_middleware` read at call time (not baked into
-a per-app closure), and importlib.reload() re-executes into the SAME module
-`__dict__` (sys.modules caches the module object). That means reloading for
-`noauth_app` mutates the globals `auth_app`'s already-built client reads too
--- so once `noauth_app` has been loaded, any `auth_app`-based assertion
-would silently start seeing no-auth behavior. The fix is ordering, not more
-reloads: every `auth_app` test must run before the single `noauth_app` test,
-which is why that test is the last one defined in this file.
+NO_AUTH/AUTH_TOKEN are plain module globals that `_token_is_valid`/
+`auth_middleware` read at call time (not baked into a per-app closure), and
+importlib.reload() re-executes into the SAME module `__dict__` (sys.modules
+caches the module object). That means reloading for `noauth_app` mutates the
+very globals `auth_app`'s already-built client also reads -- so whichever
+fixture reloaded LAST determines what EVERY cached client sees next, no
+matter which one it was built from.
+
+An earlier version of this file "fixed" that by ordering `noauth_app`'s one
+test last in the file. That only holds for a full top-to-bottom run of this
+file; it breaks under `pytest --lf`, explicit node-ID subsetting run in a
+different order, `-k` filters that skip some tests, or a random-order
+plugin -- exactly the kind of invocations CI uses. The `_enforce_auth_globals`
+autouse fixture below is the real fix: it re-asserts NO_AUTH/AUTH_TOKEN to
+the values THIS test expects immediately before every test body runs,
+regardless of what any earlier test (in any order) left behind -- mirroring
+the pattern `tests/conftest.py` already uses for every other test file.
+Reordering is no longer load-bearing for correctness; tests are kept grouped
+by fixture only for readability.
 """
 import importlib
 import os
@@ -63,8 +73,9 @@ def _restore_env(prev):
 def auth_app():
     """Module loaded once with auth ON and a known token ("secret1").
 
-    Must be requested by every test that needs auth-on behavior BEFORE
-    `noauth_app` is requested by anything (see module docstring).
+    Correctness across tests does NOT depend on this running before
+    `noauth_app` -- `_enforce_auth_globals` below re-asserts the right
+    globals before every test regardless of load order.
     """
     module, prev = _reload_with_env(DISK_ANALYZER_NO_AUTH="0", DISK_ANALYZER_TOKEN=TOKEN)
     client = TestClient(module.app)
@@ -74,12 +85,38 @@ def auth_app():
 
 @pytest.fixture(scope="module")
 def noauth_app():
-    """Module loaded once with --no-auth. Must only be requested after every
-    `auth_app` test has already run (see module docstring)."""
+    """Module loaded once with --no-auth. See `auth_app` docstring: ordering
+    relative to it is no longer a correctness requirement."""
     module, prev = _reload_with_env(DISK_ANALYZER_NO_AUTH="1")
     client = TestClient(module.app)
     yield module, client
     _restore_env(prev)
+
+
+@pytest.fixture(autouse=True)
+def _enforce_auth_globals(request):
+    """Force NO_AUTH/AUTH_TOKEN to the state THIS test expects, no matter
+    what any other test in this module already ran (in any order).
+
+    `auth_app`/`noauth_app` are module-scoped, so after their first use they
+    just hand back a cached (module, client) pair without reloading again --
+    but NO_AUTH/AUTH_TOKEN are read fresh off the module's globals on every
+    request, and those globals are shared, mutable state. If `noauth_app`'s
+    one reload has already happened by the time some `auth_app` test runs
+    (e.g. because pytest ran that node ID first via `-k`/`--lf`/an explicit
+    node-ID list/a random-order plugin), that test would silently run
+    against a no-auth server. This fixture is the actual fix: it re-pins the
+    globals to the correct value right before every test body executes,
+    exactly mirroring what `tests/conftest.py`'s `_default_no_auth` does for
+    every other test module.
+    """
+    import disk_analyzer_web
+    if "noauth_app" in request.fixturenames:
+        disk_analyzer_web.NO_AUTH = True
+        disk_analyzer_web.AUTH_TOKEN = None
+    else:
+        disk_analyzer_web.NO_AUTH = False
+        disk_analyzer_web.AUTH_TOKEN = TOKEN
 
 
 class TestHttpAuth:
@@ -92,6 +129,14 @@ class TestHttpAuth:
         _, client = auth_app
         resp = client.get("/api/system/info", headers={"X-Auth-Token": TOKEN})
         assert resp.status_code == 200
+        # A bare `== 200` above would ALSO pass if the module were wrongly
+        # in no-auth mode (e.g. global-state corruption from another test
+        # running out of order) -- it would silently stop testing that the
+        # token is actually being checked. Assert the negative case too so a
+        # corrupted state fails loudly here instead of passing for the
+        # wrong reason.
+        resp_wrong = client.get("/api/system/info", headers={"X-Auth-Token": "definitely-wrong"})
+        assert resp_wrong.status_code == 401
 
     def test_api_route_with_wrong_token_is_401(self, auth_app):
         _, client = auth_app
@@ -214,9 +259,9 @@ class TestWebSocketAuth:
 
 
 def test_no_auth_mode_allows_api(noauth_app):
-    """Kept as the LAST test in this module: loading `noauth_app` flips the
-    shared disk_analyzer_web globals to no-auth, which would silently break
-    any `auth_app`-based test defined after it (see module docstring)."""
+    """No longer needs to be the last test in the file: `_enforce_auth_globals`
+    re-pins the module's auth globals to no-auth immediately before this
+    test body runs, regardless of what ran before or after it."""
     _, client = noauth_app
     resp = client.get("/api/system/info")
     assert resp.status_code == 200
