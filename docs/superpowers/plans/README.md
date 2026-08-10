@@ -17,7 +17,7 @@ CI en GitHub Actions.
 | 2 | Seguridad (auth, CORS, agents, fds del PTY) | [Fase 2](2026-07-15-mejoras-fase2-seguridad.md) | ✅ Completa, mergeada a `main` (PR #6) |
 | 3 | Motor compartido (deduplicar CLI vs core) | [Fase 3](2026-07-30-mejoras-fase3-motor-compartido.md) | ✅ Completa, mergeada a `main` (PR #7) |
 | 4 | Frontend (cleanup runner, sesiones, tipos, código muerto) | Solo esbozo en el roadmap | Pendiente |
-| 5 | Tests del motor y CI | [Fase 5](2026-08-01-mejoras-fase5-tests-y-ci.md) | ✅ Completa, PR #8 abierto con CI en verde |
+| 5 | Tests del motor y CI | [Fase 5](2026-08-01-mejoras-fase5-tests-y-ci.md) | ✅ Completa, mergeada a `main` (PR #8) |
 
 Documentos de referencia:
 
@@ -30,10 +30,8 @@ Documentos de referencia:
 
 ## Siguiente acción
 
-Las fases 1, 2 y 3 están mergeadas a `main`. La Fase 5 está terminada en el
-**PR #8**, con sus checks en verde, a la espera de decidir el merge.
-
-Después quedan dos cosas:
+Las fases 1, 2, 3 y 5 están mergeadas a `main`, con CI verificando cada push y
+cada pull request. Quedan dos cosas:
 
 1. **Fase 4 (frontend).** La única fase grande que falta, y necesita que se le
    escriba su plan detallado antes de ejecutarse: unificar los cinco flujos de
@@ -48,9 +46,6 @@ Después quedan dos cosas:
 
 ### Decisiones abiertas
 
-- **¿Se merge el PR #8?** Sus checks están en verde. No se activó automerge a
-  propósito: ahora que hay CI, tiene sentido que un merge sea una decisión
-  consciente.
 - **¿Se protege la rama `main`?** El comando está preparado en el Task 6 del
   [plan de la Fase 5](2026-08-01-mejoras-fase5-tests-y-ci.md) pero **no se
   aplicó**: exigir los checks antes de mergear cambia cómo trabaja cualquiera en

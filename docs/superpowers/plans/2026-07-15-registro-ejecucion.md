@@ -260,8 +260,8 @@ Candidato claro para una fase posterior.
 
 ## Fase 5 — Tests y CI
 
-**Estado:** completa y verificada en la rama `feat/fase5-tests-y-ci`, con el
-PR #8 abierto y **CI en verde** (backend en macOS 29 s, frontend en Ubuntu 36 s).
+**Estado:** completa y mergeada a `main` mediante el PR #8, con **CI en verde**
+(backend en macOS 29 s, frontend en Ubuntu 36 s).
 Tests: 137 → 151. Tiempo de la suite: **~44 s → ~4 s**.
 
 | Task | Qué hace | Estado |
