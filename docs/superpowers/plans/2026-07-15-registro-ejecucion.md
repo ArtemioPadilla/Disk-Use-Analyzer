@@ -258,7 +258,70 @@ categorías del safelist, no solo las de Python, y eso contradice su propio
 comentario "Mover a Trash en macOS". Afecta a logs, VS Code, npm y Xcode.
 Candidato claro para una fase posterior.
 
-## Fases 0, 4 y 5
+## Fase 5 — Tests y CI
+
+**Estado:** completa y verificada en la rama `feat/fase5-tests-y-ci`, con el
+PR #8 abierto y **CI en verde** (backend en macOS 29 s, frontend en Ubuntu 36 s).
+Tests: 137 → 151. Tiempo de la suite: **~44 s → ~4 s**.
+
+| Task | Qué hace | Estado |
+|---|---|---|
+| 1 | La suite deja de escanear las cachés reales de la máquina | ✅ `67ef75c` |
+| 2 | Cubrir export, borrado de archivos, digest y último análisis | ✅ `14ddd8b`, `6f66b59` |
+| 3 | 429 del terminal end-to-end y fixture de auth aligerada | ✅ `1fa72fe`, `a94f951` |
+| 4 | Frontend verificable: `npm run check` y los errores de tipos preexistentes | ✅ `7f191f9` |
+| 5 | CI en GitHub Actions y `make test` | ✅ `53fcb7b` |
+| 6 | Verificación integral | ✅ |
+
+### Por qué el orden no fue el del roadmap
+
+El roadmap ponía el CI primero. Se dejó de penúltimo a propósito: automatizar una
+suite de 44 segundos que además depende de lo que cada quien tenga instalado
+produce CI que la gente aprende a ignorar. Primero se arregla, luego se
+automatiza.
+
+Dos tests consumían 39 de esos 44 segundos porque pasaban `Path.home()` al
+endpoint de limpieza, que acaba recorriendo las cachés reales. En CI, con un
+`$HOME` vacío, habrían probado algo distinto en silencio.
+
+### Lo que apareció por el camino
+
+- **Bug de contrato entre frontend y backend:** `api.getSessions()` estaba tipado
+  como `AnalysisSession[]`, pero el backend devuelve `{"sessions": [...]}`. Los
+  tres sitios que la llamaban habían redescubierto el problema por separado y lo
+  tapaban con `any`. Lo destapó tipar el frontend, no un test.
+- **`astro check` ve cinco errores que `tsc` no:** están en archivos `.astro`
+  (globales de `window` compartidas entre islas, un `EventTarget` sin tipar). Y
+  necesita que `tsconfig.json` excluya `dist`, o se desborda la pila de V8
+  recorriendo el build.
+- **`DiskDonut.tsx` era código muerto**, superado por `DiskBar.tsx`. Borrado.
+- **La fixture de auth dependía del orden de ejecución:** pasaba en la suite
+  completa y aislada, pero fallaba con `--lf` o con selección de tests por
+  nombre. Peor: algunas aserciones habrían pasado en silencio con el módulo en
+  el estado equivocado. Se hizo correcta en cualquier orden, verificándolo al
+  reproducir el fallo primero.
+- **Varios de los tests que este mismo plan proponía** habrían dependido del
+  `$HOME` real (el directorio de resultados y el log de agents). Se detectaron al
+  implementarlos.
+
+### Decisiones del CI
+
+| Decisión | Motivo |
+|---|---|
+| El job de backend corre en `macos-latest` | El proyecto es específico de macOS y los tests de PTY dependen de `pty.openpty()`, `os.fork()` y el `waitpid` de Darwin. En Ubuntu probarían otra cosa |
+| El de frontend corre en `ubuntu-latest` | Es solo Node: más rápido y más barato ahí |
+| Se reprodujo el entorno de CI en un venv limpio antes de subirlo | Para que un `pip install` que solo funciona en local por acumulación no se descubra en el primer fallo de CI. Confirmó que `requirements-web.txt` está completo |
+
+### Pendiente que necesita decisión del dueño
+
+La **protección de la rama `main`** quedó preparada pero **sin aplicar**: exigir
+los checks antes de mergear cambia cómo trabaja cualquiera en el repo, así que no
+se toca sin permiso. El comando está en el Task 6 del
+[plan de la Fase 5](2026-08-01-mejoras-fase5-tests-y-ci.md). Hasta que se
+aplique, un `--auto` seguirá fusionando en cuanto los checks pasen, pero nada
+impide un merge directo saltándoselos.
+
+## Fases 0 y 4
 
 Sin ejecutar. El alcance, la secuencia recomendada y los criterios de
 aceptación de cada una están en el

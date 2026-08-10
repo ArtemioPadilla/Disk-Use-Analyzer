@@ -6,6 +6,10 @@ export interface SystemInfo {
   platform: string;
   hostname: string;
   disk_usage: { total: number; used: number; free: number };
+  // Server-side default for the "min size" analysis filter, set via the
+  // `--min-size` CLI flag (disk_analyzer_web.py `/api/system/info`). Optional
+  // because it falls back to a hardcoded default server-side too.
+  default_min_size_mb?: number;
 }
 
 export interface DriveInfo {
@@ -21,13 +25,21 @@ export interface AnalysisRequest {
 
 export interface AnalysisSession {
   id: string;
-  status: 'running' | 'completed' | 'error' | 'cancelled';
+  // 'interrupted' is what a "running" session gets rewritten to on server
+  // restart (disk_analyzer_web.py `load_session_metadata`, Phase 1): a
+  // restored session has no in-flight task backing it, so it would otherwise
+  // hang as "running" forever.
+  status: 'running' | 'completed' | 'error' | 'cancelled' | 'interrupted';
   progress: number;
   current_path: string;
   paths: string[];
   started_at: string;
   completed_at?: string;
   error?: string;
+  // Attached opportunistically by the backend when disk usage was sampled
+  // during the run (see `/api/sessions`, `/api/analysis/{id}/progress`).
+  disk_used?: number;
+  disk_total?: number;
 }
 
 export interface LargeFile {
@@ -160,7 +172,11 @@ export const api = {
   getResults: (id: string) => request<SessionResults>(`/analysis/${id}/results`),
   cancelAnalysis: (id: string) =>
     request<any>(`/analysis/${id}/cancel`, { method: 'POST' }),
-  getSessions: () => request<AnalysisSession[]>('/sessions'),
+  // Backend wraps the list (`/api/sessions` returns `{"sessions": [...]}`,
+  // not a bare array) — every call site used to defensively unwrap this
+  // with `Array.isArray(x) ? x : x.sessions` behind an `any` cast. Typing it
+  // as it actually comes back removes the need for that.
+  getSessions: () => request<{ sessions: AnalysisSession[] }>('/sessions'),
   previewCleanup: (paths: string[]) =>
     request<any>('/cleanup/preview', {
       method: 'POST',

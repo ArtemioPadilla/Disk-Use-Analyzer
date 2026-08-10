@@ -1,28 +1,22 @@
 import { useState, useEffect } from 'react';
-import { api, downloadExport, type SessionResults } from '../lib/api';
+import { api, downloadExport, type SessionResults, type AnalysisSession } from '../lib/api';
 import { on, emit } from '../lib/events';
 
 export default function ExportPanel() {
   const [sessionId, setSessionId] = useState<string | null>(null);
-  const [sessions, setSessions] = useState<any[]>([]);
+  const [sessions, setSessions] = useState<AnalysisSession[]>([]);
   const [downloading, setDownloading] = useState<'html' | 'json' | 'csv' | null>(null);
   const [downloadError, setDownloadError] = useState<string | null>(null);
 
   useEffect(() => {
     api.getSessions()
-      .then((data: any) => {
-        const list = Array.isArray(data) ? data : data.sessions ?? [];
-        setSessions(list);
-      })
+      .then(({ sessions: list }) => setSessions(list))
       .catch(console.error);
 
     const off = on('analysis:completed', (data: SessionResults) => {
       setSessionId(data.id);
       api.getSessions()
-        .then((d: any) => {
-          const list = Array.isArray(d) ? d : d.sessions ?? [];
-          setSessions(list);
-        })
+        .then(({ sessions: list }) => setSessions(list))
         .catch(console.error);
     });
     return off;

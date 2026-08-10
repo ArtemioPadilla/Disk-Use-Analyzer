@@ -8,16 +8,15 @@ export default function TrendChart() {
 
   const loadTrend = async () => {
     try {
-      const sessions = await api.getSessions();
-      const list = Array.isArray(sessions) ? sessions : (sessions as any).sessions || [];
-      const withDisk = list
-        .filter((s: any) => s.status === 'completed' && s.disk_used)
-        .sort((a: any, b: any) => new Date(a.started_at).getTime() - new Date(b.started_at).getTime())
+      const { sessions } = await api.getSessions();
+      const withDisk = sessions
+        .filter(s => s.status === 'completed' && s.disk_used)
+        .sort((a, b) => new Date(a.started_at).getTime() - new Date(b.started_at).getTime())
         .slice(-10);
 
-      setPoints(withDisk.map((s: any) => ({
+      setPoints(withDisk.map(s => ({
         date: new Date(s.started_at).toLocaleDateString(),
-        used: s.disk_used,
+        used: s.disk_used ?? 0,
         total: s.disk_total || 0,
       })));
     } catch (e) {

@@ -8,7 +8,9 @@ export default function LivePulse() {
   const [delta, setDelta] = useState<number>(0);
   const [active, setActive] = useState(false);
   const prevUsed = useRef<number | null>(null);
-  const intervalRef = useRef<NodeJS.Timeout | null>(null);
+  // Browser `setInterval` returns a `number`, not Node's `NodeJS.Timeout` —
+  // this file runs in the browser, never under Node.
+  const intervalRef = useRef<number | null>(null);
 
   const poll = async () => {
     try {

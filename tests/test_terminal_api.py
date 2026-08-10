@@ -31,6 +31,28 @@ class TestTerminalAPI:
         r = self.client.post('/api/terminal/create', json={'command': 'rm -rf /'})
         assert r.status_code == 400
 
+    def test_create_terminal_beyond_max_sessions_is_429(self, monkeypatch):
+        """The manager raises RuntimeError past max_sessions; the endpoint must
+        surface it as 429.
+
+        `tests/test_pty_manager.py` already proves PTYManager itself raises
+        RuntimeError past the limit, but nothing checked the HTTP endpoint
+        translates that into a 429 -- and that path changed in Phase 2 when
+        create_session moved onto asyncio.to_thread (disk_analyzer_web.py,
+        the /api/terminal/create handler). This drives the REAL
+        PTYManager.create_session (not a mock) by shrinking max_sessions to
+        0, so the length check `len(self.sessions) >= self.max_sessions`
+        fires immediately -- no pty is actually spawned, keeping this fast
+        and deterministic -- while still proving asyncio.to_thread
+        propagates the genuine RuntimeError raised inside the manager's
+        lock, not just a hand-crafted one.
+        """
+        import disk_analyzer_web
+
+        monkeypatch.setattr(disk_analyzer_web.pty_manager, "max_sessions", 0)
+        resp = self.client.post('/api/terminal/create', json={})
+        assert resp.status_code == 429
+
     def test_list_terminal_sessions(self):
         r1 = self.client.post('/api/terminal/create', json={})
         pty_id = r1.json()['pty_id']
