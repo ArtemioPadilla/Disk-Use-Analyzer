@@ -75,8 +75,8 @@ Todos se triaron en la revisión final. Ninguno bloquea:
 
 ## Fase 2 — Seguridad
 
-**Estado:** completa y verificada en la rama `feat/fase2-seguridad`, creada
-desde `main` (`6c633df`). Sin mergear. Tests: 39 → 79.
+**Estado:** completa y mergeada a `main` mediante el PR #6. Rama de origen:
+`feat/fase2-seguridad`, creada desde `6c633df`. Tests: 39 → 79.
 
 | Task | Qué hace | Estado |
 |---|---|---|
@@ -189,8 +189,8 @@ nadie sobrevalore la severidad al leer el historial.
 
 ## Fase 3 — Motor compartido
 
-**Estado:** completa y verificada en la rama `feat/fase3-motor-compartido`,
-creada desde `feat/fase2-seguridad`. Sin mergear. Tests: 79 → 137.
+**Estado:** completa y mergeada a `main` mediante el PR #7. Rama de origen:
+`feat/fase3-motor-compartido`, apilada sobre la de la Fase 2. Tests: 79 → 137.
 
 | Task | Qué hace | Estado |
 |---|---|---|
