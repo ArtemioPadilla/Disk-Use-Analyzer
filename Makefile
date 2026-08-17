@@ -354,10 +354,12 @@ web:
 	@echo ""
 	@. venv-web/bin/activate && python disk_analyzer_web.py $(if $(min_size),--min-size $(min_size),)
 
-# Tests (backend pytest + chequeo de tipos del frontend), lo mismo que corre en CI
-test: ## Ejecuta la suite de tests (backend + chequeo del frontend)
+# Tests (backend pytest + tests y chequeo de tipos del frontend), lo mismo que corre en CI
+test: ## Ejecuta la suite de tests (backend + tests y chequeo del frontend)
 	@echo "$(BLUE)🧪 Tests del backend...$(NC)"
 	@. venv-web/bin/activate && python -m pytest tests/ -v
+	@echo "$(BLUE)🧪 Tests del frontend...$(NC)"
+	@cd web && npm test
 	@echo "$(BLUE)🧪 Chequeo de tipos del frontend...$(NC)"
 	@cd web && npm run check
 	@echo "$(GREEN)✅ Todo en verde$(NC)"
