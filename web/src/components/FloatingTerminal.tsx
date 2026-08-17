@@ -1,10 +1,12 @@
 import { useState, useEffect, useRef } from 'react';
+import '@xterm/xterm/css/xterm.css';
 import { on } from '../lib/events';
 import { useTerminal } from '../hooks/useTerminal';
 
 export default function FloatingTerminal() {
   const [visible, setVisible] = useState(false);
   const [minimized, setMinimized] = useState(false);
+  const [xtermReady, setXtermReady] = useState(false);
   const [position, setPosition] = useState({ x: -1, y: -1 });
   const termRef = useRef<HTMLDivElement>(null);
   const xtermRef = useRef<any>(null);
@@ -48,13 +50,6 @@ export default function FloatingTerminal() {
       const fitAddon = new fitModule.FitAddon();
       term.loadAddon(fitAddon);
       term.open(termRef.current);
-
-      // Need to import CSS for xterm
-      const link = document.createElement('link');
-      link.rel = 'stylesheet';
-      link.href = 'https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.min.css';
-      document.head.appendChild(link);
-
       fitAddon.fit();
 
       xtermRef.current = term;
@@ -68,6 +63,11 @@ export default function FloatingTerminal() {
 
       resize(term.cols, term.rows);
       term.onResize(({ cols, rows }: { cols: number; rows: number }) => resize(cols, rows));
+
+      // fitAddonRef is only populated here, inside this async .then() — the
+      // resize-observer effect below depends on xtermReady so it re-runs
+      // once the ref actually has a value instead of only on visible/minimized.
+      setXtermReady(true);
     });
 
     return () => { cancelled = true; };
@@ -80,6 +80,7 @@ export default function FloatingTerminal() {
       xtermRef.current = null;
       fitAddonRef.current = null;
       onDataRef.current = null;
+      setXtermReady(false);
     }
   }, [visible]);
 
@@ -89,7 +90,7 @@ export default function FloatingTerminal() {
     const observer = new ResizeObserver(() => fitAddonRef.current?.fit());
     observer.observe(termRef.current);
     return () => observer.disconnect();
-  }, [visible, minimized]);
+  }, [visible, minimized, xtermReady]);
 
   // Event listeners
   useEffect(() => {
@@ -118,6 +119,14 @@ export default function FloatingTerminal() {
   useEffect(() => {
     if (visible && !minimized && !ptyId) spawn();
   }, [visible, minimized, ptyId, spawn]);
+
+  // useTerminal reattaches to a still-alive PTY on mount (see useTerminal.ts)
+  // without going through terminal:open — so if that reattach set a ptyId
+  // and this widget isn't showing yet, surface it. This is what makes the
+  // terminal survive a page navigation instead of reconnecting invisibly.
+  useEffect(() => {
+    if (ptyId && !visible) setVisible(true);
+  }, [ptyId]);
 
   // Drag handlers
   const onDragStart = (e: React.MouseEvent) => {

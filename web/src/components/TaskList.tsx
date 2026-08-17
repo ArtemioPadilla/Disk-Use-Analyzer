@@ -38,6 +38,10 @@ export default function TaskList() {
     return () => offs.forEach(off => off());
   }, []);
 
+  // Hex values matching the --primary/--success/--danger tokens in global.css.
+  // Kept as literals (not var()) so they can carry an alpha suffix below —
+  // that alpha blends with --card-bg, giving a readable tint in both themes
+  // instead of a fixed pastel that goes near-white-on-near-white in dark mode.
   const statusColors: Record<string, string> = { running: '#6366f1', completed: '#10b981', error: '#ef4444' };
   const statusLabels: Record<string, string> = { running: 'In Progress', completed: 'Completed', error: 'Error' };
 
@@ -59,7 +63,7 @@ export default function TaskList() {
         <div key={task.id} style={{
           display: 'flex', alignItems: 'center', gap: '0.5rem',
           padding: '0.5rem', borderRadius: '6px', marginBottom: '0.35rem',
-          background: task.status === 'running' ? '#eff6ff' : task.status === 'completed' ? '#f0fdf4' : '#fef2f2',
+          background: statusColors[task.status] + '15',
         }}>
           <div style={{
             width: 8, height: 8, borderRadius: '50%', background: statusColors[task.status],

@@ -8,16 +8,11 @@ export function formatBytes(bytes: number): string {
 }
 
 export function formatAge(days: number): string {
-  if (days < 1) return 'Hoy';
+  if (days < 1) return 'Today';
   if (days < 7) return `${days}d`;
-  if (days < 30) return `${Math.floor(days / 7)}sem`;
-  if (days < 365) return `${Math.floor(days / 30)}m`;
-  return `${(days / 365).toFixed(1)}a`;
-}
-
-export function formatPercent(value: number, total: number): string {
-  if (total === 0) return '0%';
-  return `${((value / total) * 100).toFixed(1)}%`;
+  if (days < 30) return `${Math.floor(days / 7)}w`;
+  if (days < 365) return `${Math.floor(days / 30)}mo`;
+  return `${(days / 365).toFixed(1)}y`;
 }
 
 const PATH_DESCRIPTIONS: [RegExp, string][] = [
