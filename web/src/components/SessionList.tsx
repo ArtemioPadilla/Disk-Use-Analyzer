@@ -18,14 +18,12 @@ export default function SessionList() {
       .finally(() => setLoading(false));
   }, []);
 
-  const loadSession = async (id: string) => {
-    try {
-      const results = await api.getResults(id);
-      window.dispatchEvent(new CustomEvent('analysis:completed', { detail: results }));
-      window.location.href = '/';
-    } catch {
-      alert('Could not load session results. They may no longer be in memory.');
-    }
+  const loadSession = (id: string) => {
+    // A full page navigation remounts every island, so an event dispatched
+    // here would die with this page before the dashboard could receive it.
+    // Pass the id in the URL instead — HeroScan reads it on mount and fetches
+    // that specific session.
+    window.location.href = `/?session=${encodeURIComponent(id)}`;
   };
 
   const runComparison = async () => {

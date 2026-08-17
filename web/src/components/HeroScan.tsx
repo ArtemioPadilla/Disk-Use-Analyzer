@@ -8,7 +8,29 @@ export default function HeroScan() {
   const [scanning, setScanning] = useState(false);
 
   useEffect(() => {
-    // Check if there are any completed results
+    // SessionList navigates here with ?session=<id> instead of dispatching
+    // an event directly, since a full page navigation would kill the event
+    // before this component could mount and receive it. If a specific
+    // session was requested, load exactly that one instead of falling back
+    // to whatever is most recent.
+    const params = new URLSearchParams(window.location.search);
+    const requested = params.get('session');
+
+    if (requested) {
+      api.getResults(requested).then(data => {
+        setHasResults(true);
+        emit('analysis:completed', data);
+      }).catch(() => {
+        // api.getResults already calls notifyAuthInvalid() on a 401; any
+        // other failure (session no longer in memory, 404, etc.) just falls
+        // through to the same "no results yet" state as the no-param case.
+        setHasResults(false);
+      });
+      return;
+    }
+
+    // No specific session requested: check if there are any completed
+    // results, exactly as before.
     fetch('/api/analysis/latest', { headers: authHeaders() }).then(r => {
       if (r.status === 401) {
         // This is the canonical "dashboard renders empty with no message"
