@@ -10,7 +10,7 @@ export default function FloatingTerminal() {
   const xtermRef = useRef<any>(null);
   const fitAddonRef = useRef<any>(null);
   const dragRef = useRef<{ startX: number; startY: number; origX: number; origY: number } | null>(null);
-  const { ptyId, connected, spawn, send, resize, kill, onDataRef } = useTerminal();
+  const { ptyId, connected, spawn, attach, send, resize, kill, onDataRef } = useTerminal();
 
   // Initialize position on first show
   useEffect(() => {
@@ -98,11 +98,21 @@ export default function FloatingTerminal() {
       on('terminal:open', async (data: { pty_id?: string; command?: string }) => {
         setVisible(true);
         setMinimized(false);
-        if (!ptyId) await spawn(data.command);
+        if (data.pty_id) {
+          // A specific PTY was already created elsewhere (e.g. a cleanup
+          // command run through useCleanupRunner) — show that exact session
+          // instead of spawning a second, invisible one running the same
+          // command. Switch to it even if a different terminal is already
+          // showing, rather than silently ignoring the request.
+          if (data.pty_id !== ptyId) attach(data.pty_id, data.command);
+        } else if (!ptyId) {
+          // Manual open (the ⚡ button) with no target PTY: start a plain shell.
+          await spawn(data.command);
+        }
       }),
     ];
     return () => offs.forEach(off => off());
-  }, [ptyId, spawn]);
+  }, [ptyId, spawn, attach]);
 
   // Auto-spawn on first open
   useEffect(() => {
