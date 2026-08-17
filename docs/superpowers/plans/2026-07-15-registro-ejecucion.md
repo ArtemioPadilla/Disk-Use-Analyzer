@@ -337,7 +337,7 @@ abajo).
 | 3 | Una sola definición de categorías (`getCategory`/`CATEGORY_COLORS` en `lib/categories.ts`) y de niveles de riesgo (`TIER_META`/`getTierBucket` en `lib/tiers.ts`), antes duplicadas entre componentes | ✅ `5c63f8b` |
 | 4 | Cargar la sesión pedida desde Historial (antes siempre mostraba la última), y reenganchar el progreso del análisis y la terminal flotante al navegar entre páginas | ✅ `a2ec0d0` |
 | 5 | Terminal sin CSS servido desde un CDN externo, CSS inválido del menú corregido, colores de `TaskList` legibles en modo oscuro, código muerto eliminado (`useAnalysis`, `useWebSocket`, `formatPercent`) | ✅ `12707dd` |
-| 6 | Tests de frontend cableados al CI y a `make test`; cierre del registro | ✅ `[este commit]` |
+| 6 | Tests de frontend cableados al CI y a `make test`; cierre del registro | ✅ `c05ffbe` |
 
 Al margen de los tasks numerados, durante el Task 1 se encontró y arregló un
 bug real de compatibilidad con Python 3.11 (`analyzer/measurement.py`,
