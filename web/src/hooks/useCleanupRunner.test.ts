@@ -81,17 +81,19 @@ describe('useCleanupRunner', () => {
     expect(mockedCreate).not.toHaveBeenCalled();
   });
 
-  it('shares the completed set across instances via localStorage', async () => {
-    const first = renderHook(() => useCleanupRunner());
-    act(() => { first.result.current.run({ command: 'npm cache clean', space: 7 }); });
+  // Renamed from "shares the completed set across instances via localStorage":
+  // sharing across instances is now the module singleton (see the Fix round 3
+  // tests below), not localStorage — localStorage's actual job is surviving a
+  // full page reload, which is what this test verifies directly.
+  it('persists completed commands to localStorage so they survive a page reload', async () => {
+    const { result } = renderHook(() => useCleanupRunner());
+    act(() => { result.current.run({ command: 'npm cache clean', space: 7 }); });
     await waitFor(() => expect(mockedCreate).toHaveBeenCalledTimes(1));
     act(() => { emit('terminal:exited', { pty_id: 'pty-1', code: 0 }); });
-    await waitFor(() =>
-      expect(first.result.current.completed.has('npm cache clean')).toBe(true));
+    await waitFor(() => expect(result.current.completed.has('npm cache clean')).toBe(true));
 
-    // A second component mounting later must see it as already done
-    const second = renderHook(() => useCleanupRunner());
-    expect(second.result.current.completed.has('npm cache clean')).toBe(true);
+    const stored = JSON.parse(localStorage.getItem('disk-analyzer-cleaned') ?? '[]');
+    expect(stored).toContain('npm cache clean');
   });
 
   it('surfaces an error when the terminal cannot be created', async () => {
@@ -169,7 +171,7 @@ describe('useCleanupRunner', () => {
     expect(mockedCreate).toHaveBeenCalledTimes(3);
   });
 
-  it('two mounted instances calling run() with the same command create only one PTY', async () => {
+  it('two mounted instances calling run() with the same command create only one PTY, even after the first settles', async () => {
     const a = renderHook(() => useCleanupRunner());
     const b = renderHook(() => useCleanupRunner());
 
@@ -179,13 +181,38 @@ describe('useCleanupRunner', () => {
     });
 
     await waitFor(() => expect(mockedCreate).toHaveBeenCalledTimes(1));
-    // Give any (incorrect) second createTerminal call a chance to happen.
+    // Give any (incorrect) second createTerminal call a chance to happen
+    // while the first is still in flight.
     await new Promise(r => setTimeout(r, 0));
     expect(mockedCreate).toHaveBeenCalledTimes(1);
 
     act(() => { emit('terminal:exited', { pty_id: 'pty-1', code: 0 }); });
     await waitFor(() => expect(a.result.current.completed.has('shared-cmd')).toBe(true));
     expect(b.result.current.completed.has('shared-cmd')).toBe(true);
+
+    // The dedup guard must hold even once the first job settles and the
+    // queue is free to start whatever comes next. A guard that only checks
+    // at enqueue time (and lets the serialization queue hide the duplicate
+    // behind the first job) would let b's call start its own PTY for the
+    // identical command right here — flush microtasks and confirm it never
+    // does.
+    await new Promise(r => setTimeout(r, 0));
+    expect(mockedCreate).toHaveBeenCalledTimes(1);
+  });
+
+  it('a second instance treats a command the first instance already completed as already done', async () => {
+    const a = renderHook(() => useCleanupRunner());
+    act(() => { a.result.current.run({ command: 'brew cleanup', space: 5 }); });
+    await waitFor(() => expect(mockedCreate).toHaveBeenCalledTimes(1));
+    act(() => { emit('terminal:exited', { pty_id: 'pty-1', code: 0 }); });
+    await waitFor(() => expect(a.result.current.completed.has('brew cleanup')).toBe(true));
+
+    mockedCreate.mockClear();
+    const b = renderHook(() => useCleanupRunner());
+    expect(b.result.current.completed.has('brew cleanup')).toBe(true);
+
+    act(() => { b.result.current.run({ command: 'brew cleanup', space: 5 }); });
+    expect(mockedCreate).not.toHaveBeenCalled();
   });
 
   it('a failing command in a batch does not block the others from being credited', async () => {
@@ -216,23 +243,42 @@ describe('useCleanupRunner', () => {
     expect(result.current.error).toContain('Middle');
   });
 
-  it('ignores an exit for a pty it is not waiting on, without disturbing the active job or the queue', async () => {
-    mockedCreate.mockResolvedValue({ pty_id: 'real-pty', created_at: 't' } as any);
+  it('ignores an exit for a pty it is not waiting on, and does not let it advance the queue to the next job', async () => {
+    let n = 0;
+    mockedCreate.mockImplementation(async () => ({ pty_id: `real-pty-${++n}`, created_at: 't' } as any));
+
     const { result } = renderHook(() => useCleanupRunner());
-    act(() => { result.current.run({ command: 'real-cmd', space: 9 }); });
+    act(() => {
+      result.current.run({ command: 'real-cmd-1', space: 9 });
+      // A second real job queued behind the first — this is what makes the
+      // guard observable: with an empty queue, a broken "advance on any
+      // exit" implementation has nothing to wrongly start, so it passes
+      // trivially. With something queued, it doesn't.
+      result.current.run({ command: 'real-cmd-2', space: 11 });
+    });
     await waitFor(() => expect(mockedCreate).toHaveBeenCalledTimes(1));
 
     // A stray exit for some other, untracked pty (e.g. a manually opened
-    // shell elsewhere on the page) must not be mistaken for this job's exit,
-    // and must not leave the queue stuck as if it were waiting on the wrong id.
+    // shell elsewhere on the page) must not be mistaken for the active job's
+    // exit. Give a broken implementation a chance to (wrongly) start #2.
     act(() => { emit('terminal:exited', { pty_id: 'unrelated-pty', code: 0 }); });
-    expect(result.current.running.has('real-cmd')).toBe(true);
-    expect(result.current.completed.has('real-cmd')).toBe(false);
+    await new Promise(r => setTimeout(r, 0));
 
-    // The real job's own exit still resolves normally afterward — proving
-    // the stray event didn't wedge anything.
-    act(() => { emit('terminal:exited', { pty_id: 'real-pty', code: 0 }); });
-    await waitFor(() => expect(result.current.completed.has('real-cmd')).toBe(true));
+    expect(mockedCreate).toHaveBeenCalledTimes(1);
+    expect(result.current.running.has('real-cmd-1')).toBe(true);
+    expect(result.current.completed.has('real-cmd-1')).toBe(false);
+    expect(result.current.running.has('real-cmd-2')).toBe(true); // still queued, not started
+    expect(result.current.completed.has('real-cmd-2')).toBe(false);
+
+    // The real job's own exit still resolves normally, and only then does
+    // the queue advance to the second command — proving the stray event
+    // didn't wedge anything, and didn't jump the queue either.
+    act(() => { emit('terminal:exited', { pty_id: 'real-pty-1', code: 0 }); });
+    await waitFor(() => expect(result.current.completed.has('real-cmd-1')).toBe(true));
+    await waitFor(() => expect(mockedCreate).toHaveBeenCalledTimes(2));
+
+    act(() => { emit('terminal:exited', { pty_id: 'real-pty-2', code: 0 }); });
+    await waitFor(() => expect(result.current.completed.has('real-cmd-2')).toBe(true));
   });
 
   it('gives up on a job whose exit never arrives, without crediting it, and continues the queue', async () => {
