@@ -3,6 +3,7 @@ import { useVirtualizer } from '@tanstack/react-virtual';
 import { on, emit } from '../lib/events';
 import { api, type LargeFile, type SessionResults } from '../lib/api';
 import { formatBytes, formatAge, describePath } from '../lib/format';
+import { getCategory } from '../lib/categories';
 
 type SortKey = 'size' | 'age_days' | 'path';
 type SortDir = 'asc' | 'desc';
@@ -84,17 +85,6 @@ export default function FileTable() {
   };
 
   const sortIndicator = (key: SortKey) => sortKey !== key ? '' : sortDir === 'asc' ? ' ↑' : ' ↓';
-
-  function getCategory(path: string): string {
-    const p = path.toLowerCase();
-    if (p.includes('node_modules') || p.includes('.npm') || p.includes('.cargo') || p.includes('.rustup') || p.includes('.gradle') || p.includes('developer/')) return 'Development';
-    if (p.includes('docker') || p.includes('Docker.raw')) return 'Docker';
-    if (p.includes('/caches/') || p.includes('/cache/') || p.includes('/tmp/') || p.includes('/logs/')) return 'Caches & Logs';
-    if (p.includes('/library/')) return 'System Library';
-    if (p.includes('/documents/') || p.includes('/desktop/') || p.includes('/downloads/')) return 'Documents';
-    if (p.match(/\.(mp4|mov|avi|mkv|mp3|wav|flac|jpg|jpeg|png|gif|psd|raw)$/i)) return 'Media';
-    return 'Other';
-  }
 
   if (files.length === 0) {
     return (

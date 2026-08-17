@@ -3,6 +3,7 @@ import { on } from '../lib/events';
 import { api, type SessionResults, type Recommendation } from '../lib/api';
 import { formatBytes } from '../lib/format';
 import { useCleanupRunner } from '../hooks/useCleanupRunner';
+import { getTierBucket } from '../lib/tiers';
 
 interface Tier {
   level: 'safe' | 'review' | 'careful';
@@ -32,9 +33,10 @@ export default function ReverseView() {
         if (disk) { setDiskUsed(disk.used); setDiskTotal(disk.total); }
 
         const recs = report.recommendations || [];
-        const safeItems = recs.filter(r => (r.tier || 9) <= 1 && r.command && !r.command.startsWith('#'));
-        const reviewItems = recs.filter(r => (r.tier || 9) === 2 && r.command && !r.command.startsWith('#'));
-        const carefulItems = recs.filter(r => (r.tier || 9) >= 3 && r.command && !r.command.startsWith('#'));
+        const isRunnable = (r: Recommendation) => Boolean(r.command) && !r.command.startsWith('#');
+        const safeItems = recs.filter(r => getTierBucket(r.tier || 9) === 'safe' && isRunnable(r));
+        const reviewItems = recs.filter(r => getTierBucket(r.tier || 9) === 'review' && isRunnable(r));
+        const carefulItems = recs.filter(r => getTierBucket(r.tier || 9) === 'careful' && isRunnable(r));
 
         const newTiers: Tier[] = [
           {

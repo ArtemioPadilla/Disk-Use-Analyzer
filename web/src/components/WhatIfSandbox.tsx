@@ -3,6 +3,7 @@ import { on } from '../lib/events';
 import { type Recommendation, type SessionResults } from '../lib/api';
 import { formatBytes } from '../lib/format';
 import { useCleanupRunner } from '../hooks/useCleanupRunner';
+import { TIER_META } from '../lib/tiers';
 
 export default function WhatIfSandbox() {
   const [recs, setRecs] = useState<Recommendation[]>([]);
@@ -60,9 +61,6 @@ export default function WhatIfSandbox() {
 
   if (recs.length === 0) return null;
 
-  const tierColors: Record<number, string> = { 1: '#10b981', 2: '#f59e0b', 3: '#ef4444', 4: '#7c3aed' };
-  const tierLabels: Record<number, string> = { 1: 'Safe', 2: 'Moderate', 3: 'Aggressive', 4: 'Deep' };
-
   return (
     <div className="card" style={{ marginBottom: '1rem' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
@@ -100,14 +98,14 @@ export default function WhatIfSandbox() {
           <label key={i} style={{
             display: 'flex', alignItems: 'center', gap: '0.5rem', padding: '0.4rem 0.25rem',
             borderBottom: '1px solid var(--border)', cursor: 'pointer', fontSize: '0.8rem',
-            background: checked.has(i) ? (tierColors[rec.tier] || '#6b7280') + '08' : 'transparent',
+            background: checked.has(i) ? (TIER_META[rec.tier]?.color || '#6b7280') + '08' : 'transparent',
           }}>
             <input type="checkbox" checked={checked.has(i)} onChange={() => toggle(i)} />
             <span style={{
               fontSize: '0.65rem', padding: '0.1rem 0.35rem', borderRadius: '3px',
-              background: (tierColors[rec.tier] || '#6b7280') + '20',
-              color: tierColors[rec.tier] || '#6b7280',
-            }}>{tierLabels[rec.tier] || '?'}</span>
+              background: (TIER_META[rec.tier]?.color || '#6b7280') + '20',
+              color: TIER_META[rec.tier]?.color || '#6b7280',
+            }}>{TIER_META[rec.tier]?.label || '?'}</span>
             <span style={{ flex: 1 }}>{rec.description}</span>
             <span style={{ fontWeight: 500, whiteSpace: 'nowrap', color: checked.has(i) ? 'var(--success)' : 'var(--text-muted)' }}>
               {formatBytes(rec.space)}

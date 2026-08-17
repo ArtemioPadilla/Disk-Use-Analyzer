@@ -3,13 +3,7 @@ import { on, emit } from '../lib/events';
 import { type Recommendation, type SessionResults } from '../lib/api';
 import { formatBytes } from '../lib/format';
 import { useCleanupRunner } from '../hooks/useCleanupRunner';
-
-const TIER_META: Record<number, { label: string; color: string; icon: string }> = {
-  1: { label: 'Safe', color: '#10b981', icon: '✅' },
-  2: { label: 'Moderate', color: '#f59e0b', icon: '⚠️' },
-  3: { label: 'Aggressive', color: '#ef4444', icon: '🔴' },
-  4: { label: 'Deep Clean', color: '#7c3aed', icon: '💀' },
-};
+import { TIER_META } from '../lib/tiers';
 
 export default function CleanupWizard() {
   const [recs, setRecs] = useState<Recommendation[]>([]);
