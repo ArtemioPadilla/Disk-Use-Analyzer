@@ -19,6 +19,8 @@ export interface CleanupRunner {
   completed: Set<string>;
   /** Last error, or null. */
   error: string | null;
+  /** Clear the completed set, in memory and in storage. Called automatically on a fresh analysis. */
+  reset: () => void;
 }
 
 function loadCompleted(): Set<string> {
@@ -37,6 +39,21 @@ export function useCleanupRunner(): CleanupRunner {
   // pty_id -> job. A ref, not state: the exit listener must see the latest map
   // without re-subscribing on every run.
   const jobs = useRef<Record<string, CleanupJob>>({});
+
+  const reset = () => {
+    setCompleted(new Set());
+    try { localStorage.removeItem(STORAGE_KEY); } catch { /* storage disabled */ }
+  };
+
+  // A fresh scan invalidates any prior "already cleaned" state: recommendations
+  // are recomputed, and commands that completed against the old scan should not
+  // be treated as already-done against the new one. Subscribing here (rather
+  // than making every consumer call reset() from its own analysis:completed
+  // listener) is the one place this reset belongs, since all six cleanup flows
+  // need it identically.
+  useEffect(() => {
+    return on('analysis:completed', () => reset());
+  }, []);
 
   useEffect(() => {
     return on('terminal:exited', (data: any) => {
@@ -74,5 +91,5 @@ export function useCleanupRunner(): CleanupRunner {
     }
   };
 
-  return { run, running, completed, error };
+  return { run, running, completed, error, reset };
 }

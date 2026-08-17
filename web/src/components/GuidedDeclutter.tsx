@@ -1,7 +1,8 @@
-import { useState, useEffect } from 'react';
-import { on, emit } from '../lib/events';
-import { api, type Recommendation, type SessionResults } from '../lib/api';
+import { useState, useEffect, useMemo } from 'react';
+import { on } from '../lib/events';
+import { type SessionResults, type Recommendation } from '../lib/api';
 import { formatBytes } from '../lib/format';
+import { useCleanupRunner } from '../hooks/useCleanupRunner';
 
 interface DeclutterStep {
   id: string;
@@ -16,11 +17,9 @@ export default function GuidedDeclutter() {
   const [active, setActive] = useState(false);
   const [currentStep, setCurrentStep] = useState(0);
   const [steps, setSteps] = useState<DeclutterStep[]>([]);
-  const [freedTotal, setFreedTotal] = useState(0);
-  const [cleaning, setCleaning] = useState(false);
-  const [stepCleaned, setStepCleaned] = useState<Set<number>>(new Set());
   const [diskBefore, setDiskBefore] = useState(0);
   const [diskTotal, setDiskTotal] = useState(0);
+  const { run, running, completed } = useCleanupRunner();
 
   useEffect(() => {
     const off = on('analysis:completed', (data: SessionResults) => {
@@ -44,7 +43,7 @@ export default function GuidedDeclutter() {
       const cacheSize = caches.reduce((s, c) => s + (c.size || 0), 0);
       if (cacheSize > 0 || cacheRecs.length > 0) {
         builtSteps.push({
-          id: 'caches', icon: '\u{1F5D1}\uFE0F', title: 'Caches',
+          id: 'caches', icon: '\u{1F5D1}️', title: 'Caches',
           description: 'System and app caches. These rebuild automatically when needed.',
           items: cacheRecs.length > 0 ? cacheRecs : recs.filter(r => (r.tier || 9) === 1).slice(0, 5),
           totalSpace: cacheSize || cacheRecs.reduce((s, r) => s + (r.space || 0), 0),
@@ -89,12 +88,15 @@ export default function GuidedDeclutter() {
         });
       }
 
-      // Step 5: Review (tier 3-4)
-      const reviewRecs = recs.filter(r => (r.tier || 9) >= 3);
+      // Step 5: Review (tier 3-4). Excludes anything already placed in an
+      // earlier step (e.g. tier 3-4 cache or Docker recs) — otherwise those
+      // items get double-counted: once in their category step, once here.
+      remainingRecs.forEach(r => usedIds.add(r.command));
+      const reviewRecs = recs.filter(r => (r.tier || 9) >= 3 && r.command && !usedIds.has(r.command));
       const reviewSpace = reviewRecs.reduce((s, r) => s + (r.space || 0), 0);
       if (reviewSpace > 0) {
         builtSteps.push({
-          id: 'review', icon: '\u26A0\uFE0F', title: 'Review Carefully',
+          id: 'review', icon: '⚠️', title: 'Review Carefully',
           description: 'These items may contain data you want to keep. Review before cleaning.',
           items: reviewRecs, totalSpace: reviewSpace,
         });
@@ -105,36 +107,40 @@ export default function GuidedDeclutter() {
     return off;
   }, []);
 
-  const cleanStep = async (stepIndex: number) => {
-    const step = steps[stepIndex];
-    if (!step) return;
-    setCleaning(true);
-
-    const commands = step.items
-      .filter(r => r.command && !r.command.startsWith('#'))
-      .map(r => r.command);
-
-    for (const cmd of commands) {
-      try {
-        const { pty_id } = await api.createTerminal(cmd);
-        emit('terminal:started', { pty_id, command: cmd });
-      } catch (e) {
-        console.error('Failed to run:', cmd, e);
+  // Total actually freed so far: sum of the space for every unique command,
+  // across all steps, that the runner has confirmed exited with code 0.
+  const freedTotal = useMemo(() => {
+    const seen = new Set<string>();
+    let total = 0;
+    for (const step of steps) {
+      for (const item of step.items) {
+        if (item.command && completed.has(item.command) && !seen.has(item.command)) {
+          seen.add(item.command);
+          total += item.space || 0;
+        }
       }
     }
+    return total;
+  }, [steps, completed]);
 
-    // Mark step as cleaned and add space to freed total
-    setStepCleaned(prev => new Set(prev).add(stepIndex));
-    setFreedTotal(prev => prev + step.totalSpace);
-    emit('cleanup:completed', { command: 'guided-declutter', space: step.totalSpace });
-    setCleaning(false);
+  const runnableCommands = (step: DeclutterStep) => step.items.filter(r => r.command && !r.command.startsWith('#'));
+  const isStepCleaned = (step: DeclutterStep) => {
+    const cmds = runnableCommands(step);
+    return cmds.length > 0 && cmds.every(r => completed.has(r.command));
+  };
+  const isStepCleaning = (step: DeclutterStep) => runnableCommands(step).some(r => running.has(r.command));
+
+  const cleanStep = (stepIndex: number) => {
+    const step = steps[stepIndex];
+    if (!step) return;
+    for (const rec of runnableCommands(step)) {
+      run({ command: rec.command, space: rec.space, label: rec.description });
+    }
   };
 
   const startDeclutter = () => {
     setActive(true);
     setCurrentStep(0);
-    setFreedTotal(0);
-    setStepCleaned(new Set());
   };
 
   // Entry button (shown on cleanup page)
@@ -143,7 +149,7 @@ export default function GuidedDeclutter() {
       <button className="btn btn-primary" onClick={startDeclutter}
         disabled={steps.length === 0}
         style={{ fontSize: '1rem', padding: '0.75rem 1.5rem', borderRadius: '12px', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-        {'\u2728'} Guided Cleanup
+        {'✨'} Guided Cleanup
         {steps.length > 0 && <span style={{ opacity: 0.8, fontSize: '0.8rem' }}>({steps.length} steps)</span>}
       </button>
     );
@@ -161,7 +167,7 @@ export default function GuidedDeclutter() {
           {formatBytes(freedTotal)} freed
         </div>
         <div style={{ color: 'var(--text-muted)', marginBottom: '2rem' }}>
-          Disk usage: {pctBefore}% {'\u2192'} {pctAfter}%
+          Disk usage: {pctBefore}% {'→'} {pctAfter}%
         </div>
         <button className="btn btn-ghost" onClick={() => setActive(false)}>Done</button>
       </div>
@@ -169,7 +175,8 @@ export default function GuidedDeclutter() {
   }
 
   const step = steps[currentStep];
-  const isCleaned = stepCleaned.has(currentStep);
+  const isCleaned = isStepCleaned(step);
+  const isCleaning = isStepCleaning(step);
   const projectedFreed = freedTotal + (isCleaned ? 0 : step.totalSpace);
   const projectedPct = diskTotal > 0 ? (((diskBefore - projectedFreed) / diskTotal) * 100).toFixed(0) : '?';
 
@@ -230,19 +237,19 @@ export default function GuidedDeclutter() {
       {/* Action buttons */}
       <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'space-between' }}>
         <button className="btn btn-ghost" onClick={() => setCurrentStep(prev => prev + 1)}>
-          Skip {'\u2192'}
+          Skip {'→'}
         </button>
         <div style={{ display: 'flex', gap: '0.5rem' }}>
           {isCleaned ? (
-            <span style={{ color: 'var(--success)', fontWeight: 600, display: 'flex', alignItems: 'center' }}>{'\u2713'} Cleaned</span>
+            <span style={{ color: 'var(--success)', fontWeight: 600, display: 'flex', alignItems: 'center' }}>{'✓'} Cleaned</span>
           ) : (
-            <button className="btn btn-primary" onClick={() => cleanStep(currentStep)} disabled={cleaning}
+            <button className="btn btn-primary" onClick={() => cleanStep(currentStep)} disabled={isCleaning}
               style={{ fontSize: '0.95rem' }}>
-              {cleaning ? 'Cleaning...' : `Clean ${step.title} (${formatBytes(step.totalSpace)})`}
+              {isCleaning ? 'Cleaning...' : `Clean ${step.title} (${formatBytes(step.totalSpace)})`}
             </button>
           )}
           <button className="btn btn-ghost" onClick={() => setCurrentStep(prev => prev + 1)}>
-            Next {'\u2192'}
+            Next {'→'}
           </button>
         </div>
       </div>

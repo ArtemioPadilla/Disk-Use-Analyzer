@@ -107,4 +107,39 @@ describe('useCleanupRunner', () => {
     });
     await waitFor(() => expect(result.current.error).toContain('429'));
   });
+
+  it('clears the completed set in memory and in storage on reset()', async () => {
+    const { result } = renderHook(() => useCleanupRunner());
+    await act(async () => {
+      await result.current.run({ command: 'brew cleanup', space: 5 });
+    });
+    act(() => { emit('terminal:exited', { pty_id: 'pty-1', code: 0 }); });
+    await waitFor(() => expect(result.current.completed.has('brew cleanup')).toBe(true));
+
+    act(() => { result.current.reset(); });
+
+    expect(result.current.completed.has('brew cleanup')).toBe(false);
+    expect(localStorage.getItem('disk-analyzer-cleaned')).toBeNull();
+
+    // A command that was "done" before the reset can run again afterward.
+    mockedCreate.mockClear();
+    await act(async () => {
+      await result.current.run({ command: 'brew cleanup', space: 5 });
+    });
+    expect(mockedCreate).toHaveBeenCalledTimes(1);
+  });
+
+  it('resets automatically when a fresh analysis completes, invisible to a mounted instance otherwise', async () => {
+    const { result } = renderHook(() => useCleanupRunner());
+    await act(async () => {
+      await result.current.run({ command: 'npm cache clean', space: 7 });
+    });
+    act(() => { emit('terminal:exited', { pty_id: 'pty-1', code: 0 }); });
+    await waitFor(() => expect(result.current.completed.has('npm cache clean')).toBe(true));
+
+    act(() => { emit('analysis:completed', { id: 's1', status: 'done', results: [] }); });
+
+    await waitFor(() => expect(result.current.completed.has('npm cache clean')).toBe(false));
+    expect(localStorage.getItem('disk-analyzer-cleaned')).toBeNull();
+  });
 });

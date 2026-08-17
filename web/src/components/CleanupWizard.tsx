@@ -1,7 +1,8 @@
 import { useState, useEffect } from 'react';
 import { on, emit } from '../lib/events';
-import { api, type Recommendation, type SessionResults } from '../lib/api';
+import { type Recommendation, type SessionResults } from '../lib/api';
 import { formatBytes } from '../lib/format';
+import { useCleanupRunner } from '../hooks/useCleanupRunner';
 
 const TIER_META: Record<number, { label: string; color: string; icon: string }> = {
   1: { label: 'Safe', color: '#10b981', icon: '✅' },
@@ -13,45 +14,16 @@ const TIER_META: Record<number, { label: string; color: string; icon: string }> 
 export default function CleanupWizard() {
   const [recs, setRecs] = useState<Recommendation[]>([]);
   const [expanded, setExpanded] = useState<Set<number>>(new Set([1]));
-  const [running, setRunning] = useState<Set<string>>(new Set());
   const [showCommands, setShowCommands] = useState(false);
-  const [ptyCommands, setPtyCommands] = useState<Record<string, string>>({});
-
-  // Load running (completed commands) state from localStorage
-  useEffect(() => {
-    try {
-      const saved = localStorage.getItem('disk-analyzer-wizard-running');
-      if (saved) setRunning(new Set(JSON.parse(saved)));
-    } catch {}
-  }, []);
-
-  // Save running state
-  useEffect(() => {
-    localStorage.setItem('disk-analyzer-wizard-running', JSON.stringify([...running]));
-  }, [running]);
+  const { run, running, completed } = useCleanupRunner();
 
   useEffect(() => {
     const off = on('analysis:completed', (data: SessionResults) => {
       const allRecs = data.results.flatMap(r => r.report.recommendations);
       setRecs(allRecs);
-      // New scan = fresh data, clear completed commands
-      setRunning(new Set());
-      localStorage.removeItem('disk-analyzer-wizard-running');
     });
     return off;
   }, []);
-
-  // Listen for terminal exit events to mark commands as finished
-  useEffect(() => {
-    const off = on('terminal:exited', (data: any) => {
-      const cmd = ptyCommands[data.pty_id];
-      if (cmd) {
-        setRunning(prev => { const n = new Set(prev); n.delete(cmd); return n; });
-        setPtyCommands(prev => { const n = { ...prev }; delete n[data.pty_id]; return n; });
-      }
-    });
-    return off;
-  }, [ptyCommands]);
 
   const toggleTier = (tier: number) => {
     setExpanded(prev => {
@@ -61,36 +33,24 @@ export default function CleanupWizard() {
     });
   };
 
-  const runCommand = async (rec: Recommendation) => {
-    if (running.has(rec.command)) return;
+  const runCommand = (rec: Recommendation) => {
     if (rec.command && !rec.command.startsWith('#')) {
-      try {
-        const { pty_id } = await api.createTerminal(rec.command);
-        setPtyCommands(prev => ({ ...prev, [pty_id]: rec.command }));
-        emit('terminal:open', { pty_id, command: rec.command });
-        emit('terminal:started', { pty_id, command: rec.command });
-        setRunning(prev => new Set(prev).add(rec.command));
-      } catch (e) {
-        console.error('Failed to run command:', e);
-      }
+      run({ command: rec.command, space: rec.space, label: rec.description });
     }
   };
 
   const totalRecoverable = recs.reduce((s, r) => s + (r.space || 0), 0);
   const safeTotalSpace = recs.filter(r => (r.tier || 1) === 1).reduce((s, r) => s + (r.space || 0), 0);
 
-  const cleanSafeItems = async () => {
+  const cleanSafeItems = () => {
     const safeRecs = recs.filter(r => (r.tier || 1) === 1 && r.command && !r.command.startsWith('#'));
     for (const rec of safeRecs) {
-      try {
-        const { pty_id } = await api.createTerminal(rec.command);
-        setPtyCommands(prev => ({ ...prev, [pty_id]: rec.command }));
-        emit('terminal:open', { pty_id, command: rec.command });
-        emit('terminal:started', { pty_id, command: rec.command });
-        setRunning(prev => new Set(prev).add(rec.command));
-      } catch (e) { console.error('Failed:', e); }
+      run({ command: rec.command, space: rec.space, label: rec.description });
     }
   };
+
+  const safeRecsRunnable = recs.filter(r => (r.tier || 1) === 1 && r.command && !r.command.startsWith('#'));
+  const safeRunning = safeRecsRunnable.some(r => running.has(r.command));
 
   const grouped = recs.reduce((acc, rec) => {
     const tier = rec.tier || 1;
@@ -124,9 +84,9 @@ export default function CleanupWizard() {
           </div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
             {safeTotalSpace > 0 && (
-              <button onClick={cleanSafeItems} disabled={running.size > 0}
+              <button onClick={cleanSafeItems} disabled={safeRunning}
                 style={{ background: 'white', color: 'var(--primary)', border: 'none', padding: '0.6rem 1.5rem', borderRadius: '8px', fontWeight: 600, fontSize: '0.9rem', cursor: 'pointer' }}>
-                {running.size > 0 ? 'Cleaning...' : `Clean Safe Items (${formatBytes(safeTotalSpace)})`}
+                {safeRunning ? 'Cleaning...' : `Clean Safe Items (${formatBytes(safeTotalSpace)})`}
               </button>
             )}
             <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.75rem', opacity: 0.9, cursor: 'pointer' }}>
@@ -172,11 +132,14 @@ export default function CleanupWizard() {
                     {tierRecs.length} items &middot; {formatBytes(totalSpace)}
                   </span>
                 </div>
-                <span>{isOpen ? '\u25BE' : '\u25B8'}</span>
+                <span>{isOpen ? '▾' : '▸'}</span>
               </div>
               {isOpen && (
                 <div style={{ marginTop: '0.75rem' }}>
-                  {tierRecs.map((rec, i) => (
+                  {tierRecs.map((rec, i) => {
+                    const isRunning = running.has(rec.command);
+                    const isDone = completed.has(rec.command);
+                    return (
                     <div
                       key={i}
                       style={{
@@ -223,18 +186,19 @@ export default function CleanupWizard() {
                         <button
                           className="btn btn-primary"
                           onClick={() => runCommand(rec)}
-                          disabled={running.has(rec.command)}
+                          disabled={isRunning || isDone}
                           style={{
                             fontSize: '0.75rem',
                             padding: '0.35rem 0.75rem',
                             whiteSpace: 'nowrap',
                           }}
                         >
-                          {running.has(rec.command) ? 'Running...' : '\u25B6 Run'}
+                          {isDone ? '✓ Done' : isRunning ? 'Running...' : '▶ Run'}
                         </button>
                       )}
                     </div>
-                  ))}
+                    );
+                  })}
                 </div>
               )}
             </div>

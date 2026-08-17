@@ -1,15 +1,15 @@
 import { useState, useEffect, useMemo } from 'react';
-import { on, emit } from '../lib/events';
-import { api, type Recommendation, type SessionResults } from '../lib/api';
+import { on } from '../lib/events';
+import { type Recommendation, type SessionResults } from '../lib/api';
 import { formatBytes } from '../lib/format';
+import { useCleanupRunner } from '../hooks/useCleanupRunner';
 
 export default function WhatIfSandbox() {
   const [recs, setRecs] = useState<Recommendation[]>([]);
   const [checked, setChecked] = useState<Set<number>>(new Set());
   const [diskUsed, setDiskUsed] = useState(0);
   const [diskTotal, setDiskTotal] = useState(0);
-  const [applying, setApplying] = useState(false);
-  const [applied, setApplied] = useState(false);
+  const { run, running, completed } = useCleanupRunner();
 
   useEffect(() => {
     const off = on('analysis:completed', (data: SessionResults) => {
@@ -20,7 +20,6 @@ export default function WhatIfSandbox() {
       const items = (report.recommendations || []).filter(r => r.command && !r.command.startsWith('#') && r.space > 0);
       setRecs(items);
       setChecked(new Set());
-      setApplied(false);
     });
     return off;
   }, []);
@@ -28,6 +27,13 @@ export default function WhatIfSandbox() {
   const totalChecked = useMemo(() => {
     return [...checked].reduce((s, i) => s + (recs[i]?.space || 0), 0);
   }, [checked, recs]);
+
+  const checkedCommands = useMemo(
+    () => [...checked].map(i => recs[i]?.command).filter((c): c is string => Boolean(c)),
+    [checked, recs]
+  );
+  const applying = checkedCommands.some(c => running.has(c));
+  const applied = checkedCommands.length > 0 && checkedCommands.every(c => completed.has(c));
 
   const projectedUsed = diskUsed - totalChecked;
   const currentPct = diskTotal > 0 ? (diskUsed / diskTotal) * 100 : 0;
@@ -45,18 +51,11 @@ export default function WhatIfSandbox() {
   const selectNone = () => setChecked(new Set());
   const selectSafe = () => setChecked(new Set(recs.map((r, i) => (r.tier || 9) <= 1 ? i : -1).filter(i => i >= 0)));
 
-  const applyCleanup = async () => {
-    setApplying(true);
-    const commands = [...checked].map(i => recs[i]?.command).filter(Boolean);
-    for (const cmd of commands) {
-      try {
-        const { pty_id } = await api.createTerminal(cmd!);
-        emit('terminal:started', { pty_id, command: cmd });
-      } catch (e) { console.error(e); }
+  const applyCleanup = () => {
+    for (const i of checked) {
+      const rec = recs[i];
+      if (rec?.command) run({ command: rec.command, space: rec.space, label: rec.description });
     }
-    emit('cleanup:completed', { command: 'what-if-sandbox', space: totalChecked });
-    setApplying(false);
-    setApplied(true);
   };
 
   if (recs.length === 0) return null;
