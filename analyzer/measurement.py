@@ -16,7 +16,17 @@ goal was ONE answer shared across the engine, not bit-for-bit parity with
 `du`.
 
 Standard library only -- analyzer/ must not depend on third-party packages.
+
+Portability note: `Path.is_file(follow_symlinks=False)` / `Path.stat(follow_symlinks=False)`
+only gained the `follow_symlinks` keyword in Python 3.13 -- calling either with that
+argument on 3.6-3.12 raises `TypeError`. `Path.lstat()` never follows symlinks (that is
+its whole purpose) and has existed since Python 3.4, so it gives the same "don't follow
+symlinks" semantics as the two 3.13-only calls combined, in a single syscall, on every
+supported version. Do NOT swap this for a bare `entry.is_file()` -- that follows
+symlinks by default and would double-count anything a symlink points at, defeating the
+reason this walk avoids following them in the first place.
 """
+import stat as stat_module
 from pathlib import Path
 
 
@@ -26,12 +36,12 @@ def get_directory_size(directory: Path) -> int:
     total_size = 0
     try:
         for entry in directory.rglob('*'):
-            if entry.is_file(follow_symlinks=False):
-                try:
-                    stat = entry.stat(follow_symlinks=False)
-                    total_size += stat.st_blocks * 512 if hasattr(stat, 'st_blocks') else stat.st_size
-                except OSError:
-                    pass
+            try:
+                entry_stat = entry.lstat()
+            except OSError:
+                continue
+            if stat_module.S_ISREG(entry_stat.st_mode):
+                total_size += entry_stat.st_blocks * 512 if hasattr(entry_stat, 'st_blocks') else entry_stat.st_size
     except OSError:
         pass
     return total_size
