@@ -28,8 +28,20 @@ DESTINO="$REPO_ROOT/desktop/src-tauri/resources/engine"
 URL="https://github.com/astral-sh/python-build-standalone/releases/download/${VERSION}/cpython-${PY_VERSION}%2B${VERSION}-${TRIPLE}-install_only.tar.gz"
 
 echo "▸ Preparando el motor para $TRIPLE (CPython $PY_VERSION)"
+# El LEEME.md de este directorio SÍ está versionado: es el ancla que hace que
+# el glob de `bundle.resources` encaje en un checkout limpio, sin la cual Tauri
+# aborta la compilación. Un `rm -rf` a secas se lo llevaba por delante y dejaba
+# el árbol de git sucio con un fichero borrado.
+ANCLA=""
+if [ -f "$DESTINO/LEEME.md" ]; then
+  ANCLA="$(mktemp)"
+  cp "$DESTINO/LEEME.md" "$ANCLA"
+fi
 rm -rf "$DESTINO"
 mkdir -p "$DESTINO"
+if [ -n "$ANCLA" ]; then
+  mv "$ANCLA" "$DESTINO/LEEME.md"
+fi
 
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
