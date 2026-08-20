@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Menu bar app: no Dock icon, no Cmd+Tab entry. `run()` also calls
+	     ActivationPolicy::Accessory at runtime, but that only takes effect
+	     once the app has started; without this key the Dock icon flashes
+	     for a moment on every launch. -->
+	<key>LSUIElement</key>
+	<true/>
+	<!-- Shown by macOS in the Full Disk Access prompt. Whole-disk scanning
+	     (decision D2) is the app's reason to exist, so the string says so
+	     plainly rather than leaving the user guessing what is being asked. -->
+	<key>NSSystemAdministrationUsageDescription</key>
+	<string>Disk Use Analyzer necesita leer todo el disco para mostrarte qué lo está llenando.</string>
+</dict>
+</plist>
