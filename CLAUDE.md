@@ -75,6 +75,8 @@ This is a **macOS Disk Usage Analyzer** - a powerful standalone Python tool for 
 │   │   ├── hooks/          # useCleanupRunner (all cleanup goes through this), useTerminal
 │   │   └── lib/            # api.ts, events.ts, format.ts, categories.ts, tiers.ts
 │   └── dist/               # Built static files (served by FastAPI)
+├── desktop/                # macOS menu-bar app (Tauri 2 + Rust)
+│   └── src-tauri/src/      # disk.rs, estado.rs, analisis.rs, lib.rs
 ├── tests/                  # Backend tests (PTY manager + terminal API)
 ├── static/                 # Legacy web static assets (fallback)
 ├── docs/                   # Documentation
@@ -160,6 +162,21 @@ The project has three interfaces: CLI, GUI, and Web.
 - **Build:** `cd web && npm run build` → static files in `web/dist/` → served by FastAPI
 - **Dev mode:** `make web-dev` runs Astro dev server (port 3000) with Vite proxy to FastAPI (port 8000)
 - **Auth:** on by default. All `/api/*` routes require the `X-Auth-Token` header; both WebSockets require `?token=`. CORS is restricted to the dev origins (`localhost:3000`, `127.0.0.1:3000`), not `*`. A fresh token is generated on each server start and printed as part of the access URL; the frontend reads it from the URL once, stores it in `sessionStorage`, and strips it from the address bar. `--no-auth` disables all of it for an isolated network. Caveats: the WebSocket token travels in the query string over plain `ws://` (browsers can't set WS headers) and can land in the `uvicorn` access log; the PTY terminal's dangerous-command blocklist only checks the initial command, not what you type interactively afterward; `/docs` and `/openapi.json` are not behind auth. Background agents (`agents_manager.py`) are simulate-by-default — `POST /api/agents/{id}/run` only executes with `?confirm=true`, and the scheduler stays permanently dry-run.
+
+### Menu-bar app (Tauri 2 + Rust)
+
+- **`desktop/src-tauri/src/`** — a macOS status-bar app showing live disk usage:
+  `disk.rs` (reads usage), `estado.rs` (classifies into ok/aviso/critico),
+  `analisis.rs` (runs the Python engine as a child process), `lib.rs` (tray, menu, poller)
+- **Build:** `cd desktop && npm run tauri build -- --bundles app`
+- **Tests:** `cargo test --manifest-path desktop/src-tauri/Cargo.toml` (also run by `make test`)
+- **Two things that will surprise you:** the app is **not self-contained** — it
+  invokes `venv-web/bin/python` by absolute path, so moving the repo breaks the
+  analysis (the disk indicator keeps working). And it is **unsigned**, so
+  Gatekeeper blocks a double click (right-click → Open) and the Full Disk Access
+  grant breaks on every rebuild. Both have runbook entries:
+  `docs/runbooks/app-bandeja.md`.
+- `analisis.rs` uses POSIX process groups and signals, so it **only compiles on Unix**.
 
 ### GUI (CustomTkinter, legacy)
 - **`disk_analyzer_gui.py`** - Desktop GUI using CustomTkinter

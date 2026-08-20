@@ -51,3 +51,36 @@ jobs:
 
       - name: Build
         run: npm run build
+
+  desktop:
+    name: Desktop (Rust)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: desktop/src-tauri
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      # El test de consistencia compara la lectura de Rust contra el motor
+      # Python real, invocándolo por la ruta `venv-web/bin/python`. Un venv
+      # pelado basta: `disk_analyzer_core` solo usa la biblioteca estándar y
+      # el paquete local `analyzer/`. Se prefiere esto a marcar el test como
+      # ignorado en CI, porque es justo el test que protege el hueco de 53
+      # puntos entre lo que reporta `df` y lo que reporta el motor.
+      - name: Crear venv-web para el test de consistencia
+        run: python3 -m venv venv-web
+
+      - name: Clippy
+        run: cargo clippy --manifest-path desktop/src-tauri/Cargo.toml --all-targets -- -D warnings
+
+      - name: Test
+        run: cargo test --manifest-path desktop/src-tauri/Cargo.toml

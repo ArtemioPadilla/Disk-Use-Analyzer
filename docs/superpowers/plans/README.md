@@ -7,9 +7,9 @@ cuál es la siguiente acción y cómo ejecutarla.
 
 ## Estado de un vistazo
 
-Última actualización: 16 de agosto de 2026. Tests: **151 passed en ~4 s**
-(backend) + **66 passed en ~1 s** (frontend), ambos cableados al CI de
-GitHub Actions.
+Última actualización: 20 de agosto de 2026. Tests: **151** (backend) + **69**
+(frontend) + **11** (app de bandeja, Rust) = **231**, los tres cableados al CI
+de GitHub Actions y a `make test`.
 
 | Fase | Alcance | Plan | Estado |
 |---|---|---|---|
@@ -17,7 +17,7 @@ GitHub Actions.
 | 1 | Bugs críticos del backend (6 fixes) | [Fase 1](2026-07-15-mejoras-fase1-bugs-criticos.md) | ✅ Completa, mergeada a `main` (PR #5) |
 | 2 | Seguridad (auth, CORS, agents, fds del PTY) | [Fase 2](2026-07-15-mejoras-fase2-seguridad.md) | ✅ Completa, mergeada a `main` (PR #6) |
 | 3 | Motor compartido (deduplicar CLI vs core) | [Fase 3](2026-07-30-mejoras-fase3-motor-compartido.md) | ✅ Completa, mergeada a `main` (PR #7) |
-| 4 | Frontend (cleanup runner, sesiones, tipos, código muerto) | [Fase 4](2026-08-10-mejoras-fase4-frontend.md) | ✅ Completa en `feat/fase4-frontend`, pendiente de mergear |
+| 4 | Frontend (cleanup runner, sesiones, tipos, código muerto) | [Fase 4](2026-08-10-mejoras-fase4-frontend.md) | ✅ Completa, mergeada a `main` (PR #9, más el #10 del lockfile del CI) |
 | 5 | Tests del motor y CI | [Fase 5](2026-08-01-mejoras-fase5-tests-y-ci.md) | ✅ Completa, mergeada a `main` (PR #8) |
 
 Documentos de referencia:
@@ -31,22 +31,46 @@ Documentos de referencia:
 
 ## Siguiente acción
 
-Las fases 1, 2, 3 y 5 están mergeadas a `main`, con CI verificando cada push y
-cada pull request. La Fase 4 está completa en la rama `feat/fase4-frontend` y
-lista para revisión de PR. Quedan dos cosas:
+Las cinco fases con plan (1, 2, 3, 4 y 5) están mergeadas a `main`, con CI
+verificando cada push y cada pull request. Quedan:
 
-1. **Mergear la Fase 4 (frontend).** Los seis flujos de limpieza ya comparten
-   un único runner que solo acredita el ahorro cuando el comando termina bien,
-   la carga de sesiones históricas y el reenganche del análisis y la terminal
-   al navegar están arreglados, y el frontend tiene su primera suite de tests
-   (66, con `npm test` ahora cableado al CI y a `make test`). Falta la
-   verificación manual de los flujos visuales que los tests no cubren — ver el
-   registro de ejecución para la lista exacta — y decidir si se protege la
-   rama `main` (ver más abajo) antes o después de mergear.
-2. **Fase 0 (higiene).** Quince minutos, sin plan, pero necesita `sudo`: hay
+1. **Fase 0 (higiene).** Quince minutos, sin plan, pero necesita `sudo`: hay
    archivos en el repo y en `~/.disk-analyzer/` que quedaron propiedad de `root`
    por corridas anteriores con `sudo`, y eso ya provocó un fallo real (un 500 al
    no poder escribir el log de agents).
+2. **Rebanadas B y C de la app de bandeja** (ver más abajo).
+
+## Trabajo aparte: app de bandeja de macOS
+
+Una app nativa anclada en la barra superior que muestra el estado del disco en
+tiempo real. No forma parte del plan de mejoras; tiene su propio spec y sus
+propios planes.
+
+- **[Spec](../specs/2026-08-19-app-bandeja-tauri-design.md)** — el diseño, con
+  las tres rebanadas y lo que queda fuera de cada una.
+- **[Plan de la rebanada A](2026-08-20-app-bandeja-rebanada-a.md)** — icono de
+  estado y análisis bajo demanda.
+- **[Runbook](../../runbooks/app-bandeja.md)** — firmar, dar y revocar el acceso
+  a disco completo, desinstalar del todo y volver atrás.
+
+| Rebanada | Alcance | Estado |
+|---|---|---|
+| A | Icono de estado en vivo y análisis bajo demanda | ✅ Completa en `feat/app-bandeja-tauri` |
+| B | Vigilancia de carpetas y notificaciones | Pendiente, sin plan |
+| C | Ventana del panel con las gráficas | Pendiente, sin plan |
+
+Dos cosas de la rebanada A que sorprenden si no las sabes:
+
+- **La app no es autocontenida.** Al pulsar "Analizar ahora" ejecuta
+  `venv-web/bin/python` del repositorio por ruta absoluta. Si mueves el
+  repositorio o borras el venv, el análisis deja de funcionar (el menú lo dice);
+  el indicador de disco sigue funcionando porque no depende de Python. El motivo
+  —el antivirus poniendo en cuarentena todo binario de PyInstaller— y los dos
+  caminos abiertos están en el registro de ejecución.
+- **No está firmada ni notarizada.** Va con firma ad hoc, así que Gatekeeper la
+  bloquea con doble clic: ábrela con clic derecho → Abrir. Y como el hash cambia
+  en cada compilación, el permiso de Acceso a disco completo se rompe en cada
+  build. El runbook explica cómo arreglarlo con un certificado autofirmado.
 
 ### Decisiones abiertas
 
@@ -112,8 +136,10 @@ make test
 ```
 
 El backend pasó de 18 tests (antes de la Fase 1) a 151 (Fase 5). El frontend
-no tenía ninguna suite de JS antes de la Fase 4; pasó de 0 a 66 con
-`npm test` cableado al CI en esa misma fase.
+no tenía ninguna suite de JS antes de la Fase 4; pasó de 0 a 69 con
+`npm test` cableado al CI en esa misma fase. La app de bandeja añade 11 tests de
+Rust, que `make test` corre si encuentra `cargo` y se salta con un aviso si no
+(el CI sí los corre siempre).
 
 ## Gotchas del estado actual
 

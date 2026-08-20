@@ -44,3 +44,13 @@ web/node_modules/
 web/dist/
 web/.astro/
 !web/src/lib/
+
+# Tauri desktop shell (Cargo.lock for the binary crate IS committed)
+desktop/src-tauri/target/
+desktop/node_modules/
+desktop/dist/
+
+# Secretos de firma de código: el certificado vive en el llavero, nunca aquí
+*.p12
+*.cer
+*.certSigningRequest

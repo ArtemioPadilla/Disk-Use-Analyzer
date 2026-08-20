@@ -362,6 +362,15 @@ test: ## Ejecuta la suite de tests (backend + tests y chequeo del frontend)
 	@cd web && npm test
 	@echo "$(BLUE)🧪 Chequeo de tipos del frontend...$(NC)"
 	@cd web && npm run check
+	@echo "$(BLUE)🧪 Tests de la app de bandeja (Rust)...$(NC)"
+	@CARGO=$$(command -v cargo || echo $$HOME/.cargo/bin/cargo); \
+	if [ -x "$$CARGO" ]; then \
+		"$$CARGO" clippy --manifest-path desktop/src-tauri/Cargo.toml --all-targets -- -D warnings && \
+		"$$CARGO" test --manifest-path desktop/src-tauri/Cargo.toml; \
+	else \
+		echo "$(YELLOW)⚠️  cargo no está instalado: se saltan los tests de Rust.$(NC)"; \
+		echo "   El CI sí los corre. Para correrlos aquí: https://rustup.rs"; \
+	fi
 	@echo "$(GREEN)✅ Todo en verde$(NC)"
 
 # Comando por defecto
