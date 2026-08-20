@@ -2,6 +2,7 @@ use tauri::menu::{Menu, MenuItem};
 use tauri::tray::TrayIconBuilder;
 
 pub mod disk;
+pub mod estado;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
