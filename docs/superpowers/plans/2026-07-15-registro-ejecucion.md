@@ -462,3 +462,100 @@ para el razonamiento completo.
 
 Sin ejecutar. El alcance, la secuencia recomendada y los criterios de
 aceptación están en el [roadmap](2026-07-15-roadmap-mejoras.md).
+
+## App de bandeja — rebanada A (20 de agosto de 2026)
+
+Trabajo aparte del plan de mejoras: una app nativa de macOS anclada en la barra
+superior que muestra el estado del disco en tiempo real. El diseño está en
+[el spec](../specs/2026-08-19-app-bandeja-tauri-design.md) y los tasks en
+[el plan de la rebanada A](2026-08-20-app-bandeja-rebanada-a.md).
+
+Rama `feat/app-bandeja-tauri`. Tauri 2 + Rust, en `desktop/`.
+
+| Task | Qué entregó | Commit |
+|---|---|---|
+| 1 | Decisiones D1–D4 cerradas | `docs:` en el plan |
+| 2 | Andamiaje de Tauri, política de accesorio, permisos | — |
+| 3 | `disk.rs` + test de consistencia contra el motor Python | `b4d371e` |
+| 4 | `estado.rs` (umbrales) y generador de iconos | `c86d591` |
+| 5 | Menú vivo y análisis cancelable, un proceso a la vez | `d286a06` |
+| 6 | `.app` empaquetada y runbook de firma | `4456ac4` |
+| 7 | CI de Rust y cierre de la documentación | este commit |
+
+### Lo que cambió respecto al plan
+
+**PyInstaller quedó descartado a mitad de ejecución.** El antivirus de la
+máquina puso en cuarentena los tres binarios que produjo, con una firma genérica
+de malware — un falso positivo conocido del *bootloader* autoextraíble de
+PyInstaller. La hipótesis inicial de arreglo (cambiar `--onefile` por `--onedir`)
+era **incorrecta**: el bootloader está en los dos modos.
+
+Consecuencia declarada: la app **no es autocontenida y no se puede distribuir**.
+Invoca `venv-web/bin/python` por ruta absoluta. El indicador de disco no depende
+de Python y sigue funcionando aunque el motor falte.
+
+**La firma y la notarización siguen pendientes** (decisión D4, sin cuenta de
+Apple). La `.app` va firmada ad hoc. El certificado autofirmado que D4 preveía
+—para que el permiso de Acceso a disco completo sobreviva a las recompilaciones—
+necesita la contraseña del llavero desde la interfaz; el procedimiento exacto
+está en el [runbook](../../runbooks/app-bandeja.md).
+
+### Tres defectos encontrados revisando el Task 5
+
+El subagente entregó código correcto en lo grueso, con tres fallos reales:
+
+1. Los ficheros temporales se nombraban con el PID de la app, **igual para todos
+   los escaneos**: un segundo escaneo abría con `File::create` el `stderr` del
+   primero y se lo truncaba en marcha. Ahora llevan número de serie.
+2. `cancelado` se reseteaba **tras** soltar el candado de `pid`, dejando una
+   ventana en la que un `cancel()` ya enganchado a ese pid ponía la bandera y se
+   la borrábamos: el escaneo moría de nuestro propio SIGTERM pero se reportaba
+   como fallo en vez de como cancelado.
+3. No había ningún test de la parte capaz de dejar procesos huérfanos.
+
+**Los primeros tests que escribí para (3) no servían.** Pasaban igual de
+contentos contra un `kill(pid)` que nunca toca al grupo de procesos. La causa:
+cancelaban justo después de `spawn`, y a esa velocidad `sh` todavía no ha
+forkeado nada, así que no existe ningún nieto que pueda quedar huérfano. Ahora el
+hijo de prueba deja un fichero-marca *después* de crear su proceso en segundo
+plano y el test espera esa marca. Verificado por mutación: con la espera, cambiar
+`kill(-pid)` por `kill(pid)` tumba las tres pruebas; sin ella, esa misma versión
+rota pasaba.
+
+Es el motivo de que la verificación por mutación esté anotada en el propio
+código: un test de limpieza de procesos que nunca ha visto un proceso sucio no
+prueba nada.
+
+### Verificación manual (20 de agosto de 2026, macOS 26.5.1)
+
+Hecha sobre la `.app` de release, no en modo desarrollo:
+
+| # | Comprobación | Resultado |
+|---|---|---|
+| 1 | Icono legible en tema claro y oscuro | ✅ Verificado componiendo los tres estados sobre ambos fondos |
+| 2 | Legible con "Reducir transparencia" | ⚠️ **Sin verificar**: exige cambiar un ajuste de accesibilidad del sistema |
+| 3 | Legible sobre fondo de escritorio claro y oscuro | ✅ Verificado |
+| 4 | Encaja con el estilo de iconos de macOS 26 | ✅ Legible en la barra real; es el único icono **en color**, que es justo lo que se busca en un indicador de estado |
+| 5 | El estado cambia al liberar o llenar espacio | ⚠️ **Parcial**: la clasificación tiene tests unitarios, pero no se probó en vivo — el disco está al 99% y liberar 70 GB para cruzar el umbral no era razonable |
+| 6 | No aparece en el Dock ni en Cmd+Tab | ✅ Verificado: `LSUIElement` más la política de accesorio |
+| 7 | Al salir no queda ningún proceso vivo | ✅ Verificado **con un análisis a medias**: se lanzó, se confirmó que corría con grupo de procesos propio, se pulsó "Salir" y no sobrevivió nada |
+
+Además, el menú vivo se contrastó contra el motor: mostraba
+`Uso: 453.8 GB / 460.4 GB (99%)` y `Libre: 6.7 GB` frente a los 454.0 GB y
+6.5 GB del motor Python — la diferencia es la escritura real del disco entre las
+dos lecturas, muy dentro de la tolerancia del 1% del test de consistencia.
+
+### Lo que queda fuera de esta rebanada
+
+Vigilancia de carpetas, la ventana del panel, Linux y Windows: declarado fuera en
+el spec. `analisis.rs` usa `process_group` y señales POSIX, así que hoy **solo
+compila en Unix**; portarlo es parte del trabajo de Windows, no una deuda oculta.
+
+### Deuda menor anotada
+
+- `capabilities/default.json` declara `"windows": ["main"]`, un ámbito huérfano
+  de la plantilla: no existe ninguna ventana con ese nombre. Inerte mientras no
+  haya webview, pero **no debe copiarse a la rebanada C**, que sí abre ventana.
+- `tauri-plugin-opener` se declaró antes de usarse; hoy sí lo usa
+  "Abrir analizador completo".
+- `desktop/README.md` sigue siendo la plantilla genérica.
