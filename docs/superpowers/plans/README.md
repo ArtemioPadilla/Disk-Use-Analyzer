@@ -7,8 +7,9 @@ cuál es la siguiente acción y cómo ejecutarla.
 
 ## Estado de un vistazo
 
-Última actualización: 1 de agosto de 2026. Tests: **151 passed en ~4 s**, con
-CI en GitHub Actions.
+Última actualización: 16 de agosto de 2026. Tests: **151 passed en ~4 s**
+(backend) + **66 passed en ~1 s** (frontend), ambos cableados al CI de
+GitHub Actions.
 
 | Fase | Alcance | Plan | Estado |
 |---|---|---|---|
@@ -16,7 +17,7 @@ CI en GitHub Actions.
 | 1 | Bugs críticos del backend (6 fixes) | [Fase 1](2026-07-15-mejoras-fase1-bugs-criticos.md) | ✅ Completa, mergeada a `main` (PR #5) |
 | 2 | Seguridad (auth, CORS, agents, fds del PTY) | [Fase 2](2026-07-15-mejoras-fase2-seguridad.md) | ✅ Completa, mergeada a `main` (PR #6) |
 | 3 | Motor compartido (deduplicar CLI vs core) | [Fase 3](2026-07-30-mejoras-fase3-motor-compartido.md) | ✅ Completa, mergeada a `main` (PR #7) |
-| 4 | Frontend (cleanup runner, sesiones, tipos, código muerto) | Solo esbozo en el roadmap | Pendiente |
+| 4 | Frontend (cleanup runner, sesiones, tipos, código muerto) | [Fase 4](2026-08-10-mejoras-fase4-frontend.md) | ✅ Completa en `feat/fase4-frontend`, pendiente de mergear |
 | 5 | Tests del motor y CI | [Fase 5](2026-08-01-mejoras-fase5-tests-y-ci.md) | ✅ Completa, mergeada a `main` (PR #8) |
 
 Documentos de referencia:
@@ -31,14 +32,17 @@ Documentos de referencia:
 ## Siguiente acción
 
 Las fases 1, 2, 3 y 5 están mergeadas a `main`, con CI verificando cada push y
-cada pull request. Quedan dos cosas:
+cada pull request. La Fase 4 está completa en la rama `feat/fase4-frontend` y
+lista para revisión de PR. Quedan dos cosas:
 
-1. **Fase 4 (frontend).** La única fase grande que falta, y necesita que se le
-   escriba su plan detallado antes de ejecutarse: unificar los cinco flujos de
-   limpieza (hoy solo uno comprueba de verdad que el comando terminó bien),
-   arreglar la carga de sesiones históricas, reconectar el análisis al navegar
-   entre páginas y quitar el código muerto restante. Su alcance está en el
-   [roadmap](2026-07-15-roadmap-mejoras.md).
+1. **Mergear la Fase 4 (frontend).** Los seis flujos de limpieza ya comparten
+   un único runner que solo acredita el ahorro cuando el comando termina bien,
+   la carga de sesiones históricas y el reenganche del análisis y la terminal
+   al navegar están arreglados, y el frontend tiene su primera suite de tests
+   (66, con `npm test` ahora cableado al CI y a `make test`). Falta la
+   verificación manual de los flujos visuales que los tests no cubren — ver el
+   registro de ejecución para la lista exacta — y decidir si se protege la
+   rama `main` (ver más abajo) antes o después de mergear.
 2. **Fase 0 (higiene).** Quince minutos, sin plan, pero necesita `sudo`: hay
    archivos en el repo y en `~/.disk-analyzer/` que quedaron propiedad de `root`
    por corridas anteriores con `sudo`, y eso ya provocó un fallo real (un 500 al
@@ -94,17 +98,22 @@ completos, en pasos de 2 a 5 minutos. El skill no es un requisito.
 Todos los planes usan el entorno virtual `venv-web`:
 
 ```bash
-# Suite de tests (debe quedar en verde antes de cada commit)
+# Suite de tests del backend (debe quedar en verde antes de cada commit)
 venv-web/bin/python -m pytest tests/ -v
 
-# Build del frontend
-cd web && npm run build
+# Suite de tests del frontend
+cd web && npm test
+
+# Chequeo de tipos y build del frontend
+cd web && npm run check && npm run build
+
+# Las cuatro anteriores, en el mismo orden que corre el CI
+make test
 ```
 
-La suite pasó de 18 tests (antes de la Fase 1) a 45. Los archivos
-`tests/test_cleanup_api.py`, `tests/test_core_engine.py`,
-`tests/test_sessions_persistence.py`, `tests/test_auth.py` y
-`tests/conftest.py` son nuevos de este plan.
+El backend pasó de 18 tests (antes de la Fase 1) a 151 (Fase 5). El frontend
+no tenía ninguna suite de JS antes de la Fase 4; pasó de 0 a 66 con
+`npm test` cableado al CI en esa misma fase.
 
 ## Gotchas del estado actual
 

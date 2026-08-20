@@ -1,15 +1,16 @@
 import { useState, useEffect, useMemo } from 'react';
-import { on, emit } from '../lib/events';
-import { api, type Recommendation, type SessionResults } from '../lib/api';
+import { on } from '../lib/events';
+import { type Recommendation, type SessionResults } from '../lib/api';
 import { formatBytes } from '../lib/format';
+import { useCleanupRunner } from '../hooks/useCleanupRunner';
+import { TIER_META } from '../lib/tiers';
 
 export default function WhatIfSandbox() {
   const [recs, setRecs] = useState<Recommendation[]>([]);
   const [checked, setChecked] = useState<Set<number>>(new Set());
   const [diskUsed, setDiskUsed] = useState(0);
   const [diskTotal, setDiskTotal] = useState(0);
-  const [applying, setApplying] = useState(false);
-  const [applied, setApplied] = useState(false);
+  const { run, running, completed } = useCleanupRunner();
 
   useEffect(() => {
     const off = on('analysis:completed', (data: SessionResults) => {
@@ -20,7 +21,6 @@ export default function WhatIfSandbox() {
       const items = (report.recommendations || []).filter(r => r.command && !r.command.startsWith('#') && r.space > 0);
       setRecs(items);
       setChecked(new Set());
-      setApplied(false);
     });
     return off;
   }, []);
@@ -28,6 +28,13 @@ export default function WhatIfSandbox() {
   const totalChecked = useMemo(() => {
     return [...checked].reduce((s, i) => s + (recs[i]?.space || 0), 0);
   }, [checked, recs]);
+
+  const checkedCommands = useMemo(
+    () => [...checked].map(i => recs[i]?.command).filter((c): c is string => Boolean(c)),
+    [checked, recs]
+  );
+  const applying = checkedCommands.some(c => running.has(c));
+  const applied = checkedCommands.length > 0 && checkedCommands.every(c => completed.has(c));
 
   const projectedUsed = diskUsed - totalChecked;
   const currentPct = diskTotal > 0 ? (diskUsed / diskTotal) * 100 : 0;
@@ -45,24 +52,14 @@ export default function WhatIfSandbox() {
   const selectNone = () => setChecked(new Set());
   const selectSafe = () => setChecked(new Set(recs.map((r, i) => (r.tier || 9) <= 1 ? i : -1).filter(i => i >= 0)));
 
-  const applyCleanup = async () => {
-    setApplying(true);
-    const commands = [...checked].map(i => recs[i]?.command).filter(Boolean);
-    for (const cmd of commands) {
-      try {
-        const { pty_id } = await api.createTerminal(cmd!);
-        emit('terminal:started', { pty_id, command: cmd });
-      } catch (e) { console.error(e); }
+  const applyCleanup = () => {
+    for (const i of checked) {
+      const rec = recs[i];
+      if (rec?.command) run({ command: rec.command, space: rec.space, label: rec.description });
     }
-    emit('cleanup:completed', { command: 'what-if-sandbox', space: totalChecked });
-    setApplying(false);
-    setApplied(true);
   };
 
   if (recs.length === 0) return null;
-
-  const tierColors: Record<number, string> = { 1: '#10b981', 2: '#f59e0b', 3: '#ef4444', 4: '#7c3aed' };
-  const tierLabels: Record<number, string> = { 1: 'Safe', 2: 'Moderate', 3: 'Aggressive', 4: 'Deep' };
 
   return (
     <div className="card" style={{ marginBottom: '1rem' }}>
@@ -101,14 +98,14 @@ export default function WhatIfSandbox() {
           <label key={i} style={{
             display: 'flex', alignItems: 'center', gap: '0.5rem', padding: '0.4rem 0.25rem',
             borderBottom: '1px solid var(--border)', cursor: 'pointer', fontSize: '0.8rem',
-            background: checked.has(i) ? (tierColors[rec.tier] || '#6b7280') + '08' : 'transparent',
+            background: checked.has(i) ? (TIER_META[rec.tier]?.color || '#6b7280') + '08' : 'transparent',
           }}>
             <input type="checkbox" checked={checked.has(i)} onChange={() => toggle(i)} />
             <span style={{
               fontSize: '0.65rem', padding: '0.1rem 0.35rem', borderRadius: '3px',
-              background: (tierColors[rec.tier] || '#6b7280') + '20',
-              color: tierColors[rec.tier] || '#6b7280',
-            }}>{tierLabels[rec.tier] || '?'}</span>
+              background: (TIER_META[rec.tier]?.color || '#6b7280') + '20',
+              color: TIER_META[rec.tier]?.color || '#6b7280',
+            }}>{TIER_META[rec.tier]?.label || '?'}</span>
             <span style={{ flex: 1 }}>{rec.description}</span>
             <span style={{ fontWeight: 500, whiteSpace: 'nowrap', color: checked.has(i) ? 'var(--success)' : 'var(--text-muted)' }}>
               {formatBytes(rec.space)}

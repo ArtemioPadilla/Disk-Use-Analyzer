@@ -69,7 +69,7 @@ body {
 @media (max-width: 768px) {
   .sidebar {
     position: fixed;
-    left: -var(--sidebar-width);
+    left: calc(-1 * var(--sidebar-width));
     top: 0;
     bottom: 0;
     z-index: 1000;

@@ -13,6 +13,7 @@ import argparse
 import subprocess
 import platform
 import shutil
+import stat as stat_module
 from pathlib import Path
 from datetime import datetime
 from collections import defaultdict
@@ -155,13 +156,16 @@ class DiskAnalyzer:
                     continue
                     
                 try:
-                    if item.is_file(follow_symlinks=False):
+                    # lstat() nunca sigue symlinks (a diferencia de is_file()/stat()
+                    # sin argumentos), y no depende del kwarg follow_symlinks= que
+                    # solo existe en pathlib desde Python 3.13.
+                    item_stat = item.lstat()
+                    if stat_module.S_ISREG(item_stat.st_mode):
                         # Usar st_blocks * 512 para obtener el espacio real en disco
-                        stat = item.stat(follow_symlinks=False)
-                        size = stat.st_blocks * 512 if hasattr(stat, 'st_blocks') else stat.st_size
+                        size = item_stat.st_blocks * 512 if hasattr(item_stat, 'st_blocks') else item_stat.st_size
                         total_size += size
                         self.total_scanned += 1
-                        
+
                         # Registrar archivos grandes
                         if size >= self.min_size:
                             file_info = {
@@ -172,19 +176,20 @@ class DiskAnalyzer:
                                 'is_cache': self.is_cache_or_temp(item)
                             }
                             self.large_files.append(file_info)
-                        
+
                         # Estadísticas por tipo de archivo
                         ext = item.suffix.lower() or 'sin_extension'
                         self.file_type_stats[ext]['count'] += 1
                         self.file_type_stats[ext]['size'] += size
-                        
-                    elif item.is_dir(follow_symlinks=False):
-                        # No seguir enlaces simbólicos a directorios
-                        if not item.is_symlink():
-                            dir_size = self.scan_directory(item, _depth + 1)
-                            total_size += dir_size
-                            self.directory_sizes[str(item)] = dir_size
-                        
+
+                    elif stat_module.S_ISDIR(item_stat.st_mode):
+                        # No seguir enlaces simbólicos a directorios: lstat() ya
+                        # reporta el enlace en sí (no el destino), así que un
+                        # symlink a directorio nunca cumple S_ISDIR aquí.
+                        dir_size = self.scan_directory(item, _depth + 1)
+                        total_size += dir_size
+                        self.directory_sizes[str(item)] = dir_size
+
                 except PermissionError:
                     self.errors.append(f"Sin permisos: {item}")
                 except Exception as e:
@@ -523,11 +528,19 @@ class DiskAnalyzer:
         self._scanned_dirs = 0
         try:
             for d1 in self.start_path.iterdir():
-                if d1.is_dir(follow_symlinks=False) and not d1.is_symlink():
+                try:
+                    d1_stat = d1.lstat()
+                except OSError:
+                    continue
+                if stat_module.S_ISDIR(d1_stat.st_mode):
                     self._estimated_dirs += 1
                     try:
                         for d2 in d1.iterdir():
-                            if d2.is_dir(follow_symlinks=False):
+                            try:
+                                d2_stat = d2.lstat()
+                            except OSError:
+                                continue
+                            if stat_module.S_ISDIR(d2_stat.st_mode):
                                 self._estimated_dirs += 1
                     except (PermissionError, OSError):
                         pass

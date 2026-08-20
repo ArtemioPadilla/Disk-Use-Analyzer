@@ -321,16 +321,144 @@ se toca sin permiso. El comando está en el Task 6 del
 aplique, un `--auto` seguirá fusionando en cuanto los checks pasen, pero nada
 impide un merge directo saltándoselos.
 
-## Fases 0 y 4
+## Fase 4 — Frontend
+
+**Estado:** completa. Rama de origen: `feat/fase4-frontend`, apilada sobre
+`main` tras la Fase 5. Plan detallado:
+[Fase 4](2026-08-10-mejoras-fase4-frontend.md). Tests de frontend: **0 → 66**
+(no existía suite de JS antes de esta fase). Tests de backend: 151 → 151, sin
+cambio de alcance, más un fix de compatibilidad encontrado por el camino (ver
+abajo).
+
+| Task | Qué hace | Commits |
+|---|---|---|
+| 1 | Infraestructura de tests JS (Vitest + Testing Library + jsdom) y `useCleanupRunner`, el hook que solo acredita el ahorro cuando el comando termina con código de salida 0 | ✅ `f638b99` |
+| 2 | Migrar los seis flujos de limpieza (`QuickActions`, `CleanupWizard`, `GuidedDeclutter`, `WhatIfSandbox`, `ReverseView`, `DockerPanel`) al hook compartido; arreglar la doble ejecución de comandos destructivos y el estancamiento de las limpiezas en lote | ✅ `5df450c`, `9dc2530`, `be1f9c2`, `ce0f1cf` |
+| 3 | Una sola definición de categorías (`getCategory`/`CATEGORY_COLORS` en `lib/categories.ts`) y de niveles de riesgo (`TIER_META`/`getTierBucket` en `lib/tiers.ts`), antes duplicadas entre componentes | ✅ `5c63f8b` |
+| 4 | Cargar la sesión pedida desde Historial (antes siempre mostraba la última), y reenganchar el progreso del análisis y la terminal flotante al navegar entre páginas | ✅ `a2ec0d0` |
+| 5 | Terminal sin CSS servido desde un CDN externo, CSS inválido del menú corregido, colores de `TaskList` legibles en modo oscuro, código muerto eliminado (`useAnalysis`, `useWebSocket`, `formatPercent`) | ✅ `12707dd` |
+| 6 | Tests de frontend cableados al CI y a `make test`; cierre del registro | ✅ `c05ffbe` |
+
+Al margen de los tasks numerados, durante el Task 1 se encontró y arregló un
+bug real de compatibilidad con Python 3.11 (`analyzer/measurement.py`,
+`disk_analyzer_core.py` y `disk_analyzer.py` usaban
+`Path.is_file(follow_symlinks=False)`, que solo existe desde Python 3.13;
+reemplazado por `Path.lstat()` + `stat.S_ISREG`/`S_ISDIR`, semánticamente
+idéntico y disponible desde Python 3.4): `a33beee`, `4d17879`. No es parte del
+alcance de la fase (es backend, y esta fase no toca backend), pero se aceptó
+porque sin él la suite completa daba 9 falsos negativos en cualquier máquina
+donde `python` resuelva a 3.11 en vez de al `venv-web` de 3.13 — que es
+exactamente lo que le pasó al primer implementador de esta fase.
+
+### Lo que encontró la migración de limpieza (Task 2)
+
+Migrar los seis flujos al mismo hook no fue solo una deduplicación: destapó
+tres bugs de verdad, dos de ellos con comandos destructivos de por medio.
+
+- **Comandos destructivos ejecutándose dos veces.** `FloatingTerminal` escuchaba
+  `terminal:open` pero ignoraba el `pty_id` que el evento ya traía (el PTY que
+  `useCleanupRunner.run()` acababa de crear y estaba vigilando). Si no había
+  terminal abierta, `FloatingTerminal` creaba **una segunda** con
+  `api.createTerminal(data.command)` — para un comando destructivo
+  (`docker system prune`, variantes de `rm -rf` en la limpieza de cachés) eso
+  es doble ejecución real, no solo doble UI. Si ya había una terminal abierta,
+  pasaba lo contrario: no se conectaba a nada, el comando corría invisible en
+  el servidor y, como ningún WebSocket se pegaba a ese `pty_id`, su
+  `terminal:exited` nunca llegaba — `useCleanupRunner` nunca lo acreditaba.
+  Arreglado separando `useTerminal.spawn()` (crear + conectar) de un
+  `attach(id, command)` nuevo (solo conectar a un PTY que ya existe), y
+  haciendo que `FloatingTerminal` use `attach` cuando el evento trae
+  `pty_id`.
+- **Limpiezas en lote que se quedaban en "Running…" para siempre.** Las cuatro
+  acciones en lote (`WhatIfSandbox.applyCleanup`, `CleanupWizard.cleanSafeItems`,
+  `GuidedDeclutter.cleanStep`, `ReverseView.cleanTier`) lanzaban `run()` en
+  bucles sin esperar. Con un PTY por comando y la terminal flotante mostrando
+  uno solo, conectar el segundo mataba el socket del primero — de un lote de
+  3 comandos, solo se veía el `terminal:exited` del último; los otros dos
+  terminaban bien en el servidor pero no se acreditaban nunca y sus botones
+  quedaban en "Running…" permanentemente. Arreglado moviendo el estado de
+  `useCleanupRunner` a un singleton de módulo (`useSyncExternalStore`) con una
+  **cola serializada**: un job a la vez, el siguiente solo arranca cuando el
+  anterior resuelve su `terminal:exited` (o un watchdog de 10 minutos se rinde
+  sin acreditar nada).
+- **El mismo comando destructivo lanzado dos veces en paralelo.** Antes del
+  singleton, cada `useCleanupRunner()` montado tenía su propio estado. En
+  `index.astro` (`QuickActions` + `ReverseView` + `DockerPanel`) y en
+  `cleanup.astro`, los conjuntos de recomendaciones de distintos componentes se
+  solapan (el tier "safe" de `ReverseView` es superconjunto del top-3 de
+  `QuickActions` para el mismo análisis), así que hacer clic en la misma
+  recomendación desde dos componentes distintos disparaba `api.createTerminal`
+  dos veces para el comando idéntico. El estado compartido cierra esto: el
+  guard "ya en ejecución/completado" ahora es real entre componentes, no solo
+  dentro de uno.
+- Además, antes de esta fase: `DockerPanel` acreditaba el ahorro con un
+  `setTimeout` de 5 segundos sin comprobar si el prune había terminado de
+  verdad; `GuidedDeclutter`, `WhatIfSandbox` y `ReverseView` acreditaban el
+  total agregado del lote al instante, antes de que corriera un solo comando,
+  así que un lote donde todo fallaba igual se contaba como ahorro; y
+  `CleanupWizard` persistía su propio estado "Running…" en
+  `localStorage['disk-analyzer-wizard-running']` (sobrevivía a un reload aunque
+  el comando ya hubiera terminado o fallado) y nunca emitía
+  `cleanup:completed` — limpiar desde el wizard nunca contaba para el ahorro
+  mostrado en el resto de la interfaz. Los seis flujos ahora comparten
+  exactamente la misma regla: se acredita lo que terminó con código 0, ni más
+  ni menos.
+
+### Lo que encontraron los demás tasks
+
+- **Task 3:** las dos copias de `getCategory` (`DiskBar.tsx`, `FileTable.tsx`)
+  resultaron ser idénticas carácter por carácter (verificado con un diff
+  insensible a espacios) — puro riesgo de que divergieran en el futuro, no un
+  bug activo. Los cuatro niveles de riesgo coincidían en color pero no en
+  etiqueta: el tier 4 era "Deep Clean" en `CleanupWizard` y "Deep" en
+  `WhatIfSandbox`.
+- **Task 4:** `SessionList.loadSession` pedía los resultados y emitía
+  `analysis:completed` **antes** de navegar — el evento moría con la página, así
+  que elegir una sesión histórica en Historial siempre acababa mostrando la
+  más reciente, nunca la elegida. El progreso del análisis y la terminal
+  flotante tampoco sobrevivían a navegar entre páginas: no había ningún efecto
+  de reenganche al montar. Arreglado con `?session=<id>` en la URL más un
+  efecto de reenganche en `AnalysisManager` (busca una sesión `running` vía
+  `getSessions()`) y otro en `useTerminal` (persiste el `pty_id` activo en
+  `sessionStorage`, solo reengancha si el servidor confirma que sigue vivo).
+- **Task 5:** el CSS de xterm.js se cargaba desde `cdn.jsdelivr.net` en cada
+  apertura de la terminal — roto sin red, y una dependencia externa que no
+  pega con el resto del build offline-first. El menú lateral usaba
+  `left: -var(--sidebar-width)`, CSS inválido (la sintaxis `-var()` no existe;
+  los navegadores descartan la declaración entera), así que "el menú debe
+  empezar fuera de pantalla" no era cierto pese a que el código lo sugería.
+  `TaskList` usaba fondos pastel fijos (`#eff6ff`, etc.) que son casi
+  ilegibles contra texto claro en modo oscuro.
+
+### Decisiones de diseño de la fase
+
+| Decisión | Alternativas | Motivo |
+|---|---|---|
+| Estado de `useCleanupRunner` como singleton de módulo vía `useSyncExternalStore`, no `useState` por instancia | Un hook independiente por componente montado | Varios componentes pueden mostrar el mismo comando a la vez (`index.astro`, `cleanup.astro`); sin estado compartido, el guard "ya en ejecución/completado" no ve lo que hacen los demás y el mismo comando destructivo puede lanzarse dos veces |
+| Cola serializada — un job a la vez | Un PTY por `run()`, en paralelo | La terminal flotante solo puede mostrar un PTY a la vez; con varios en paralelo, conectar el último mata el socket de los anteriores y sus `terminal:exited` se pierden — la causa exacta del estancamiento en lote |
+| Un fallo a mitad de lote no aborta el resto de la cola | Abortar el lote entero ante el primer error | Los comandos restantes son independientes y pueden tener éxito igual; abortarlos dejaría trabajo sin hacer por una razón que no tiene que ver con ellos |
+| Watchdog de 10 minutos que desatasca un job sin acreditarlo nunca | Sin timeout, o uno más corto | Cubre un `terminal:exited` que de verdad se pierde (reinicio del servidor); 10 minutos deja margen a comandos reales largos (`docker system prune`, `brew cleanup`) sin bloquear la cola para siempre si algo se atasca. Un timeout solo desatasca, nunca acredita |
+| `TIER_META` usa "Deep Clean" (etiqueta de `CleanupWizard`) para el tier 4 | "Deep" (etiqueta de `WhatIfSandbox`) | `CleanupWizard` es la superficie canónica de frase completa; "Deep Clean" describe mejor el tier del que hay que ser más cauteloso, y el badge de `WhatIfSandbox` tiene espacio de sobra para la etiqueta larga |
+| `?session=<id>` no se limpia de la URL tras cargar una sesión histórica | Limpiarlo, como se hace con el token de auth | El token se limpia por seguridad; el id de sesión no es sensible, y dejarlo hace la URL bookmarkeable/compartible |
+| El `pty_id` activo se persiste en `sessionStorage`, no en `localStorage` | `localStorage` | Una terminal viva no debería sobrevivir a un reinicio completo del navegador — mismo criterio que el token de auth (Fase 2) |
+
+### Hallazgos menores diferidos
+
+| Hallazgo | Nota |
+|---|---|
+| `cleanup/execute` con `dry_run=true` devuelve la forma de `preview`, no la documentada de `execute` | Sigue diferido: es un cambio de backend y esta fase no lo tocó (registrado desde la Fase 1) |
+| `p.includes('Docker.raw')` en `lib/categories.ts` es código muerto (la ruta ya está en minúsculas por `path.toLowerCase()`, así que un literal con mayúsculas nunca puede coincidir) | Sin efecto observable — queda sombreado por `p.includes('docker')` en la misma línea. Se dejó tal cual al mover el código verbatim (Task 3 no era una reescritura) |
+| Un test de `formatAge` (`switches to weeks at the 7-day boundary`) falló una vez durante la verificación de este task y pasó en 9 corridas posteriores consecutivas | No se pudo reproducir una segunda vez; no bloqueó el cierre de la fase, pero vale vigilarlo si reaparece en CI |
+| `web/src/lib/api.ts` no incluye `'interrupted'` en el tipo de estado de sesión | Seguía diferido desde la Fase 1; no se tocó en esta fase |
+
+### Fuera de alcance, declarado en el plan
+
+El rediseño visual y extender la cobertura de tests al resto del frontend
+quedaron fuera a propósito — ver
+[el plan de la Fase 4](2026-08-10-mejoras-fase4-frontend.md#fuera-del-alcance-de-esta-fase)
+para el razonamiento completo.
+
+## Fase 0
 
 Sin ejecutar. El alcance, la secuencia recomendada y los criterios de
-aceptación de cada una están en el
-[roadmap](2026-07-15-roadmap-mejoras.md). Las fases 3, 4 y 5 necesitan que se
-les escriba su plan detallado antes de ejecutarse, con el mismo formato que las
-fases 1 y 2: un task por unidad verificable, con test y código completos.
-
-Nota para la Fase 3 (motor compartido): el paso 1 de esa fase, escribir tests
-de caracterización del comportamiento actual, no es opcional. La extracción
-mueve lógica de cálculo de tamaños y categorización que hoy no tiene red de
-seguridad, y las diferencias entre las dos implementaciones ya están
-inventariadas en el roadmap.
+aceptación están en el [roadmap](2026-07-15-roadmap-mejoras.md).

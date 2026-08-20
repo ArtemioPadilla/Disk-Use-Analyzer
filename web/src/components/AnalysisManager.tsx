@@ -19,6 +19,22 @@ export default function AnalysisManager() {
     sessionIdRef.current = sessionId;
   }, [sessionId]);
 
+  // Reattach to an in-progress analysis on mount. A full page navigation
+  // remounts this island with sessionId = null, which would otherwise lose
+  // the progress stream for an analysis started on another page.
+  useEffect(() => {
+    (async () => {
+      try {
+        const { sessions } = await api.getSessions();
+        const active = sessions.find(s => s.status === 'running');
+        // Best-effort reattach: if there's nothing running, or the request
+        // fails, this is indistinguishable from "no analysis in progress" —
+        // nothing to surface to the user either way.
+        if (active) setSessionId(active.id);
+      } catch { /* no active session, nothing to reattach */ }
+    })();
+  }, []);
+
   // Listen for analysis:start-request from NewAnalysisModal
   useEffect(() => {
     const off = on('analysis:start-request', async (data: { paths: string[]; minSizeMb: number }) => {

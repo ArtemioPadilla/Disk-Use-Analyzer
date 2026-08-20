@@ -6,9 +6,42 @@ import { on, emit } from '../lib/events';
 export default function HeroScan() {
   const [hasResults, setHasResults] = useState<boolean | null>(null);
   const [scanning, setScanning] = useState(false);
+  // Set only when a specific ?session=<id> was requested (SessionList's
+  // "Load Results") and fetching its results failed. The backend only keeps
+  // MAX_STORED_RESULTS (10) result files on disk while session *metadata*
+  // sticks around for longer, so a session that still shows as "completed"
+  // in History can 410 here. Distinct from the ordinary no-param case, which
+  // must keep rendering the plain "nothing scanned yet" empty state below.
+  const [sessionUnavailable, setSessionUnavailable] = useState(false);
 
   useEffect(() => {
-    // Check if there are any completed results
+    // SessionList navigates here with ?session=<id> instead of dispatching
+    // an event directly, since a full page navigation would kill the event
+    // before this component could mount and receive it. If a specific
+    // session was requested, load exactly that one instead of falling back
+    // to whatever is most recent.
+    const params = new URLSearchParams(window.location.search);
+    const requested = params.get('session');
+
+    if (requested) {
+      api.getResults(requested).then(data => {
+        setHasResults(true);
+        emit('analysis:completed', data);
+      }).catch(() => {
+        // api.getResults already calls notifyAuthInvalid() on a 401; any
+        // other failure (410 gone, 404, etc.) falls through to the same
+        // "no results" rendering as the no-param case below, but — unlike
+        // that case — we know exactly why: the user asked for this session
+        // and it isn't there. Say so instead of silently looking like a
+        // fresh install (see module comment).
+        setSessionUnavailable(true);
+        setHasResults(false);
+      });
+      return;
+    }
+
+    // No specific session requested: check if there are any completed
+    // results, exactly as before.
     fetch('/api/analysis/latest', { headers: authHeaders() }).then(r => {
       if (r.status === 401) {
         // This is the canonical "dashboard renders empty with no message"
@@ -54,6 +87,26 @@ export default function HeroScan() {
       display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
       minHeight: '60vh', textAlign: 'center', padding: '2rem',
     }}>
+      {sessionUnavailable && (
+        // Persistent, not a toast: the empty state below stays on screen
+        // indefinitely (there's no follow-up event that would make a 4s
+        // auto-dismiss timely), so the explanation needs to stay put too —
+        // same reasoning as AuthErrorBanner. Kept inline here rather than
+        // as a fixed top banner since it's specific to *this* empty state,
+        // not an app-wide condition.
+        <div role="alert" style={{
+          display: 'flex', alignItems: 'center', gap: '0.5rem',
+          background: 'var(--card-bg)', border: '1px solid var(--warning)',
+          borderLeft: '4px solid var(--warning)', borderRadius: '8px',
+          padding: '0.75rem 1rem', marginBottom: '1.5rem',
+          fontSize: '0.85rem', maxWidth: '440px', textAlign: 'left',
+        }}>
+          <span>
+            This analysis is no longer stored &mdash; only the 10 most recent results are kept.
+            Run a new scan to see current data.
+          </span>
+        </div>
+      )}
       <div style={{ fontSize: '4rem', marginBottom: '1rem' }}>&#x1F4BF;</div>
       <h2 style={{ fontSize: '1.75rem', fontWeight: 700, marginBottom: '0.5rem' }}>
         {scanning ? 'Scanning your Mac...' : 'Analyze Your Disk'}

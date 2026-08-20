@@ -1,7 +1,8 @@
 import { useState, useEffect } from 'react';
-import { on, emit } from '../lib/events';
-import { api, type SessionResults } from '../lib/api';
+import { on } from '../lib/events';
+import { type SessionResults } from '../lib/api';
 import { formatBytes } from '../lib/format';
+import { useCleanupRunner } from '../hooks/useCleanupRunner';
 
 interface DockerStats {
   images: { count: number; size: number };
@@ -12,38 +13,27 @@ interface DockerStats {
   reclaimable?: number;
 }
 
+const PRUNE_COMMAND = 'docker system prune -af --volumes';
+
 export default function DockerPanel() {
   const [docker, setDocker] = useState<DockerStats | null>(null);
-  const [pruning, setPruning] = useState(false);
-  const [pruned, setPruned] = useState(false);
+  const { run, running, completed } = useCleanupRunner();
 
   useEffect(() => {
     const off = on('analysis:completed', (data: SessionResults) => {
       const dockerData = data.results?.[0]?.report?.docker;
       if (dockerData && Object.keys(dockerData).length > 0) {
         setDocker(dockerData as DockerStats);
-        setPruned(false);
       }
     });
     return off;
   }, []);
 
-  const pruneDocker = async () => {
-    setPruning(true);
-    try {
-      const { pty_id } = await api.createTerminal('docker system prune -af --volumes');
-      emit('terminal:open', { pty_id, command: 'docker system prune' });
-      emit('terminal:started', { pty_id, command: 'docker system prune -af --volumes' });
-      // Mark as done after delay
-      setTimeout(() => {
-        setPruning(false);
-        setPruned(true);
-        emit('cleanup:completed', { command: 'docker system prune', space: docker?.reclaimable || 0 });
-      }, 5000);
-    } catch (e) {
-      setPruning(false);
-      console.error('Docker prune failed:', e);
-    }
+  const pruning = running.has(PRUNE_COMMAND);
+  const pruned = completed.has(PRUNE_COMMAND);
+
+  const pruneDocker = () => {
+    run({ command: PRUNE_COMMAND, space: docker?.reclaimable || 0, label: 'Docker prune' });
   };
 
   if (!docker) return null;

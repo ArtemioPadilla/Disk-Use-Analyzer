@@ -10,7 +10,7 @@ There is a phased improvement plan in progress. **Before starting work on the ba
 - `docs/superpowers/plans/2026-07-15-roadmap-mejoras.md` — the deep assessment (19 verified findings) and the scope of the 6 phases
 - `docs/superpowers/plans/2026-07-15-registro-ejecucion.md` — what was actually implemented, with commits, approved plan deviations, and deferred findings
 
-Current state: Phases 1 (backend bugs), 2 (security) and 3 (shared engine) are all merged to `main`. Auth is on by default: the server prints a link with a one-time token (`http://localhost:8000/?token=...`) on startup, the frontend stores it in `sessionStorage` and strips it from the URL, and a new token is minted on every restart — reopen the printed link after restarting the server. Use `--no-auth` to disable this on an isolated network.
+Current state: Phases 1 (backend bugs), 2 (security), 3 (shared engine) and 5 (tests + CI) are all merged to `main`. Phase 4 (frontend) is complete on `feat/fase4-frontend`, pending merge: the frontend now has its own test suite (66 tests, `npm test` inside `web/`, wired into CI and `make test`), and every cleanup flow (`QuickActions`, `CleanupWizard`, `GuidedDeclutter`, `WhatIfSandbox`, `ReverseView`, `DockerPanel`) runs its commands through the single shared `useCleanupRunner` hook — it's the only thing that talks to `api.createTerminal`/tracks `terminal:exited` for cleanup, and it only credits savings when a command exits 0. Auth is on by default: the server prints a link with a one-time token (`http://localhost:8000/?token=...`) on startup, the frontend stores it in `sessionStorage` and strips it from the URL, and a new token is minted on every restart — reopen the printed link after restarting the server. Use `--no-auth` to disable this on an isolated network.
 
 ## Build and Test Commands
 
@@ -44,6 +44,9 @@ make web-build      # Just build the Astro frontend
 
 # Backend tests
 python -m pytest tests/ -v
+
+# Frontend tests
+cd web && npm test
 ```
 
 ## Project Overview
@@ -69,8 +72,8 @@ This is a **macOS Disk Usage Analyzer** - a powerful standalone Python tool for 
 │   │   ├── layouts/        # MainLayout.astro, global CSS
 │   │   ├── pages/          # 5 pages: index, files, cleanup, export, history
 │   │   ├── components/     # React islands (StatsCards, FileTable, FloatingTerminal, etc.)
-│   │   ├── hooks/          # useWebSocket, useAnalysis, useTerminal
-│   │   └── lib/            # api.ts, events.ts, format.ts
+│   │   ├── hooks/          # useCleanupRunner (all cleanup goes through this), useTerminal
+│   │   └── lib/            # api.ts, events.ts, format.ts, categories.ts, tiers.ts
 │   └── dist/               # Built static files (served by FastAPI)
 ├── tests/                  # Backend tests (PTY manager + terminal API)
 ├── static/                 # Legacy web static assets (fallback)
@@ -209,9 +212,11 @@ When modifying the code:
 
 When modifying the web interface:
 1. Run backend tests: `python -m pytest tests/ -v`
-2. Build the frontend: `cd web && npm run build`
-3. Verify FastAPI serves all pages: start server and check `/`, `/files`, `/cleanup`, `/export`, `/history`
-4. Test terminal: click "Terminal" button, verify shell spawns and accepts input
+2. Run frontend tests: `cd web && npm test`
+3. Build the frontend: `cd web && npm run build`
+4. Verify FastAPI serves all pages: start server and check `/`, `/files`, `/cleanup`, `/export`, `/history`
+5. Test terminal: click "Terminal" button, verify shell spawns and accepts input
+6. If you touch a cleanup flow, go through `useCleanupRunner` (`web/src/hooks/useCleanupRunner.ts`) rather than calling `api.createTerminal` directly — it's the single place that credits savings only on a 0 exit code and serializes commands through the one visible PTY
 
 ## Known Issues & Limitations
 

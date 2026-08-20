@@ -1,7 +1,9 @@
-import { useState, useEffect } from 'react';
-import { on, emit } from '../lib/events';
+import { useState, useEffect, useMemo } from 'react';
+import { on } from '../lib/events';
 import { api, type SessionResults, type Recommendation } from '../lib/api';
 import { formatBytes } from '../lib/format';
+import { useCleanupRunner } from '../hooks/useCleanupRunner';
+import { getTierBucket } from '../lib/tiers';
 
 interface Tier {
   level: 'safe' | 'review' | 'careful';
@@ -18,10 +20,8 @@ export default function ReverseView() {
   const [tiers, setTiers] = useState<Tier[]>([]);
   const [diskUsed, setDiskUsed] = useState(0);
   const [diskTotal, setDiskTotal] = useState(0);
-  const [freedSpace, setFreedSpace] = useState(0);
   const [expandedTier, setExpandedTier] = useState<string | null>(null);
-  const [cleaningTier, setCleaningTier] = useState<string | null>(null);
-  const [cleanedTiers, setCleanedTiers] = useState<Set<string>>(new Set());
+  const { run, running, completed } = useCleanupRunner();
 
   useEffect(() => {
     const offs = [
@@ -33,9 +33,10 @@ export default function ReverseView() {
         if (disk) { setDiskUsed(disk.used); setDiskTotal(disk.total); }
 
         const recs = report.recommendations || [];
-        const safeItems = recs.filter(r => (r.tier || 9) <= 1 && r.command && !r.command.startsWith('#'));
-        const reviewItems = recs.filter(r => (r.tier || 9) === 2 && r.command && !r.command.startsWith('#'));
-        const carefulItems = recs.filter(r => (r.tier || 9) >= 3 && r.command && !r.command.startsWith('#'));
+        const isRunnable = (r: Recommendation) => Boolean(r.command) && !r.command.startsWith('#');
+        const safeItems = recs.filter(r => getTierBucket(r.tier || 9) === 'safe' && isRunnable(r));
+        const reviewItems = recs.filter(r => getTierBucket(r.tier || 9) === 'review' && isRunnable(r));
+        const carefulItems = recs.filter(r => getTierBucket(r.tier || 9) === 'careful' && isRunnable(r));
 
         const newTiers: Tier[] = [
           {
@@ -55,9 +56,6 @@ export default function ReverseView() {
           },
         ];
         setTiers(newTiers.filter(t => t.items.length > 0));
-
-        setFreedSpace(0);
-        setCleanedTiers(new Set());
       }),
       on('cleanup:completed', () => {
         api.getSystemInfo().then(info => {
@@ -70,24 +68,36 @@ export default function ReverseView() {
   }, []);
 
   const totalRecoverable = tiers.reduce((s, t) => s + t.totalSpace, 0);
+
+  // Total actually freed so far: sum of the space for every unique command,
+  // across all tiers, that the runner has confirmed exited with code 0.
+  const freedSpace = useMemo(() => {
+    const seen = new Set<string>();
+    let total = 0;
+    for (const tier of tiers) {
+      for (const item of tier.items) {
+        if (item.command && completed.has(item.command) && !seen.has(item.command)) {
+          seen.add(item.command);
+          total += item.space || 0;
+        }
+      }
+    }
+    return total;
+  }, [tiers, completed]);
+
   const projectedUsed = diskUsed - freedSpace;
   const currentPct = diskTotal > 0 ? (diskUsed / diskTotal) * 100 : 0;
   const projectedPct = diskTotal > 0 ? (projectedUsed / diskTotal) * 100 : 0;
 
-  const cleanTier = async (tier: Tier) => {
-    setCleaningTier(tier.level);
+  const isTierCleaned = (tier: Tier) => tier.items.length > 0 && tier.items.every(i => i.command && completed.has(i.command));
+  const isTierCleaning = (tier: Tier) => tier.items.some(i => i.command && running.has(i.command));
+
+  const cleanTier = (tier: Tier) => {
     for (const item of tier.items) {
       if (item.command && !item.command.startsWith('#')) {
-        try {
-          const { pty_id } = await api.createTerminal(item.command);
-          emit('terminal:started', { pty_id, command: item.command });
-        } catch (e) { console.error(e); }
+        run({ command: item.command, space: item.space, label: item.description });
       }
     }
-    setFreedSpace(prev => prev + tier.totalSpace);
-    setCleanedTiers(prev => new Set(prev).add(tier.level));
-    setCleaningTier(null);
-    emit('cleanup:completed', { command: `tier-${tier.level}`, space: tier.totalSpace });
   };
 
   if (tiers.length === 0 || totalRecoverable === 0) return null;
@@ -122,8 +132,8 @@ export default function ReverseView() {
 
       {/* Tiers */}
       {tiers.map(tier => {
-        const isCleaned = cleanedTiers.has(tier.level);
-        const isCleaning = cleaningTier === tier.level;
+        const isCleaned = isTierCleaned(tier);
+        const isCleaning = isTierCleaning(tier);
         const isExpanded = expandedTier === tier.level;
 
         return (
