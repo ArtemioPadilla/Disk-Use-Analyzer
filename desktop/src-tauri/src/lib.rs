@@ -125,6 +125,9 @@ pub fn run() {
             // El motor empaquetado dentro de la .app es el que hace que la
             // app sea autocontenida; si no está (modo desarrollo), se cae al
             // venv del repositorio.
+            // Barrer antes de nada lo que dejó un cierre forzoso anterior.
+            analisis::limpiar_temporales_huerfanos();
+
             let motor = analisis::localizar_motor(app.path().resource_dir().ok());
             let hay_motor = motor.is_some();
             let manager = Arc::new(AnalisisManager::new(motor));
