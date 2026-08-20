@@ -334,7 +334,7 @@ falso no bloquee.
 | Sidecars vía `externalBin` + plugin `shell` con streaming | Verificado | — |
 | El plugin `autostart` cubre macOS | Verificado | Ya está fuera de la rebanada A |
 | `ActivationPolicy::Accessory` evita el icono del Dock | **De la revisión, no probado por mí** | Alternativa: `LSUIElement` en el `Info.plist` del bundle |
-| macOS 26 aplica su ajuste de estilo de iconos y el nuestro quedaría fuera | **No verificado** — no tengo esa versión a mano | Es cosmético; se comprueba al probar en esa versión |
+| macOS 26 aplica su ajuste de estilo de iconos y el nuestro quedaría fuera | **No verificado, pero comprobable aquí**: esta máquina corre macOS 26.5.1 | Es cosmético; se verifica en la prueba manual de la rebanada A |
 | `sysinfo` coincide con el motor Python | **Refutado como riesgo real** (ver "Lo medido") | El test de consistencia es obligatorio, no opcional |
 | Un análisis tarda "~20 s" | **Refutado por medición**: 25-60 s | Motivó la decisión D3 |
 
