@@ -170,12 +170,18 @@ The project has three interfaces: CLI, GUI, and Web.
   `analisis.rs` (runs the Python engine as a child process), `lib.rs` (tray, menu, poller)
 - **Build:** `cd desktop && npm run tauri build -- --bundles app`
 - **Tests:** `cargo test --manifest-path desktop/src-tauri/Cargo.toml` (also run by `make test`)
-- **Two things that will surprise you:** the app is **not self-contained** — it
-  invokes `venv-web/bin/python` by absolute path, so moving the repo breaks the
-  analysis (the disk indicator keeps working). And it is **unsigned**, so
-  Gatekeeper blocks a double click (right-click → Open) and the Full Disk Access
-  grant breaks on every rebuild. Both have runbook entries:
-  `docs/runbooks/app-bandeja.md`.
+- **Bundled engine:** the `.app` ships its own trimmed CPython
+  (python-build-standalone) plus a copy of the engine, so it needs neither this
+  repo nor a system Python. Those ~47 MB are **not in git** — run
+  `./desktop/tools/preparar-motor.sh` before `npm run tauri build`, or the
+  `.app` builds without an engine.
+- **Two things that will surprise you:** the app falls back to
+  `venv-web/bin/python` when no bundled engine is found, which means a broken
+  packaging looks fine on a dev machine — check with
+  `ps -ax -o command | grep disk_analyzer.py` which interpreter actually runs.
+  And it is **unsigned** (arm64 only), so Gatekeeper blocks a double click
+  (right-click → Open) and the Full Disk Access grant breaks on every rebuild.
+  Both have runbook entries: `docs/runbooks/app-bandeja.md`.
 - `analisis.rs` uses POSIX process groups and signals, so it **only compiles on Unix**.
 
 ### GUI (CustomTkinter, legacy)

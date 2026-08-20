@@ -54,3 +54,9 @@ desktop/dist/
 *.p12
 *.cer
 *.certSigningRequest
+
+# Motor autocontenido: ~46 MB regenerables con desktop/tools/preparar-motor.sh.
+# El LEEME.md sí se versiona: Tauri aborta la compilación si el glob de
+# `bundle.resources` no encaja con ningún fichero, así que hace de ancla.
+desktop/src-tauri/resources/engine/*
+!desktop/src-tauri/resources/engine/LEEME.md
