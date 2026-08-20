@@ -656,6 +656,43 @@ git commit -m "ci: tests de Rust, y cerrar el registro de la rebanada A"
 
 ---
 
+## Hallazgo durante la ejecución: PyInstaller queda descartado
+
+El Task 6 empezó empaquetando el motor con PyInstaller, como decía el plan. **El
+antivirus de la máquina (Avast) puso en cuarentena cada binario producido**,
+tres veces seguidas, con la firma genérica `MacOS:MalwareX-gen [Spy]`.
+
+Es un falso positivo conocido: el *bootloader* de PyInstaller se autoextrae y
+ejecuta código al arrancar, que es el patrón de los empaquetadores de malware.
+En las tres detecciones el proceso señalado fue `lipo` — la herramienta de Apple
+que PyInstaller usa para ajustar arquitecturas—, así que el antivirus analiza el
+binario justo cuando se escribe.
+
+**Consecuencia importante:** el bootloader está presente tanto en `--onefile`
+como en `--onedir`, así que cambiar de modo no habría resuelto nada. La primera
+hipótesis de arreglo era incorrecta.
+
+### Decisión
+
+Para cerrar esta rebanada, **la app invoca el intérprete del venv por ruta** en
+lugar de empaquetar Python. Es lo que sostiene el objetivo de esta rebanada —una
+app anclada y funcionando en esta máquina— sin pelearse con el antivirus.
+
+El precio, declarado: **la app deja de ser autocontenida y por tanto no es
+distribuible todavía.**
+
+### Para cuando se aborde la distribución
+
+Dos caminos, ninguno de ellos PyInstaller:
+
+- **`python-build-standalone`**: una compilación normal y sin modificar de
+  CPython, que es lo que usan herramientas modernas como `uv`. Al no ser un
+  autoextraíble no encaja con la heurística que disparó las alertas.
+- **Firmar con Developer ID**: los antivirus confían mucho más en binarios
+  firmados por una identidad verificada. Es la solución de fondo y cuesta los
+  99 $/año que la decisión D4 pospuso.
+
+
 ## Deuda menor anotada durante la ejecución
 
 Detectada en la revisión del Task 2, no bloquea esta rebanada:
