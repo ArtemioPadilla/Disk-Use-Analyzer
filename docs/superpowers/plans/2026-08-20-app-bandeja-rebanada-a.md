@@ -22,6 +22,41 @@
 - Mensajes de cara al usuario en español; comentarios de código en inglés.
 - Un commit por task.
 
+## Decisiones del Task 1 (cerradas el 20 de agosto de 2026)
+
+| # | Decisión | Elegido |
+|---|---|---|
+| D1 | Identificador del bundle | **`dev.diskanalyzer.app`** |
+| D2 | Alcance del análisis en la v1 | **Disco completo desde el día uno** |
+| D3 | "Analizar ahora" | **Con progreso y cancelable** desde el menú |
+| D4 | Cuenta de desarrollador de Apple | **Sin cuenta por ahora** |
+
+### La tensión entre D2 y D4, y cómo se resuelve
+
+D2 exige **acceso a disco completo**, un permiso que macOS ata a la identidad
+firmada del bundle. D4 significa que no hay Developer ID, así que Tauri firma
+*ad-hoc* y el hash cambia en cada recompilación: el permiso se rompería en cada
+build, y el sistema mostraría la app como autorizada mientras el binario nuevo no
+lo está.
+
+**Resolución: un certificado autofirmado**, creado localmente desde Acceso a
+Llaveros. No sirve para notarizar ni distribuir —eso sigue esperando a D4—, pero
+da una **identidad estable**, de modo que la concesión de disco completo persiste
+entre compilaciones. Cubre además la mitad del pipeline de firma que era objetivo
+de aprendizaje: `codesign`, hardened runtime y entitlements; solo queda fuera la
+notarización.
+
+Consecuencias en el plan:
+
+- El **Task 6 se adelanta parcialmente**: crear el certificado autofirmado y
+  firmar con él pasa a ser prerequisito del Task 5, porque sin identidad estable
+  no se puede probar el análisis de `/`.
+- El Task 5 necesita además **detectar que falta el permiso y decirlo en el
+  menú**, en vez de fallar en silencio: es el primer arranque de cualquier
+  usuario nuevo.
+- La notarización queda documentada en el runbook como pendiente de D4.
+
+
 ---
 
 ### Task 1: Cerrar las decisiones bloqueantes (humano, no delegable a un agente)
