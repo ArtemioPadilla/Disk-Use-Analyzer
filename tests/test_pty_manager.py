@@ -60,7 +60,11 @@ class TestPTYManager:
 
     def test_list_sessions(self):
         id1 = self.manager.create_session()
-        id2 = self.manager.create_session(command="echo hi")
+        # A long-lived command, not `echo hi`. `list_sessions` prunes dead
+        # sessions via `_pop_dead`, and `echo hi` exits immediately, so the
+        # test was a race between the child exiting and the listing. It
+        # passed locally and failed on CI, where the child won more often.
+        id2 = self.manager.create_session(command="sleep 30")
         sessions = self.manager.list_sessions()
         assert len(sessions) == 2
         ids = [s['pty_id'] for s in sessions]
