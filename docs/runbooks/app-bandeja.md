@@ -21,6 +21,26 @@ desarrollador de Apple). Gatekeeper la bloquea con doble clic; hay que abrirla l
 primera vez con clic derecho → **Abrir**. Y es **solo para Apple Silicon**
 (`arm64`); no hay build para Intel.
 
+### Construir el artefacto distribuible
+
+Un solo comando hace las cuatro cosas —preparar el motor, compilar, firmar y
+comprimir— y deja el `.zip` en `desktop/dist/`:
+
+```bash
+./desktop/tools/empaquetar-release.sh v0.1.0
+```
+
+**La firma ad hoc no es opcional.** Tauri deja el ejecutable con la firma del
+enlazador pero **no firma el bundle**: queda sin `_CodeSignature`, con
+`Sealed Resources=none`, y `codesign --verify` lo rechaza con *"code has no
+resources but signature indicates they must be present"*. macOS puede matar una
+app en ese estado por considerarla dañada. El script la firma ad hoc de dentro
+hacia fuera, y deja `Identifier=dev.diskanalyzer.app` en vez del
+`desktop-<hash>` que ponía el enlazador.
+
+Se comprime con `ditto`, no con `zip`: `zip` a secas pierde metadatos y permisos
+de macOS y la `.app` llega rota al otro lado.
+
 ### Regenerar el motor empaquetado
 
 Los ~47 MB del motor **no están en git**: se regeneran. Antes de compilar:
