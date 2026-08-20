@@ -316,6 +316,48 @@ impl Default for AnalisisManager {
     }
 }
 
+/// Borra los temporales que dejó una ejecución anterior.
+///
+/// El hilo que espera al hijo los borra al terminar, pero si la app muere de
+/// un SIGKILL (o de un cierre forzoso) no corre nadie y se acumulan. Se
+/// comprueba el pid que va en el nombre antes de borrar: si ese proceso sigue
+/// vivo, el fichero es de una instancia en marcha y no se toca. Borrarlo sin
+/// mirar rompería el análisis de esa otra instancia, que se quedaría sin
+/// informe que leer.
+pub fn limpiar_temporales_huerfanos() {
+    let Ok(dir) = std::fs::read_dir(std::env::temp_dir()) else {
+        return;
+    };
+    for entrada in dir.flatten() {
+        let nombre = entrada.file_name();
+        let nombre = nombre.to_string_lossy();
+        let Some(resto) = nombre.strip_prefix("disk-analyzer-tray-") else {
+            continue;
+        };
+        let Some(pid) = resto.split('-').next().and_then(|p| p.parse::<i32>().ok()) else {
+            continue;
+        };
+        if !proceso_muerto(pid) {
+            continue;
+        }
+        let _ = std::fs::remove_file(entrada.path());
+    }
+}
+
+/// Si el pid no corresponde a ningún proceso.
+///
+/// `kill(pid, 0)` no basta con comprobar `== 0`: para un proceso de otro
+/// usuario devuelve -1 con `EPERM`, que significa "existe pero no puedes
+/// señalarlo". Este proyecto documenta correr cosas con `sudo`, así que ese
+/// caso llega a darse — y tratarlo como "muerto" haría borrar los temporales
+/// de un análisis en marcha. Solo `ESRCH` significa muerto de verdad.
+fn proceso_muerto(pid: i32) -> bool {
+    if unsafe { libc::kill(pid, 0) } == 0 {
+        return false;
+    }
+    std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH)
+}
+
 /// A scan's command plus the two temp paths its outcome is read back from.
 struct Comando {
     cmd: Command,
@@ -645,6 +687,43 @@ mod tests {
         // The whole point of the state is that the summary tells the user
         // where to go; a generic "error" would leave them stuck.
         assert!(resultado.resumen().contains("Acceso total al disco"));
+    }
+
+    /// Un proceso de otro usuario existe aunque no podamos señalarlo:
+    /// `kill` devuelve EPERM, no ESRCH. Darlo por muerto haría borrar los
+    /// temporales de un análisis en marcha lanzado con sudo.
+    #[test]
+    fn un_proceso_de_otro_usuario_no_cuenta_como_muerto() {
+        // launchd (pid 1) es de root y existe siempre.
+        assert!(!proceso_muerto(1), "dio por muerto un proceso de root");
+        assert!(proceso_muerto(999999), "no detectó un pid inexistente");
+    }
+
+    #[test]
+    fn limpia_los_temporales_de_procesos_muertos_y_respeta_los_vivos() {
+        let tmp = std::env::temp_dir();
+        // El propio proceso de pruebas: vivo con total seguridad.
+        let de_vivo = tmp.join(format!(
+            "disk-analyzer-tray-{}-0.json",
+            std::process::id()
+        ));
+        // Un pid altísimo que no puede estar asignado.
+        let de_muerto = tmp.join("disk-analyzer-tray-999999-0.json");
+        std::fs::write(&de_vivo, "{}").unwrap();
+        std::fs::write(&de_muerto, "{}").unwrap();
+
+        limpiar_temporales_huerfanos();
+
+        let vivo_sigue = de_vivo.exists();
+        let muerto_sigue = de_muerto.exists();
+        let _ = std::fs::remove_file(&de_vivo);
+
+        assert!(!muerto_sigue, "no borró el temporal de un proceso muerto");
+        assert!(
+            vivo_sigue,
+            "borró el temporal de un proceso vivo: eso dejaría a esa \
+             instancia sin informe que leer"
+        );
     }
 
     #[test]
