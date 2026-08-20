@@ -75,19 +75,71 @@ impl Resultado {
     }
 }
 
-/// Resolves the repository root at compile time, relative to this crate's
-/// manifest directory (`desktop/src-tauri`), then canonicalizes it at
-/// runtime. This works only because the app runs on the same machine (and
-/// checkout) it was built on -- there is no bundled Python engine yet (see
-/// the module doc: every PyInstaller sidecar build was quarantined as
-/// malware). `tests/consistency.rs` already relies on this exact same
-/// resolution for the same reason, so both pieces would break together if
-/// the checkout ever moved relative to the crate.
-fn repo_root() -> PathBuf {
+/// Where the analysis engine lives, once resolved.
+#[derive(Debug, Clone)]
+pub struct Motor {
+    python: PathBuf,
+    script: PathBuf,
+    /// Working directory for the child. Python puts the script's directory on
+    /// `sys.path` by itself, so running from here is what lets the engine
+    /// import its own `analyzer/` package.
+    cwd: PathBuf,
+}
+
+/// The repository this crate was compiled from, if it is still there.
+///
+/// Returns `None` rather than panicking: inside a bundled `.app` the path
+/// baked in at compile time usually does not exist at all, and the tray
+/// indicator must survive that -- it does not need Python for anything.
+fn repo_root() -> Option<PathBuf> {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../..")
         .canonicalize()
-        .expect("repo root should exist relative to the crate manifest")
+        .ok()
+}
+
+/// Finds the analysis engine, preferring the copy bundled inside the `.app`.
+///
+/// That bundled copy is what makes the app self-contained and distributable:
+/// a trimmed CPython from python-build-standalone plus the engine sources,
+/// assembled by `desktop/tools/preparar-motor.sh`. The fallback to the
+/// repository's own venv keeps `npm run tauri dev` working without having to
+/// run that script first.
+pub fn localizar_motor(resource_dir: Option<PathBuf>) -> Option<Motor> {
+    if let Some(dir) = resource_dir {
+        // Tauri conserva la ruta relativa declarada en `bundle.resources`,
+        // así que `resources/engine/**/*` acaba en
+        // `Contents/Resources/resources/engine/` -- con el prefijo repetido.
+        // Verificado sobre una .app construida de verdad: buscar solo
+        // `engine/` no encontraba nada, y en la máquina de desarrollo el
+        // fallo pasaba desapercibido porque la reserva al venv del
+        // repositorio lo tapaba. En una máquina sin el repositorio la app
+        // habría dicho "motor no encontrado".
+        for candidato in ["resources/engine", "engine"] {
+            let engine = dir.join(candidato);
+            let python = engine.join("python/bin/python3");
+            let script = engine.join("disk_analyzer.py");
+            if python.is_file() && script.is_file() {
+                return Some(Motor {
+                    python,
+                    script,
+                    cwd: engine,
+                });
+            }
+        }
+    }
+
+    let repo = repo_root()?;
+    let python = repo.join("venv-web/bin/python");
+    let script = repo.join("disk_analyzer.py");
+    if python.is_file() && script.is_file() {
+        return Some(Motor {
+            python,
+            script,
+            cwd: repo,
+        });
+    }
+    None
 }
 
 /// Tracks at most one in-flight scan. `pid` is the single source of truth
@@ -100,14 +152,23 @@ fn repo_root() -> PathBuf {
 pub struct AnalisisManager {
     pid: Mutex<Option<i32>>,
     cancelado: AtomicBool,
+    motor: Option<Motor>,
 }
 
 impl AnalisisManager {
-    pub fn new() -> Self {
+    pub fn new(motor: Option<Motor>) -> Self {
         Self {
             pid: Mutex::new(None),
             cancelado: AtomicBool::new(false),
+            motor,
         }
+    }
+
+    /// Whether an engine was found at startup. The menu uses this to say so
+    /// up front instead of only failing when the user clicks "Analizar
+    /// ahora".
+    pub fn hay_motor(&self) -> bool {
+        self.motor.is_some()
     }
 
     pub fn is_running(&self) -> bool {
@@ -131,7 +192,11 @@ impl AnalisisManager {
         if self.is_running() {
             return Err("ya hay un análisis en marcha".to_string());
         }
-        self.start_con(comando_analisis()?, on_finish)
+        let motor = self
+            .motor
+            .as_ref()
+            .ok_or_else(|| "no se encontró el motor de análisis".to_string())?;
+        self.start_con(comando_analisis(motor)?, on_finish)
     }
 
     /// The half of `start` that does not know how to build the real scan
@@ -247,7 +312,7 @@ impl AnalisisManager {
 
 impl Default for AnalisisManager {
     fn default() -> Self {
-        Self::new()
+        Self::new(None)
     }
 }
 
@@ -265,10 +330,7 @@ struct Comando {
 static SECUENCIA: AtomicU64 = AtomicU64::new(0);
 
 /// Builds the real whole-disk scan command.
-fn comando_analisis() -> Result<Comando, String> {
-    let repo = repo_root();
-    let python = repo.join("venv-web/bin/python");
-    let script = repo.join("disk_analyzer.py");
+fn comando_analisis(motor: &Motor) -> Result<Comando, String> {
     let etiqueta = format!(
         "{}-{}",
         std::process::id(),
@@ -279,9 +341,9 @@ fn comando_analisis() -> Result<Comando, String> {
     let stderr_file = std::fs::File::create(&stderr_path)
         .map_err(|e| format!("no se pudo preparar el registro de errores: {e}"))?;
 
-    let mut cmd = Command::new(&python);
-    cmd.current_dir(&repo)
-        .arg(&script)
+    let mut cmd = Command::new(&motor.python);
+    cmd.current_dir(&motor.cwd)
+        .arg(&motor.script)
         .arg(SCAN_PATH)
         .arg("--min-size")
         .arg(MIN_SIZE_MB)
@@ -442,7 +504,7 @@ mod tests {
 
     #[test]
     fn cancelar_mata_el_grupo_entero_y_reporta_cancelado() {
-        let manager = Arc::new(AnalisisManager::new());
+        let manager = Arc::new(AnalisisManager::new(None));
         let (tx, rx) = mpsc::channel();
         let (comando, marca) = comando_de_prueba();
         manager
@@ -473,7 +535,7 @@ mod tests {
 
     #[test]
     fn kill_blocking_no_deja_huerfanos_al_salir() {
-        let manager = Arc::new(AnalisisManager::new());
+        let manager = Arc::new(AnalisisManager::new(None));
         let (comando, marca) = comando_de_prueba();
         manager
             .start_con(comando, |_| {})
@@ -496,7 +558,7 @@ mod tests {
 
     #[test]
     fn un_segundo_analisis_no_arranca_mientras_hay_uno_en_marcha() {
-        let manager = Arc::new(AnalisisManager::new());
+        let manager = Arc::new(AnalisisManager::new(None));
         let (comando, marca) = comando_de_prueba();
         manager
             .start_con(comando, |_| {})
@@ -511,6 +573,61 @@ mod tests {
 
         manager.kill_blocking();
         assert!(esperar_grupo_muerto(pgid));
+    }
+
+    /// El motor empaquetado tiene que ganarle al del repositorio. Si se
+    /// invirtiera la prioridad, la .app instalada seguiría dependiendo del
+    /// checkout de quien la compiló -- que es exactamente lo que este
+    /// empaquetado existe para arreglar, y no se notaría en la máquina de
+    /// desarrollo, donde ambos existen y los dos funcionan.
+    /// Reproduce la disposición que Tauri produce de verdad dentro de la
+    /// .app: el prefijo `resources/` se conserva, así que el motor queda en
+    /// `Contents/Resources/resources/engine/`. Este test existe porque la
+    /// primera versión buscaba solo en `engine/` y en esta máquina el fallo
+    /// quedaba tapado por la reserva al venv del repositorio.
+    #[test]
+    fn encuentra_el_motor_en_la_disposicion_real_de_tauri() {
+        let base = ruta_temporal("recursos-tauri");
+        let engine = base.join("resources/engine");
+        std::fs::create_dir_all(engine.join("python/bin")).unwrap();
+        std::fs::write(engine.join("python/bin/python3"), "#!/bin/sh\n").unwrap();
+        std::fs::write(engine.join("disk_analyzer.py"), "").unwrap();
+
+        let motor = localizar_motor(Some(base.clone()))
+            .expect("debería encontrar el motor donde Tauri lo pone de verdad");
+        assert!(
+            motor.python.starts_with(&base),
+            "cayó a la reserva del repositorio en vez de usar el motor empaquetado"
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn el_motor_empaquetado_gana_al_del_repositorio() {
+        let base = ruta_temporal("recursos");
+        let engine = base.join("engine");
+        std::fs::create_dir_all(engine.join("python/bin")).unwrap();
+        std::fs::write(engine.join("python/bin/python3"), "#!/bin/sh\n").unwrap();
+        std::fs::write(engine.join("disk_analyzer.py"), "").unwrap();
+
+        let motor = localizar_motor(Some(base.clone())).expect("debería encontrarlo");
+        assert!(
+            motor.python.starts_with(&base),
+            "eligió {:?} en vez del motor empaquetado",
+            motor.python
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn sin_motor_empaquetado_ni_repositorio_no_hay_motor() {
+        let vacio = ruta_temporal("vacio");
+        std::fs::create_dir_all(&vacio).unwrap();
+        // Con un directorio de recursos vacío cae al repositorio, que en esta
+        // máquina sí existe; lo que se comprueba es que no explota.
+        let _ = localizar_motor(Some(vacio.clone()));
+        assert!(!AnalisisManager::new(None).hay_motor());
+        let _ = std::fs::remove_dir_all(&vacio);
     }
 
     #[test]

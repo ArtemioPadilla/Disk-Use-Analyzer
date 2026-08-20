@@ -9,24 +9,61 @@ desinstalarla del todo y volver atrás cuando algo sale mal.
   `desktop/src-tauri/target/release/bundle/macos/Disk Use Analyzer.app`
 - **Código:** `desktop/src-tauri/src/` (`disk.rs`, `estado.rs`, `analisis.rs`, `lib.rs`)
 
-## Lo que esta versión NO es todavía
+## Qué lleva dentro, y qué le falta
 
-**La app no es autocontenida y no se puede distribuir.** Al pulsar "Analizar
-ahora" ejecuta el intérprete del repositorio por ruta absoluta:
+La `.app` es **autocontenida**: pesa unos 92 MB porque lleva su propio CPython
+—una compilación de [python-build-standalone](https://github.com/astral-sh/python-build-standalone),
+recortada— y una copia del motor de análisis. No necesita este repositorio, ni
+`venv-web`, ni ningún Python instalado en el sistema. Se puede mover a otro Mac.
 
+Lo que sí le falta: **no está firmada ni notarizada** (decisión D4, sin cuenta de
+desarrollador de Apple). Gatekeeper la bloquea con doble clic; hay que abrirla la
+primera vez con clic derecho → **Abrir**. Y es **solo para Apple Silicon**
+(`arm64`); no hay build para Intel.
+
+### Regenerar el motor empaquetado
+
+Los ~47 MB del motor **no están en git**: se regeneran. Antes de compilar:
+
+```bash
+./desktop/tools/preparar-motor.sh
+cd desktop && npm run tauri build -- --bundles app
 ```
-<repo>/venv-web/bin/python <repo>/disk_analyzer.py / --min-size 50 --export <temporal>
+
+El script descarga el CPython, lo recorta y le copia al lado `disk_analyzer.py`,
+`disk_analyzer_core.py` y `analyzer/`. Si te saltas ese paso, la `.app` se
+construye igual pero sin motor: el indicador de disco funciona y "Analizar ahora"
+sale apagado con el texto "Motor de análisis no encontrado".
+
+### Por qué no PyInstaller
+
+Fue el primer intento y quedó descartado: el antivirus de esta máquina puso en
+cuarentena los tres binarios que produjo, con una firma genérica de malware. Es
+un falso positivo conocido de su *bootloader* autoextraíble, que está presente
+tanto en `--onefile` como en `--onedir` — cambiar de modo no habría servido de
+nada. `python-build-standalone` es un CPython normal y sin modificar, sin
+autoextraíble, y pasó sin incidentes en la misma máquina.
+
+### Dónde busca el motor la app
+
+Por orden:
+
+1. `Contents/Resources/resources/engine/` dentro de la `.app` (el prefijo
+   `resources/` aparece dos veces porque Tauri conserva la ruta relativa
+   declarada en `bundle.resources`).
+2. `venv-web/bin/python` del repositorio desde el que se compiló, para que
+   `npm run tauri dev` funcione sin preparar el motor.
+
+Esa reserva es cómoda y **traicionera**: en la máquina de desarrollo tapa un
+empaquetado roto, porque la app funciona igual tirando del repositorio. Para
+comprobar de verdad qué motor está usando, lanza un análisis y mira:
+
+```bash
+ps -ax -o command | grep disk_analyzer.py | grep -v grep
 ```
 
-Si mueves o borras el repositorio, o borras `venv-web/`, el análisis deja de
-funcionar y el menú lo dice ("no se pudo iniciar el motor de análisis"). El
-indicador de disco, en cambio, sigue funcionando: no depende de Python.
-
-El motivo está documentado en el plan de la rebanada A: empaquetar el motor con
-PyInstaller quedó descartado porque el antivirus de esta máquina puso en
-cuarentena los tres binarios producidos. Los dos caminos abiertos para arreglarlo
-—`python-build-standalone` y firmar con Developer ID— están en ese mismo
-documento.
+Si la ruta empieza por la `.app`, el empaquetado está bien. Si empieza por el
+repositorio, la `.app` no lleva motor y en otro Mac no funcionaría.
 
 ## Firma
 

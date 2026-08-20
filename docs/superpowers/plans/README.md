@@ -61,13 +61,15 @@ propios planes.
 
 Dos cosas de la rebanada A que sorprenden si no las sabes:
 
-- **La app no es autocontenida.** Al pulsar "Analizar ahora" ejecuta
-  `venv-web/bin/python` del repositorio por ruta absoluta. Si mueves el
-  repositorio o borras el venv, el análisis deja de funcionar (el menú lo dice);
-  el indicador de disco sigue funcionando porque no depende de Python. El motivo
-  —el antivirus poniendo en cuarentena todo binario de PyInstaller— y los dos
-  caminos abiertos están en el registro de ejecución.
-- **No está firmada ni notarizada.** Va con firma ad hoc, así que Gatekeeper la
+- **Los ~47 MB del motor empaquetado no están en git.** Se regeneran con
+  `./desktop/tools/preparar-motor.sh`, que hay que ejecutar **antes** de
+  compilar. Si te lo saltas, la `.app` se construye igual pero sin motor.
+- **La app cae al venv del repositorio si no encuentra motor empaquetado.** Es
+  cómodo para desarrollar y traicionero para verificar: un empaquetado roto
+  funciona igual en la máquina donde se compiló. Para saber qué motor usa de
+  verdad, lanza un análisis y mira
+  `ps -ax -o command | grep disk_analyzer.py`.
+- **No está firmada ni notarizada, y es solo para Apple Silicon.** Gatekeeper la
   bloquea con doble clic: ábrela con clic derecho → Abrir. Y como el hash cambia
   en cada compilación, el permiso de Acceso a disco completo se rompe en cada
   build. El runbook explica cómo arreglarlo con un certificado autofirmado.

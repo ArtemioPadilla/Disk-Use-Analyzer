@@ -54,3 +54,6 @@ desktop/dist/
 *.p12
 *.cer
 *.certSigningRequest
+
+# Motor autocontenido: ~46 MB regenerables con desktop/tools/preparar-motor.sh
+desktop/src-tauri/resources/

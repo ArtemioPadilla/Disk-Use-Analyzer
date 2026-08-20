@@ -122,12 +122,27 @@ pub fn run() {
                 ],
             )?;
 
-            let manager = Arc::new(AnalisisManager::new());
+            // El motor empaquetado dentro de la .app es el que hace que la
+            // app sea autocontenida; si no está (modo desarrollo), se cae al
+            // venv del repositorio.
+            let motor = analisis::localizar_motor(app.path().resource_dir().ok());
+            let hay_motor = motor.is_some();
+            let manager = Arc::new(AnalisisManager::new(motor));
             // Managed state so the shutdown handler in `run()` below (which
             // runs outside `setup` and has no closure access to `manager`)
             // can still reach it to guarantee cleanup on any exit path, not
             // just the "quit" menu item.
             app.manage(Arc::clone(&manager));
+
+            // Decirlo desde el arranque, no solo al pulsar: sin motor, el
+            // indicador de disco sigue siendo perfectamente útil, así que la
+            // app no se rompe -- pero el usuario tiene que saber por qué esa
+            // opción está apagada.
+            if !hay_motor {
+                let _ = analizar_item.set_enabled(false);
+                let _ = estado_analisis_item
+                    .set_text("Motor de análisis no encontrado");
+            }
 
             let mut tray_builder = TrayIconBuilder::new().menu(&menu).show_menu_on_left_click(true);
             match estado_inicial.map(icono_para) {

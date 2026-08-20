@@ -490,9 +490,15 @@ de malware — un falso positivo conocido del *bootloader* autoextraíble de
 PyInstaller. La hipótesis inicial de arreglo (cambiar `--onefile` por `--onedir`)
 era **incorrecta**: el bootloader está en los dos modos.
 
-Consecuencia declarada: la app **no es autocontenida y no se puede distribuir**.
-Invoca `venv-web/bin/python` por ruta absoluta. El indicador de disco no depende
-de Python y sigue funcionando aunque el motor falte.
+La rebanada A se cerró con la app dependiendo de `venv-web/bin/python` por ruta
+absoluta, y por tanto no distribuible. **Eso se resolvió después**, tomando el
+camino que el propio plan dejaba anotado como alternativa:
+[python-build-standalone](https://github.com/astral-sh/python-build-standalone),
+un CPython normal y sin modificar —el que usa `uv`— que al no ser un
+autoextraíble no dispara la heurística. Verificado en la misma máquina que sufrió
+las cuarentenas: pasó sin incidentes. `desktop/tools/preparar-motor.sh` lo
+descarga, lo recorta de 67 a 46 MB y le copia el motor al lado; la `.app` pasa de
+10 a 92 MB y deja de necesitar el repositorio.
 
 **La firma y la notarización siguen pendientes** (decisión D4, sin cuenta de
 Apple). La `.app` va firmada ad hoc. El certificado autofirmado que D4 preveía
@@ -545,10 +551,30 @@ Además, el menú vivo se contrastó contra el motor: mostraba
 6.5 GB del motor Python — la diferencia es la escritura real del disco entre las
 dos lecturas, muy dentro de la tolerancia del 1% del test de consistencia.
 
+### El empaquetado roto que la máquina de desarrollo tapaba
+
+Al conectar el motor empaquetado, la primera versión lo buscaba en
+`Contents/Resources/engine/`. Tauri conserva la ruta relativa declarada en
+`bundle.resources`, así que en realidad queda en
+`Contents/Resources/resources/engine/` — con el prefijo repetido.
+
+El fallo **no se notaba**: la reserva al venv del repositorio entraba en acción y
+la app funcionaba igual. En cualquier Mac sin este repositorio habría dicho
+"Motor de análisis no encontrado". Solo salió mirando qué intérprete corría de
+verdad:
+
+```
+ps -ax -o command | grep disk_analyzer.py
+```
+
+Hay un test que fija la disposición real de Tauri, precisamente porque la reserva
+hace que este fallo sea invisible donde se desarrolla.
+
 ### Lo que queda fuera de esta rebanada
 
 Vigilancia de carpetas, la ventana del panel, Linux y Windows: declarado fuera en
-el spec. `analisis.rs` usa `process_group` y señales POSIX, así que hoy **solo
+el spec. La firma y la notarización siguen pendientes de D4, así que el release
+va **sin firmar y solo para Apple Silicon**. `analisis.rs` usa `process_group` y señales POSIX, así que hoy **solo
 compila en Unix**; portarlo es parte del trabajo de Windows, no una deuda oculta.
 
 ### Deuda menor anotada
