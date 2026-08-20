@@ -1,186 +1,270 @@
-# Diseño — App de bandeja con Tauri (subsistema 1)
+# Diseño — App de bandeja con Tauri
+
+> **Revisión 2.** La primera versión fue sometida a cinco revisiones adversariales
+> y no sobrevivió intacta. Los errores encontrados y las decisiones que provocaron
+> están al final, en "Qué cambió y por qué". Vale la pena leerlo: varias
+> afirmaciones de la v1 eran directamente falsas.
 
 ## Qué construimos
 
-Una app de escritorio anclada en la barra de menú de macOS (y en la bandeja de
-Windows y Linux) que muestra el llenado del disco de un vistazo y da acceso
-inmediato al analizador que ya existe.
+Una app de escritorio anclada en la barra de menú de macOS que muestra el llenado
+del disco de un vistazo, permite lanzar un análisis desde el menú, y abre el
+analizador completo que ya existe.
 
-Este documento cubre **solo el primer subsistema de tres**. El objetivo completo
-que planteó el usuario —app nativa, analítica en tiempo real, distribuible en
-tres plataformas— son tres proyectos independientes:
+## Alcance honesto: macOS primero
 
-| # | Subsistema | Estado |
-|---|---|---|
-| 1 | App de bandeja con pulso de disco en vivo | **este documento** |
-| 2 | Vigilancia de carpetas en tiempo real (FSEvents / inotify / ReadDirectoryChangesW) | pendiente de diseñar |
-| 3 | Empaquetado y distribución firmada en tres plataformas | pendiente de diseñar |
+**Esta revisión limita el objetivo a macOS.** La v1 prometía las tres
+plataformas; la verificación demostró que era una promesa que el diseño no podía
+cumplir:
 
-Se hacen en ese orden porque el primero ya entrega una app usable, y mezclarlos
-multiplicaría el tamaño sin adelantar la fecha en que tienes algo anclado y
-funcionando.
+- **GNOME —el escritorio Linux más común— no muestra bandeja del sistema** desde
+  2017 sin que el usuario instale una extensión manualmente. La premisa de la app
+  (un icono siempre visible) falla en silencio en un escritorio Linux de fábrica.
+- **La bandeja de Linux no acepta píxeles en memoria.** Es DBus y toma una ruta de
+  archivo; Tauri lo resuelve escribiendo un temporal en cada actualización. El
+  modelo de coste de la v1 ("redibujado barato en memoria") era falso allí.
+- **En Windows el servidor del panel no arranca.** `disk_analyzer_web.py:32`
+  importa `PTYManager` a nivel de módulo, y `pty_manager.py` importa `pty`,
+  `fcntl` y `termios` y llama a `os.fork()`. Ninguno existe en Windows: el
+  servidor revienta al importar, no es que la terminal no funcione.
+- **PyInstaller no compila cruzado.** El binario de cada plataforma debe
+  construirse en esa plataforma. Sin runners por sistema, no hay forma de
+  producir ni probar los sidecars de Linux y Windows desde un Mac.
 
-## Por qué Tauri
+Nada de esto hunde la idea, pero sí significa que "funciona en las tres" es un
+proyecto aparte con su propio diseño, no una casilla que se marca al final. Se
+deja anotado como trabajo futuro con estos obstáculos ya identificados, para que
+quien lo retome no los redescubra.
 
-Se descartó SwiftUI (`MenuBarExtra`), que sería la mejor opción **solo** para
-macOS, porque el requisito incluye Linux y Windows. Entre las alternativas
-multiplataforma:
+## Las tres rebanadas, reordenadas
 
-- **Tauri** reutiliza la interfaz Astro que ya está construida y probada,
-  produce `.app`, `.msi`, `.deb` y `.AppImage` desde el mismo código, y genera
-  binarios de unos 10 MB porque usa el webview del sistema en lugar de empaquetar
-  un navegador. Su documentación de firma y notarización es sólida, lo que
-  importa porque uno de los objetivos declarados es aprender ese pipeline.
-- **PySide6 / Qt** mantendría todo en Python y evitaría el IPC, pero obligaría a
-  rehacer la interfaz en widgets y produce bundles de 100-150 MB, algo que se
-  nota en una app residente permanente.
+| # | Rebanada | Qué entrega | Estado |
+|---|---|---|---|
+| A | Icono en la barra + pulso de disco + análisis bajo demanda + **empaquetado firmado** | Una `.app` real, anclada, que ya sirve | **este documento** |
+| B | Vigilancia de carpetas en tiempo real (FSEvents) | Lo que de verdad es "analítica en tiempo real" | pendiente |
+| C | Panel completo como ventana Tauri | La interfaz web dentro de la app | pendiente |
 
-El coste asumido de Tauri es Rust como tercer lenguaje del repositorio. Se
-mitiga manteniendo el caparazón deliberadamente pequeño: la API de bandeja de
-Tauri 2 está expuesta también a JavaScript, así que la lógica de presentación
-puede vivir en TypeScript y el Rust queda reducido a lo que necesita acceso al
-sistema.
+La v1 ponía el panel en la primera rebanada. Estaba mal: el panel arrastra el
+ciclo de vida del servidor, la exposición de la terminal, los procesos huérfanos
+y el problema de CORS — es la parte **más difícil y más peligrosa**, y estaba
+programada para construirse antes de haber aprendido la plataforma. Ahora va al
+final.
+
+El empaquetado sube a la rebanada A por tres razones concretas: es un objetivo de
+aprendizaje declarado; condiciona la arquitectura (el sidecar de Tauri quiere un
+binario ya compilado, no un script en un venv); y en macOS el **acceso a disco
+completo se concede a la identidad firmada del bundle**, así que sin firma cada
+recompilación pierde el permiso y el análisis de `/` falla de formas confusas.
+
+### Sobre "analítica en tiempo real"
+
+Conviene decirlo sin adornos: **la rebanada A no entrega analítica en tiempo
+real**. Entrega un medidor de llenado que se actualiza solo, y análisis a
+petición. Lo que pediste —enterarte de que algo se está comiendo el disco
+*mientras pasa*— es la rebanada B, y es la que hace interesante tener la app
+anclada en lugar de ejecutar `make analyze` a mano.
+
+Se ordena así porque B necesita que exista una app donde vivir. Pero si tras la
+rebanada A prefieres saltar a B antes que al panel, ese orden también es válido y
+probablemente mejor.
 
 ## Arquitectura
 
-Tres piezas con responsabilidades separadas y una regla que las ordena: **cada
-capa cuesta lo que vale**.
+Dos piezas, con una regla que las ordena: **cada capa cuesta lo que vale.**
 
-### El caparazón Rust (`desktop/src-tauri/`)
+**El caparazón Rust** hace lo barato y siempre encendido: lee el espacio de disco
+con `sysinfo`, elige un icono y actualiza el menú. No mantiene Python residente.
 
-Hace únicamente lo barato y siempre encendido:
+**El motor Python** se invoca como sidecar solo cuando se pide un análisis. Se
+empaqueta con PyInstaller en un binario por triple de destino, que es lo que el
+mecanismo `externalBin` de Tauri espera.
 
-- Sondea el espacio de disco con la crate `sysinfo`. Es una llamada al sistema
-  de microsegundos, así que puede refrescarse cada pocos segundos indefinidamente
-  sin coste apreciable.
-- Redibuja el icono de la bandeja cuando el porcentaje cambia lo suficiente para
-  verse.
-- Gestiona el ciclo de vida del proceso Python.
+En la rebanada A **no hay servidor web ni ventana**. "Abrir analizador completo"
+abre el navegador contra el flujo que ya existe hoy. Es deliberado: evita de un
+golpe el ciclo de vida del servidor, el CORS y la exposición de la terminal.
 
-**No mantiene Python residente.** Ese es el punto de la separación: una app
-anclada permanentemente no puede arrastrar un intérprete encendido a todas horas.
+### Permisos de Tauri
 
-### El motor Python (sin cambios)
+Tauri 2 bloquea por defecto todo lo que este diseño necesita. Hay que declarar
+explícitamente en las capabilities: `core:tray:default` para la bandeja, y
+`shell:allow-execute` con la entrada `{"name": ..., "sidecar": true}` por cada
+binario. Los argumentos dinámicos (ruta a analizar, `--export`) necesitan además
+una lista blanca o un validador — no se pueden pasar libremente.
 
-Se invoca como *sidecar* solo cuando hay trabajo real. Tauri lo declara en
-`externalBin` y lo lanza mediante el plugin `shell`, que permite leer su stdout
-en streaming. Dos usos:
+## El icono
 
-- **Escaneo bajo demanda:** el CLI ya sabe exportar JSON con `--export`.
-- **Servidor del panel:** `disk_analyzer_web.py`, arrancado solo al abrir el
-  panel completo.
+**Imágenes pre-generadas por umbral, no un rasterizador en tiempo de ejecución.**
+La v1 proponía dibujar un medidor con relleno proporcional en cada refresco. Es
+sobreingeniería: nadie pidió un dial animado, tres estados discretos no necesitan
+antialiasing, y la variante pre-generada elimina el problema del archivo temporal
+cuando llegue Linux.
 
-### La interfaz Astro (sin cambios)
+Se generan como *assets* en `@1x/@2x` y se intercambian según el estado.
 
-Se reutiliza tal cual como contenido de la ventana de detalle. Los 69 tests de
-frontend y 151 de backend siguen aplicando sin tocarse.
+### Umbrales por espacio libre, no solo por porcentaje
 
-## El icono como indicador
+La v1 usaba 70/85% a secas. Está mal en los dos extremos: un disco de 4 TB al 85%
+tiene 600 GB libres y no es urgente; uno de 128 GB al 60% tiene 51 GB y ya aprieta
+con Xcode y Docker. Los umbrales combinan proporción **y** espacio absoluto, y el
+rojo debe significar "esto ya es un problema" — si aparece pronto, dejas de
+mirarlo.
 
-El icono **es** el dato, no un adorno junto al dato. Se genera en tiempo de
-ejecución como píxeles RGBA y se pasa a la bandeja como imagen construida en
-memoria.
+### Contabilidad consistente con el motor
 
-Forma: un rectángulo redondeado con el contorno siempre visible y relleno
-proporcional al uso del disco. El contorno importa porque garantiza que la pieza
-se distinga sobre cualquier fondo de barra.
+El icono debe mostrar **el mismo número que el resto de la app**. Este proyecto ya
+invirtió esfuerzo en que esa cifra sea correcta en APFS: usar `total - available`
+en vez de la columna `used` de `df`, saltar los firmlinks que duplicaban el total,
+y contabilizar los volúmenes del sistema con `diskutil apfs list`. Si la bandeja
+dice 90% y el informe dice 74%, se rompe la confianza en el único dato que
+justifica la app.
 
-Escala de color, pensada para lo que de verdad importa en un analizador de disco:
+La rebanada A usa `sysinfo` en Rust y **verifica contra el motor Python que
+coinciden**, con un test que compara ambas lecturas. Si divergen, la bandeja se
+alinea con el motor, no al revés.
 
-| Uso | Color |
-|---|---|
-| < 70 % | verde |
-| 70-85 % | ámbar |
-| > 85 % | rojo |
+### La contrapartida del color, completa
 
-El rojo debe significar "esto ya es un problema". Si aparece demasiado pronto,
-dejas de mirarlo.
+macOS espera iconos de barra en modo *template*: monocromos, que el sistema tiñe
+según la apariencia. Un icono en color renuncia a más de lo que decía la v1:
 
-**Contrapartida asumida:** macOS prefiere iconos de barra en modo *template*
-—monocromos, que se adaptan solos a barra clara u oscura—. Un indicador en color
-renuncia a eso, así que el contraste en ambos temas es responsabilidad nuestra y
-hay que verificarlo explícitamente. Se acepta el compromiso porque el color es
-precisamente lo que permite leer un disco al 92 % de un vistazo.
+- No se adapta solo a barra clara u oscura.
+- **No recibe el estado resaltado** al pulsar el icono para abrir el menú.
+- En macOS 26 no participa del ajuste de estilo de iconos del sistema, así que se
+  verá ajeno junto a los demás.
+- Un medidor de relleno en color es **el lenguaje visual del icono de batería**, y
+  se leerá como indicador del sistema en vez de como app de terceros.
 
-**Diferencia por plataforma:** en macOS y Linux se añade el porcentaje como texto
-junto al icono (`setTitle`). En Windows esa API no existe, así que el icono y el
-tooltip son toda la información. Por eso el icono carga con el significado en vez
-de delegarlo en el texto.
+Se acepta igualmente, porque el color es justo lo que permite leer un disco al 92%
+de un vistazo. Pero se verifica en tema claro, tema oscuro, con "Reducir
+transparencia" activado, y sobre fondos de escritorio claros y oscuros.
+
+### El texto del porcentaje: opcional y apagado por defecto
+
+macOS **oculta elementos de la barra sin ningún aviso** cuando no caben, y el
+notch reduce el espacio. Añadir texto ensancha el elemento y lo vuelve más
+propenso a desaparecer — justo lo contrario del objetivo. Se implementa como
+opción, apagada por defecto.
 
 ## El menú
 
-Al desplegar:
-
-- Uso de disco actual (usado / total y porcentaje)
-- Resumen del último análisis: espacio recuperable y mayores consumidores
-- **Analizar ahora** — lanza el CLI como sidecar y actualiza el menú al terminar
-- **Abrir panel** — abre la ventana Tauri con la interfaz completa
-- **Arrancar al iniciar sesión** — conmutador, vía el plugin `autostart`
+- Uso de disco (usado / total, porcentaje y **espacio libre en GB**)
+- Resultado del último análisis, si lo hay
+- **Analizar ahora** — lanza el CLI como sidecar
+- **Abrir analizador completo** — abre el navegador
 - **Salir**
 
-## Ciclo de vida del servidor
+Se descarta de esta rebanada el conmutador de arranque al inicio de sesión: no lo
+pediste, y el registro como login item es poco fiable en builds sin firmar, así
+que llegaría antes de poder funcionar bien.
 
-Es la parte con más aristas, así que se especifica en detalle.
+## macOS: lo que la v1 no consideró
 
-El servidor arranca **de forma perezosa**, solo al abrir el panel por primera
-vez. Una app residente no debe tener un servidor encendido sin que nadie lo mire.
-El precio es un arranque de dos o tres segundos la primera vez, que se cubre con
-un indicador de carga en la ventana.
+**`LSUIElement`.** Una app Tauri es una app normal salvo que se declare lo
+contrario. Sin esto rebota en el Dock, se queda ahí y aparece en Cmd+Tab — no se
+comporta como app de barra. Se establece `ActivationPolicy::Accessory`.
 
-Reglas:
+**Acceso a disco completo.** Analizar `/` lo requiere. El permiso se concede a la
+identidad firmada del bundle, así que sin firma se pierde en cada recompilación
+(otra razón para adelantar el empaquetado). La app debe detectar que le falta y
+decirlo en el menú, no fallar en silencio.
 
-1. **Puerto dinámico.** Se pide al sistema un puerto libre en lugar de asumir el
-   8000, que puede estar ocupado por otra cosa (o por un `make web` del propio
-   usuario).
-2. **Solo localhost.** Se enlaza a `127.0.0.1`, no a `0.0.0.0`. Una app de
-   escritorio no tiene por qué exponer nada a la red local.
-3. **Con autenticación.** Se genera un token y se pasa por la variable de entorno
-   `DISK_ANALYZER_TOKEN`, que es exactamente el mecanismo que ya existe. **No** se
-   usa `--no-auth`: aunque escuche solo en localhost, cualquier proceso de la
-   máquina podría hablarle.
-4. **Sin procesos huérfanos.** El hijo se mata al salir la app, incluido el
-   camino de cierre inesperado. Un servidor Python huérfano tras cerrar la app
-   sería un fallo real y visible.
+**Pantalla completa.** Con una app en pantalla completa la barra se oculta hasta
+que llevas el puntero al borde. El "de un vistazo" no aplica ahí, y conviene
+saberlo en vez de descubrirlo.
 
-### Dependencia en el backend
+## Procesos: lo que la v1 afirmaba sin diseñar
 
-`disk_analyzer_web.py` hoy fija `host="0.0.0.0"` en código y no acepta un
-argumento para cambiarlo. Este subsistema necesita añadir un flag `--host` (con
-el valor actual por defecto, para no alterar el comportamiento de `make web`).
-Es un cambio pequeño pero es una dependencia real y se implementa como parte de
-este trabajo.
+La v1 decía "el hijo se mata al salir, incluido el cierre inesperado". Era falso
+por tres motivos verificados en el código:
+
+1. **`uvicorn` corre con `reload=True`** (`disk_analyzer_web.py:1458`), lo que
+   lanza un supervisor y un worker. Matar "al hijo" mata al supervisor y deja al
+   worker con el puerto ocupado. *(Afecta a la rebanada C; se anota aquí para que
+   no se pierda: el sidecar debe invocarse con `reload=False`, y eso es un segundo
+   cambio necesario en el backend además de `--host`.)*
+2. **Los shells del PTY llaman a `os.setsid()`** (`pty_manager.py:83`), poniéndose
+   deliberadamente fuera del grupo de procesos. Ningún `killpg` sobre el servidor
+   los alcanza. *(También rebanada C.)*
+3. **Ante `SIGKILL` no corre ningún manejador.** "Cierre inesperado" no se resuelve
+   con código en la app: requiere grupos de procesos, o que el hijo se autotermine
+   al detectar que su padre murió (EOF en stdin sirve).
+
+En la rebanada A el problema se reduce mucho, porque el único hijo es el CLI del
+análisis y no engendra nietos. Aun así:
+
+- Se lanza en su propio grupo de procesos y se mata el grupo, escalando de
+  `SIGTERM` a `SIGKILL` con un plazo — el mismo patrón que `pty_manager.py` ya
+  tiene probado en `KILL_REAP_TIMEOUT`.
+- **Un análisis a la vez.** El segundo clic no lanza otro proceso; el menú indica
+  que ya hay uno en marcha.
+- Si la app sale a mitad de un análisis, el hijo muere con ella y el archivo de
+  exportación a medias se descarta (escritura a temporal y renombrado atómico).
 
 ## Manejo de errores
 
-La regla que ordena esta sección: **el icono nunca muere**. Es lo que separa una
-app que la gente ancla de una que desinstala.
+La regla: **el icono nunca muere.**
 
 | Fallo | Comportamiento |
 |---|---|
-| El servidor no arranca | El menú lo indica; el pulso de disco sigue funcionando |
-| El escaneo falla o se cuelga | Se refleja en el menú; no bloquea la app |
-| La lectura de disco falla | El icono muestra estado desconocido y el texto `—`, nunca un número antiguo que mentiría |
-| El puerto elegido queda ocupado | Se reintenta con otro |
-
-Ningún fallo de una capa puede tumbar la de arriba.
+| La lectura de disco falla | Icono en estado desconocido y `—`, nunca un número viejo que mentiría |
+| El análisis falla o expira | Se refleja en el menú; el pulso sigue |
+| Falta acceso a disco completo | El menú lo dice y explica cómo concederlo |
+| El sidecar no existe para esta plataforma | El menú lo dice; la app sigue mostrando el pulso |
 
 ## Pruebas
 
-- **Rust:** tests unitarios de la lógica sin dependencias del sistema — el mapeo
-  de porcentaje a color, el umbral de redibujado, el formateo de tamaños.
-- **Existentes:** los 69 de frontend y 151 de backend siguen pasando sin cambios.
-  El flag `--host` nuevo lleva su propio test.
-- **Manual, lo que solo se ve mirando:** que el icono aparezca en la barra; que
-  el relleno se mueva al cambiar el espacio libre; que se lea en tema claro y
-  oscuro; que el panel abra y muestre datos; que al salir no quede ningún proceso
-  Python vivo.
+- **Rust:** lógica sin dependencias del sistema — el mapeo de estado a icono, los
+  umbrales combinados de porcentaje y GB, el formateo.
+- **Consistencia:** un test que compara la lectura de `sysinfo` con la del motor
+  Python y falla si divergen más de un margen pequeño.
+- **CI:** `cargo test` y `cargo clippy` en el workflow existente. Este proyecto
+  tiene 151 tests de backend y 69 de frontend, ambos en CI; un lenguaje nuevo no
+  entra sin la misma disciplina.
+- **Manual, lo que solo se ve mirando:** icono legible en tema claro y oscuro, con
+  "Reducir transparencia", y sobre fondos claros y oscuros; que el estado cambie al
+  liberar espacio; que no aparezca en el Dock ni en Cmd+Tab; que al salir no quede
+  ningún proceso vivo.
 
 ## Fuera de alcance
 
-Explícitamente no entra aquí, para que nadie lo dé por supuesto:
+- **Linux y Windows.** Documentados arriba con sus obstáculos concretos.
+- **Vigilancia de carpetas.** Rebanada B.
+- **El panel como ventana Tauri**, y con él el ciclo de vida del servidor, el CORS
+  y la decisión sobre exponer la terminal. Rebanada C.
+- **Reescribir la interfaz web.**
 
-- **Firma, notarización e instaladores.** Subsistema 3. En desarrollo se apunta
-  al `venv` existente y no se empaqueta Python todavía.
-- **Vigilancia de carpetas en tiempo real.** Subsistema 2. El "tiempo real" de
-  este subsistema es el pulso del disco, no la detección de cambios.
-- **Reescribir la interfaz web.** Se reutiliza como está.
+Cuando llegue la rebanada C hay una decisión pendiente que conviene no olvidar:
+**si el servidor que lanza la app debe llevar la terminal desactivada.** Un clic
+que expone un shell interactivo es muy distinto de escribir `make web` a
+conciencia, y `CLAUDE.md` ya advierte de que ese terminal con `sudo` da acceso
+root.
+
+## Qué cambió y por qué
+
+Cinco revisiones adversariales sobre la v1. Lo que encontraron:
+
+| Hallazgo | Efecto en el diseño |
+|---|---|
+| GNOME no tiene bandeja; Linux no acepta píxeles en memoria | Alcance reducido a macOS, con los obstáculos documentados |
+| El servidor no importa en Windows por el PTY | Idem, y desmiente el "motor sin cambios" de la v1 |
+| PyInstaller no compila cruzado | El empaquetado deja de ser aplazable |
+| El panel arrastra los problemas más difíciles | Se mueve a la última rebanada |
+| `reload=True` y `os.setsid()` rompen la promesa de "sin huérfanos" | Anotado para la rebanada C; grupos de procesos en la A |
+| Umbrales por porcentaje mal en discos grandes y pequeños | Umbrales combinados con espacio absoluto |
+| Dos contabilidades de disco distintas divergirán | Test de consistencia contra el motor |
+| El icono en color pierde más de lo dicho | Contrapartida completa y verificación explícita |
+| `LSUIElement`, acceso a disco completo y pantalla completa sin considerar | Secciones propias |
+| El rasterizador es sobreingeniería | Imágenes pre-generadas |
+| Autoarranque no pedido y poco fiable sin firma | Fuera de la rebanada A |
+| Sin permisos de Tauri declarados | Sección propia |
+| Sin CI para Rust | Añadido |
+| La rebanada A no entrega "tiempo real" | Dicho explícitamente en vez de implícito |
+
+Una crítica se descartó: un reviewer señaló colisión con la rama de la Fase 4 sin
+mergear. Ya está mergeada (PR #9).
+
+Las afirmaciones sobre la API de Tauri **sí resistieron**: el icono desde RGBA, el
+reparto de `setTitle` por plataforma, la API de bandeja en JavaScript, los
+sidecars con streaming y el plugin de autoarranque se verificaron todos correctos
+contra la documentación. El diseño no se equivocaba sobre Tauri; se equivocaba en
+todo lo que lo rodea.
