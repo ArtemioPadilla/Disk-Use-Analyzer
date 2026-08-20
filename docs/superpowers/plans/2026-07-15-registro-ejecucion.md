@@ -570,6 +570,30 @@ ps -ax -o command | grep disk_analyzer.py
 Hay un test que fija la disposición real de Tauri, precisamente porque la reserva
 hace que este fallo sea invisible donde se desarrolla.
 
+### El release
+
+Publicado como [v0.1.1](https://github.com/ArtemioPadilla/Disk-Use-Analyzer/releases/tag/v0.1.1):
+un `.zip` de 35 MB con la `.app` autocontenida. `empaquetar-release.sh` lo
+construye entero.
+
+Dos cosas salieron al prepararlo:
+
+- **Tauri no firma el bundle.** Deja el ejecutable con la firma del enlazador,
+  pero la `.app` queda sin `_CodeSignature` y con `Sealed Resources=none`, así
+  que `codesign --verify` la rechaza con *"code has no resources but signature
+  indicates they must be present"* — y macOS puede matar una app en ese estado
+  por considerarla dañada. Se firma ad hoc de dentro hacia fuera, tras lo cual el
+  identificador pasa de `desktop-<hash>` a `dev.diskanalyzer.app`.
+- **Los temporales sobrevivían a un cierre forzoso.** El hilo que espera al hijo
+  los borra al terminar, pero con un `SIGKILL` no corre nadie. Ahora se barren al
+  arrancar. El primer intento daba por muerto todo lo que `kill(pid, 0)` no
+  devolviera 0, y eso habría borrado el informe de un análisis lanzado con `sudo`
+  mientras corría: para un proceso de otro usuario devuelve `EPERM`, no `ESRCH`.
+
+Verificado descargando el artefacto publicado desde GitHub: el sha256 coincide,
+la firma sobrevive al viaje, la app arranca desde una ruta arbitraria y el
+análisis usa el intérprete de dentro de su propio bundle.
+
 ### Lo que queda fuera de esta rebanada
 
 Vigilancia de carpetas, la ventana del panel, Linux y Windows: declarado fuera en

@@ -55,11 +55,15 @@ propios planes.
 
 | Rebanada | Alcance | Estado |
 |---|---|---|
-| A | Icono de estado en vivo y análisis bajo demanda | ✅ Completa en `feat/app-bandeja-tauri` |
+| A | Icono de estado en vivo y análisis bajo demanda | ✅ Completa, mergeada a `main` y **publicada** en [v0.1.1](https://github.com/ArtemioPadilla/Disk-Use-Analyzer/releases/latest) |
 | B | Vigilancia de carpetas y notificaciones | Pendiente, sin plan |
 | C | Ventana del panel con las gráficas | Pendiente, sin plan |
 
-Dos cosas de la rebanada A que sorprenden si no las sabes:
+La app se distribuye ya: `./desktop/tools/empaquetar-release.sh v0.1.1` construye
+el artefacto de principio a fin (motor, compilación, firma ad hoc y compresión) y
+lo deja en `desktop/dist/`.
+
+Cosas de la rebanada A que sorprenden si no las sabes:
 
 - **Los ~47 MB del motor empaquetado no están en git.** Se regeneran con
   `./desktop/tools/preparar-motor.sh`, que hay que ejecutar **antes** de
