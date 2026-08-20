@@ -656,6 +656,20 @@ git commit -m "ci: tests de Rust, y cerrar el registro de la rebanada A"
 
 ---
 
+## Deuda menor anotada durante la ejecución
+
+Detectada en la revisión del Task 2, no bloquea esta rebanada:
+
+- `desktop/src-tauri/capabilities/default.json` declara `"windows": ["main"]`,
+  un ámbito huérfano heredado de la plantilla: no existe ninguna ventana con ese
+  nombre. Es inerte mientras no haya webview desde el que invocar comandos, pero
+  **no debe copiarse tal cual a la rebanada C**, que sí abre ventana.
+- `tauri-plugin-opener` está declarado y registrado pero nadie lo usa.
+- `desktop/README.md` es la plantilla genérica sin tocar.
+- El frontend de ejemplo en `desktop/src/` se conserva a propósito: Tauri exige
+  un `frontendDist` válido aunque no se abra ninguna ventana.
+
+
 ## Self-Review
 
 **1. Cobertura del spec:** las decisiones bloqueantes son el Task 1; la lectura consistente el 3 (con el test que la medición hizo obligatoria); los umbrales combinados el 4; el proceso único con grupo de procesos el 5; el empaquetado y el runbook el 6; el CI el 7. La política de accesorio y los permisos de Tauri están en el 2. Queda fuera lo que el spec declara fuera: vigilancia de carpetas, ventana del panel, Linux y Windows.
