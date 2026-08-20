@@ -1,9 +1,89 @@
 # Diseño — App de bandeja con Tauri
 
-> **Revisión 2.** La primera versión fue sometida a cinco revisiones adversariales
-> y no sobrevivió intacta. Los errores encontrados y las decisiones que provocaron
-> están al final, en "Qué cambió y por qué". Vale la pena leerlo: varias
-> afirmaciones de la v1 eran directamente falsas.
+> **Revisión 3.** La v1 pasó por cinco revisiones adversariales y no sobrevivió
+> intacta. La v2 corrigió el alcance. Esta v3 añade lo que faltaba de método:
+> decisiones humanas que bloquean, mediciones reales en vez de adjetivos,
+> etiquetado de lo que no está verificado, y un runbook con marcha atrás. El
+> historial de cambios está al final.
+
+---
+
+## Decisiones bloqueantes (humanas, no delegables a un agente)
+
+**Ninguna otra tarea empieza hasta que estas estén cerradas.** Son caras o
+imposibles de revertir una vez que hay código encima, y ninguna debe decidirla un
+subagente por su cuenta.
+
+### D1 — El identificador del bundle
+
+Propuesto: `dev.diskanalyzer.app`.
+
+En macOS el identificador es la identidad del bundle a la que el sistema ata los
+permisos concedidos (acceso a disco completo, entre otros). Cambiarlo después
+significa que el usuario vuelve a conceder permisos y que las preferencias
+guardadas quedan huérfanas. Requiere tu visto bueno explícito antes de escribirlo
+en `tauri.conf.json`.
+
+### D2 — Si el análisis de `/` entra en la versión 1
+
+Analizar el disco completo exige **acceso a disco completo**, un permiso que el
+usuario concede a mano en Ajustes del Sistema y que macOS ata a la identidad
+firmada. Sin firma se pierde en cada recompilación.
+
+- **Opción A — solo el directorio personal en la v1.** No requiere el permiso.
+  La app funciona desde el primer arranque sin fricción. Es lo que recomiendo.
+- **Opción B — disco completo desde el día uno.** Obliga a resolver firma y
+  concesión de permisos antes de tener nada usable, y a diseñar cómo se le pide
+  al usuario.
+
+La elección determina si la firma es un requisito de la primera rebanada o puede
+ir después.
+
+### D3 — Qué hace "Analizar ahora" dado lo que cuesta de verdad
+
+Medido en esta máquina (ver "Lo medido"): un análisis tarda **entre 25 y 60
+segundos**, no los "~20" que afirmaba la v1. Un menú que se queda un minuto
+pensando es un problema de diseño, no un detalle.
+
+- **Opción A — con progreso y cancelable.** El menú muestra avance y permite
+  abortar. Más trabajo, comportamiento honesto.
+- **Opción B — abrir el analizador web y que el análisis ocurra allí**, donde ya
+  existe barra de progreso por WebSocket. Menos código nuevo, pero rompe la
+  premisa de "todo desde la barra".
+
+---
+
+## Lo medido
+
+La v1 no medía nada; decía "barato" y "~20 segundos". Estas cifras son de esta
+máquina, tomadas al escribir la v3. **Vuelve a medirlas si el hardware cambia.**
+
+| Qué | Medido | Implicación |
+|---|---|---|
+| Leer el espacio de disco (`statvfs`) | **0,7 µs** por llamada (~1,4 M/s) | El pulso del icono es efectivamente gratis. Refrescar cada pocos segundos no necesita justificación |
+| Análisis de `~/Downloads` (1.855 archivos) | **61 s** | Un análisis no es una acción de menú instantánea |
+| Análisis del repositorio (399 archivos) | **25 s** | El coste no escala con el número de archivos: lo dominan el hashing de duplicados y el sondeo de cachés |
+
+### La divergencia que obliga al test de consistencia
+
+Esto es lo más importante que salió de medir. Sobre el mismo disco, ahora mismo:
+
+| Fuente | Usado | Porcentaje | Libre |
+|---|---|---|---|
+| El motor (`total - available`) | 444,84 GB de 460,43 | **96,6 %** | 15,59 GB |
+| La columna `used` de `df` | 11,71 GB | **43 %** | 15,59 GB |
+
+No es un matiz: es la diferencia entre "va bien" y "crítico". Ocurre porque en
+APFS `/` es el volumen de sistema de solo lectura, así que `df` cuenta solo ese
+volumen mientras el espacio libre corresponde al contenedor compartido.
+
+**Si `sysinfo` en Rust reporta como `df`, la bandeja dirá 43 % mientras el
+informe dice 96,6 %.** El test de consistencia entre ambas lecturas deja de ser
+una buena práctica y pasa a ser un requisito: sin él, el número que justifica la
+app entera puede estar mal por 53 puntos.
+
+De paso, la cifra real de esta máquina (15,59 GB libres) confirma por qué los
+umbrales necesitan espacio absoluto y no solo proporción.
 
 ## Qué construimos
 
@@ -239,6 +319,70 @@ que expone un shell interactivo es muy distinto de escribir `make web` a
 conciencia, y `CLAUDE.md` ya advierte de que ese terminal con `sudo` da acceso
 root.
 
+
+## Qué está verificado y qué no
+
+La v1 presentaba con la misma confianza lo comprobado y lo supuesto. Esta tabla
+separa las tres cosas. **Lo no verificado lleva plan B**, para que descubrirlo
+falso no bloquee.
+
+| Afirmación | Estado | Si resulta falsa |
+|---|---|---|
+| Tauri acepta un icono construido desde píxeles RGBA en memoria | Verificado contra `docs.rs` en la revisión adversarial | Irrelevante: la v2 ya pasó a imágenes pre-generadas |
+| `setTitle` funciona en macOS, no en Windows | Verificado contra `docs.rs` | El texto ya es opcional y apagado por defecto |
+| La API de bandeja está expuesta a JavaScript | Verificado | Se escribe en Rust; más código, mismo resultado |
+| Sidecars vía `externalBin` + plugin `shell` con streaming | Verificado | — |
+| El plugin `autostart` cubre macOS | Verificado | Ya está fuera de la rebanada A |
+| `ActivationPolicy::Accessory` evita el icono del Dock | **De la revisión, no probado por mí** | Alternativa: `LSUIElement` en el `Info.plist` del bundle |
+| macOS 26 aplica su ajuste de estilo de iconos y el nuestro quedaría fuera | **No verificado** — no tengo esa versión a mano | Es cosmético; se comprueba al probar en esa versión |
+| `sysinfo` coincide con el motor Python | **Refutado como riesgo real** (ver "Lo medido") | El test de consistencia es obligatorio, no opcional |
+| Un análisis tarda "~20 s" | **Refutado por medición**: 25-60 s | Motivó la decisión D3 |
+
+## Runbook y marcha atrás
+
+Un entregable, no una nota. Va en `docs/runbooks/app-bandeja.md`.
+
+### Instalar y desinstalar
+
+Desinstalar no es solo borrar la `.app`: quedan el elemento de inicio de sesión si
+se activó, las preferencias en `~/Library/Preferences/<identificador>.plist`, y la
+concesión de acceso a disco completo. El runbook lista los tres y cómo quitarlos.
+
+### Revocar el acceso a disco completo
+
+Ajustes del Sistema → Privacidad y seguridad → Acceso a disco completo → quitar la
+entrada. **Importante:** macOS ata la concesión a la identidad firmada, así que
+tras recompilar con otra firma la entrada vieja queda huérfana y hay que
+eliminarla a mano antes de volver a conceder; si no, el sistema muestra la app
+como autorizada mientras el binario nuevo no lo está.
+
+### Si la notarización rechaza el bundle
+
+Apple devuelve un identificador de envío. `xcrun notarytool log <id>` da el motivo
+real; el mensaje de rechazo por sí solo no basta. Los rechazos habituales de una
+app que empaqueta un binario de Python son: falta de *hardened runtime*, binarios
+anidados sin firmar (el intérprete y sus extensiones `.so` se firman por
+separado), y falta de marca de tiempo segura. **Lee el log antes de reintentar**;
+reenviar sin cambios devuelve el mismo rechazo.
+
+### Secretos
+
+El certificado de firma vive en el llavero, **nunca en el repositorio**. Si el
+empaquetado pasa por CI, el certificado exportado y su contraseña van como
+secretos del repositorio, y el `.gitignore` cubre `*.p12` y `*.cer` como defensa
+en profundidad por si alguien deja una copia suelta.
+
+### Volver atrás
+
+- **Una versión mala ya instalada:** no hay actualizador en la rebanada A, así que
+  volver atrás es reinstalar la anterior. Conserva la `.app` previa hasta validar
+  la nueva.
+- **La app no arranca tras firmar:** `spctl -a -vvv <ruta>.app` dice si Gatekeeper
+  la rechaza y por qué.
+- **Rendirse limpiamente:** desinstalar según arriba deja la máquina como estaba.
+  El CLI y la interfaz web siguen funcionando: la app de bandeja no sustituye
+  nada, solo añade.
+
 ## Qué cambió y por qué
 
 Cinco revisiones adversariales sobre la v1. Lo que encontraron:
@@ -268,3 +412,19 @@ reparto de `setTitle` por plataforma, la API de bandeja en JavaScript, los
 sidecars con streaming y el plugin de autoarranque se verificaron todos correctos
 contra la documentación. El diseño no se equivocaba sobre Tauri; se equivocaba en
 todo lo que lo rodea.
+
+### Cambios de la revisión 3
+
+Provocados por comparar este documento con un plan de Tauri/Android de un
+proyecto hermano, que resultó más maduro en método:
+
+| Qué faltaba | Añadido |
+|---|---|
+| Las decisiones abiertas estaban en prosa, sin puerta | Sección de decisiones bloqueantes al principio, marcadas como no delegables |
+| Cero mediciones; "barato" y "~20 s" eran adjetivos | Sección "Lo medido" con cifras reales — y una de ellas refutó el diseño |
+| Lo verificado y lo supuesto se presentaban igual | Tabla de estado de cada afirmación, con plan B para lo no verificado |
+| Sin runbook ni marcha atrás | Runbook con desinstalación, revocación de permisos, lectura del log de notarización y vuelta atrás |
+
+La medición que más cambió el diseño: el motor y `df` difieren en **53 puntos
+porcentuales** sobre el mismo disco. El test de consistencia pasó de buena
+práctica a requisito.
