@@ -143,8 +143,15 @@ pub fn run() {
             // opción está apagada.
             if !hay_motor {
                 let _ = analizar_item.set_enabled(false);
-                let _ = estado_analisis_item
-                    .set_text("Motor de análisis no encontrado");
+                let _ = estado_analisis_item.set_text("Motor de análisis no encontrado");
+            } else if !analisis::hay_acceso_total_al_disco() {
+                // Decirlo al arrancar y no al terminar: el escaneo del disco
+                // completo tarda un par de minutos, y hacer esperar todo eso
+                // para anunciar un permiso que falta desde el principio es
+                // gratuito.
+                let _ = estado_analisis_item.set_text(
+                    "Sin acceso total al disco: el análisis saldrá incompleto",
+                );
             }
 
             let mut tray_builder = TrayIconBuilder::new().menu(&menu).show_menu_on_left_click(true);

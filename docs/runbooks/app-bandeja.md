@@ -152,9 +152,18 @@ elige la `.app`. Después **cierra y vuelve a abrir la app**: macOS no reevalúa
 el permiso de un proceso ya en marcha.
 
 Sin este permiso el análisis **no falla**: el motor se salta los directorios
-protegidos y termina con éxito, con un informe incompleto. Por eso el menú
-detecta los errores de permisos en el informe y lo dice explícitamente en vez de
-callarse.
+protegidos y termina con éxito, con un informe incompleto. La app lo detecta
+sondeando directamente si puede listar
+`~/Library/Application Support/com.apple.TCC`, y lo dice en el menú **al
+arrancar**, sin hacerte esperar a un escaneo que tarda minutos.
+
+**No confundas esto con los directorios que piden `sudo`.** Un escaneo del disco
+entero siempre topa con un puñado de carpetas de `root` en modo 700
+—`/usr/sbin/authserver`, cachés de Apple, algún antivirus— que no se leen ni con
+Acceso total al disco. Medido en la máquina de desarrollo con el permiso
+concedido: 10 carpetas así, ninguna protegida por TCC. La app las reporta aparte,
+como "N carpetas de sistema omitidas, piden sudo", en vez de mandarte a activar
+un permiso que ya tienes.
 
 ### Revocarlo, y la trampa de la entrada huérfana
 
