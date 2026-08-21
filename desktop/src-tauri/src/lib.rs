@@ -9,16 +9,16 @@ use tauri::Manager;
 pub mod analisis;
 pub mod disk;
 pub mod estado;
+pub mod servidor;
 
 use analisis::AnalisisManager;
+use servidor::Servidor;
 use disk::DiskUsage;
 use estado::Estado;
 
 /// Disk usage costs 0.7 µs to read (measured) -- 5s is plenty responsive
 /// without needing any justification for the cost.
 const POLL_INTERVAL: Duration = Duration::from_secs(5);
-
-const URL_ANALIZADOR_COMPLETO: &str = "http://localhost:8000/";
 
 fn gb(bytes: u64) -> f64 {
     bytes as f64 / (1024.0 * 1024.0 * 1024.0)
@@ -130,12 +130,14 @@ pub fn run() {
 
             let motor = analisis::localizar_motor(app.path().resource_dir().ok());
             let hay_motor = motor.is_some();
-            let manager = Arc::new(AnalisisManager::new(motor));
+            let manager = Arc::new(AnalisisManager::new(motor.clone()));
+            let servidor = Arc::new(Servidor::new());
             // Managed state so the shutdown handler in `run()` below (which
             // runs outside `setup` and has no closure access to `manager`)
             // can still reach it to guarantee cleanup on any exit path, not
             // just the "quit" menu item.
             app.manage(Arc::clone(&manager));
+            app.manage(Arc::clone(&servidor));
 
             // Decirlo desde el arranque, no solo al pulsar: sin motor, el
             // indicador de disco sigue siendo perfectamente útil, así que la
@@ -168,11 +170,17 @@ pub fn run() {
 
             let tray = {
                 let manager = Arc::clone(&manager);
+                let servidor = Arc::clone(&servidor);
+                let motor_web = motor.clone();
+                let abrir_item = abrir_item.clone();
                 let analizar_item = analizar_item.clone();
                 let estado_analisis_item = estado_analisis_item.clone();
                 tray_builder
                     .on_menu_event(move |app, event| {
                         if event.id() == "quit" {
+                            // El servidor web también: lo arrancamos nosotros,
+                            // así que no debe sobrevivirnos ocupando el 8000.
+                            servidor.kill_blocking();
                             // Block briefly (bounded by KILL_REAP_TIMEOUT)
                             // so the scan's process group is confirmed dead
                             // before the app actually tears down -- "no
@@ -181,10 +189,24 @@ pub fn run() {
                             manager.kill_blocking();
                             app.exit(0);
                         } else if event.id() == "abrir" {
-                            let _ = tauri_plugin_opener::open_url(
-                                URL_ANALIZADOR_COMPLETO,
-                                None::<&str>,
-                            );
+                            // Arrancar FastAPI lleva varios segundos, así que
+                            // el ítem lo dice en vez de parecer que el clic no
+                            // hizo nada.
+                            let volver = abrir_item.clone();
+                            let _ = abrir_item.set_text("Arrancando el analizador…");
+                            let _ = abrir_item.set_enabled(false);
+                            servidor.abrir(motor_web.as_ref(), move |resultado| {
+                                let _ = volver.set_enabled(true);
+                                match resultado {
+                                    Ok(url) => {
+                                        let _ = volver.set_text("Abrir analizador completo");
+                                        let _ = tauri_plugin_opener::open_url(url, None::<&str>);
+                                    }
+                                    Err(e) => {
+                                        let _ = volver.set_text(format!("No se pudo abrir: {e}"));
+                                    }
+                                }
+                            });
                         } else if event.id() == "analizar" {
                             if manager.is_running() {
                                 if manager.cancel() {
@@ -261,6 +283,9 @@ pub fn run() {
             if let tauri::RunEvent::ExitRequested { .. } = event {
                 if let Some(manager) = app_handle.try_state::<Arc<AnalisisManager>>() {
                     manager.kill_blocking();
+                }
+                if let Some(servidor) = app_handle.try_state::<Arc<Servidor>>() {
+                    servidor.kill_blocking();
                 }
             }
         });

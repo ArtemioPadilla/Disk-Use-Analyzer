@@ -11,10 +11,38 @@ desinstalarla del todo y volver atrás cuando algo sale mal.
 
 ## Qué lleva dentro, y qué le falta
 
-La `.app` es **autocontenida**: pesa unos 92 MB porque lleva su propio CPython
+La `.app` es **autocontenida**: pesa unos 122 MB porque lleva su propio CPython
 —una compilación de [python-build-standalone](https://github.com/astral-sh/python-build-standalone),
-recortada— y una copia del motor de análisis. No necesita este repositorio, ni
-`venv-web`, ni ningún Python instalado en el sistema. Se puede mover a otro Mac.
+recortada—, una copia del motor de análisis y el servidor web completo con sus
+dependencias (FastAPI, uvicorn) y el frontend ya construido. No necesita este
+repositorio, ni `venv-web`, ni ningún Python instalado en el sistema. Se puede
+mover a otro Mac.
+
+## "Abrir analizador completo"
+
+El ítem arranca el servidor web empaquetado y abre el navegador en él. Si ya
+había uno escuchando en el 8000 —por ejemplo un `make web` tuyo—, lo reutiliza
+en vez de pelearse por el puerto.
+
+**Se ata solo a `127.0.0.1`, no a toda la red.** El servidor por defecto escucha
+en `0.0.0.0` porque el acceso desde otros dispositivos es una función
+documentada de `make web`. Pero desde la bandeja lo arranca un clic, y la
+interfaz web incluye una terminal que corre con tus privilegios: publicarla en
+la red sin que nadie lo haya pedido sería una sorpresa desagradable. La app le
+pasa `--host 127.0.0.1`, un flag que se añadió para esto.
+
+El token de autenticación viaja por la variable de entorno
+`DISK_ANALYZER_TOKEN`, no por la línea de órdenes: el servidor corre con
+`reload=True`, así que uvicorn reimporta el módulo en un subproceso y lo que
+solo existe en el bloque `__main__` no llega al worker que atiende las
+peticiones.
+
+Al salir de la app, el servidor muere con ella. Se lanza en su propio grupo de
+procesos justamente por eso: uvicorn con recarga levanta un worker aparte, y
+matar solo al proceso lanzado dejaría ese worker vivo ocupando el puerto.
+
+Si algo va mal, el propio ítem del menú lo dice ("No se pudo abrir: …") en vez
+de abrir una pestaña con un error de conexión, que es lo que hacía antes.
 
 Lo que sí le falta: **no está firmada ni notarizada** (decisión D4, sin cuenta de
 desarrollador de Apple). Gatekeeper la bloquea con doble clic; hay que abrirla la
