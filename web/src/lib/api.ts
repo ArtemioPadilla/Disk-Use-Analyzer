@@ -2,6 +2,28 @@ import { authHeaders, notifyAuthInvalid } from './auth';
 
 const BASE = '/api';
 
+/**
+ * Fired when the server can't be reached at all — the fetch itself rejects
+ * before there is any response to inspect.
+ *
+ * This is not the same as a 401, and it used to fall through every branch of
+ * `request()`: the tab just filled the console with ERR_CONNECTION_REFUSED
+ * and the page looked frozen. It happens routinely, because the menu-bar app
+ * starts this server and kills it again when the app quits, leaving whatever
+ * tabs were open pointing at a dead port.
+ */
+export const SERVER_DOWN_EVENT = 'server:down';
+
+// Deduped for the same reason as the auth notification: a single click can
+// fire several parallel calls, and one banner per failed call would be noise.
+let servidorCaidoAvisado = false;
+
+function notifyServerDown(): void {
+  if (typeof window === 'undefined' || servidorCaidoAvisado) return;
+  servidorCaidoAvisado = true;
+  window.dispatchEvent(new CustomEvent(SERVER_DOWN_EVENT));
+}
+
 export interface SystemInfo {
   platform: string;
   hostname: string;
@@ -94,10 +116,18 @@ export interface SessionResults {
 }
 
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
-  const res = await fetch(`${BASE}${path}`, {
-    ...options,
-    headers: { 'Content-Type': 'application/json', ...authHeaders(), ...(options?.headers ?? {}) },
-  });
+  let res: Response;
+  try {
+    res = await fetch(`${BASE}${path}`, {
+      ...options,
+      headers: { 'Content-Type': 'application/json', ...authHeaders(), ...(options?.headers ?? {}) },
+    });
+  } catch (e) {
+    // `fetch` only rejects when the request never got a reply: server down,
+    // DNS, connection refused. Anything with a status code lands below.
+    notifyServerDown();
+    throw new Error(`No se pudo conectar con el servidor: ${(e as Error).message}`);
+  }
   if (res.status === 401) {
     // Stale/invalid token — most commonly because the server was restarted
     // (it mints a new token per run) and this tab still has the old one in
