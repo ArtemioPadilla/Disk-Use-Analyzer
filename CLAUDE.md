@@ -171,10 +171,16 @@ The project has three interfaces: CLI, GUI, and Web.
 - **Build:** `cd desktop && npm run tauri build -- --bundles app`
 - **Tests:** `cargo test --manifest-path desktop/src-tauri/Cargo.toml` (also run by `make test`)
 - **Bundled engine:** the `.app` ships its own trimmed CPython
-  (python-build-standalone) plus a copy of the engine, so it needs neither this
-  repo nor a system Python. Those ~47 MB are **not in git** — run
+  (python-build-standalone), a copy of the analysis engine, and the whole web
+  server (FastAPI/uvicorn plus the built Astro frontend), so it needs neither
+  this repo nor a system Python. Those ~77 MB are **not in git** — run
   `./desktop/tools/preparar-motor.sh` before `npm run tauri build`, or the
   `.app` builds without an engine.
+- **"Abrir analizador completo" starts that bundled server** and opens the
+  browser on it, passing `--host 127.0.0.1`: the web UI includes a terminal
+  running with the user's privileges, so a menu click must not publish it to
+  the LAN. `disk_analyzer_web.py` still defaults to `0.0.0.0` — that is the
+  documented `make web` behaviour and tests pin both halves.
 - **Two things that will surprise you:** the app falls back to
   `venv-web/bin/python` when no bundled engine is found, which means a broken
   packaging looks fine on a dev machine — check with

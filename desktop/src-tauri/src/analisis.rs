@@ -81,6 +81,17 @@ pub fn hay_acceso_total_al_disco() -> bool {
     std::fs::read_dir(Path::new(&home).join("Library/Application Support/com.apple.TCC")).is_ok()
 }
 
+impl Motor {
+    pub fn python(&self) -> &Path {
+        &self.python
+    }
+    /// Directorio desde el que se lanza el motor. Es también donde viven sus
+    /// módulos y sus dependencias, así que Python los encuentra solo.
+    pub fn cwd(&self) -> &Path {
+        &self.cwd
+    }
+}
+
 impl Resultado {
     /// Spanish, user-facing summary for the "estado_analisis" menu line.
     pub fn resumen(&self) -> String {

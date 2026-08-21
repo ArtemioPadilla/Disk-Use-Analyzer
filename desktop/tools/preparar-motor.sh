@@ -68,7 +68,29 @@ echo "▸ Copiando el motor…"
 cd "$REPO_ROOT"
 cp disk_analyzer.py disk_analyzer_core.py "$DESTINO/"
 cp -R analyzer "$DESTINO/analyzer"
-find "$DESTINO/analyzer" -name "__pycache__" -type d -prune -exec rm -rf {} + 2>/dev/null || true
+
+# El servidor web, para que "Abrir analizador completo" funcione sin depender
+# de este repositorio. `disk_analyzer_web.py` resuelve sus rutas con
+# `Path(__file__).parent`, así que `web/dist` y `static/` tienen que quedar
+# exactamente donde están aquí, relativos a él.
+echo "▸ Copiando el servidor web…"
+if [ ! -d web/dist ]; then
+  echo "  El frontend no está construido. Construyéndolo…"
+  (cd web && npm run build >/dev/null)
+fi
+cp disk_analyzer_web.py pty_manager.py agents_manager.py persona_detector.py "$DESTINO/"
+mkdir -p "$DESTINO/web"
+cp -R web/dist "$DESTINO/web/dist"
+cp -R static "$DESTINO/static"
+
+# Las dependencias del servidor, instaladas al lado del código. Se usa el pip
+# del venv del repositorio porque el intérprete empaquetado viene sin pip (lo
+# quita el recorte de arriba); las ruedas valen igual, porque son de la misma
+# versión de Python y la misma arquitectura.
+echo "▸ Instalando las dependencias del servidor (~25 MB)…"
+venv-web/bin/pip install -q --target "$DESTINO" -r requirements-web.txt
+
+find "$DESTINO" -name "__pycache__" -type d -prune -exec rm -rf {} + 2>/dev/null || true
 
 echo "▸ Comprobando que arranca…"
 "$DESTINO/python/bin/python3" -c "
@@ -77,5 +99,7 @@ from disk_analyzer_core import DiskAnalyzerCore
 d = DiskAnalyzerCore('.').get_disk_usage()
 assert d['total'] > 0
 print('  ✓ motor operativo:', round(d['total']/1024**3, 1), 'GB totales')
+import fastapi, uvicorn  # noqa: F401
+print('  ✓ servidor web importable')
 "
 echo "▸ Listo: $DESTINO ($(du -sh "$DESTINO" | cut -f1))"

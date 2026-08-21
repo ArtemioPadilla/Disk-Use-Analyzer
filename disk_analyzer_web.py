@@ -1418,6 +1418,15 @@ if __name__ == "__main__":
     parser.add_argument("--port", type=int, default=8000, help="Server port (default: 8000)")
     parser.add_argument("--no-auth", action="store_true",
                         help="Disable token auth (only on a fully trusted, isolated network)")
+    # The default stays 0.0.0.0 so `make web` keeps working from other devices
+    # on the LAN, which is a documented feature. The menu-bar app passes
+    # 127.0.0.1 instead: it starts this server on a single click, and the web
+    # UI includes a terminal running with the user's privileges, so exposing
+    # it to the whole network without the user ever asking would be a nasty
+    # surprise.
+    parser.add_argument("--host", default="0.0.0.0",
+                        help="Interface to bind (default: 0.0.0.0, the whole LAN; "
+                             "use 127.0.0.1 to keep it on this machine only)")
     args = parser.parse_args()
 
     app.state.default_min_size_mb = args.min_size
@@ -1446,14 +1455,16 @@ if __name__ == "__main__":
         suffix = f"/?token={token}"
     print(f"\n📍 Accede a la interfaz web en:")
     print(f"   Local:   http://localhost:{args.port}{suffix}")
-    if local_ip != "localhost":
+    # Only when actually reachable from the LAN: bound to loopback, that URL
+    # would be a lie, and the user would waste time trying it from a phone.
+    if local_ip != "localhost" and args.host not in ("127.0.0.1", "localhost", "::1"):
         print(f"   Network: http://{local_ip}:{args.port}{suffix}")
     print(f"\nℹ️  Presiona Ctrl+C para detener el servidor")
     print("="*60 + "\n")
 
     uvicorn.run(
         "disk_analyzer_web:app",
-        host="0.0.0.0",
+        host=args.host,
         port=args.port,
         reload=True,
         log_level="info",
