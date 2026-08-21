@@ -55,8 +55,30 @@ pub enum Resultado {
     /// `PermissionError` per-directory and keeps going), so silence here
     /// would mean the very first thing a new user hits goes unexplained.
     SinPermisos,
+    /// El informe salió entero salvo unas pocas carpetas que ni con Acceso
+    /// total al disco se pueden leer: son de `root` con permisos 700 y solo
+    /// se abren con `sudo`. No es un fallo, y decir lo contrario mandaba al
+    /// usuario a activar un permiso que ya tenía.
+    Parcial(usize),
     Cancelado,
     Fallo(String),
+}
+
+/// Si esta app tiene concedido el Acceso total al disco.
+///
+/// Sonda directa en vez de deducirlo de los errores del informe: esa carpeta
+/// solo se puede listar con el permiso concedido. Deducirlo era el error
+/// original — un escaneo del disco entero **siempre** topa con unas pocas
+/// carpetas de `root` (`/usr/sbin/authserver`, cachés de Apple, algún
+/// antivirus), así que tomar cualquier error de permisos como "falta el
+/// Acceso total al disco" daba un falso positivo permanente. Medido en la
+/// máquina de desarrollo, con el permiso ya concedido: 10 errores, ninguno
+/// de ellos de una ruta protegida por TCC.
+pub fn hay_acceso_total_al_disco() -> bool {
+    let Some(home) = std::env::var_os("HOME") else {
+        return false;
+    };
+    std::fs::read_dir(Path::new(&home).join("Library/Application Support/com.apple.TCC")).is_ok()
 }
 
 impl Resultado {
@@ -69,6 +91,9 @@ impl Resultado {
                  Seguridad > Acceso total al disco y activa esta app"
                     .to_string()
             }
+            Resultado::Parcial(n) => format!(
+                "Último análisis: completado ({n} carpetas de sistema omitidas, piden sudo)"
+            ),
             Resultado::Cancelado => "Análisis cancelado".to_string(),
             Resultado::Fallo(msg) => format!("Error al analizar: {msg}"),
         }
@@ -245,7 +270,9 @@ impl AnalisisManager {
                 Resultado::Cancelado
             } else {
                 match status {
-                    Ok(status) if status.success() => evaluar_export(&export_path),
+                    Ok(status) if status.success() => {
+                        evaluar_export(&export_path, hay_acceso_total_al_disco())
+                    }
                     Ok(status) => Resultado::Fallo(leer_stderr_o_codigo(&stderr_path, status)),
                     Err(e) => Resultado::Fallo(format!("no se pudo esperar al proceso: {e}")),
                 }
@@ -419,7 +446,7 @@ fn comando_analisis(motor: &Motor) -> Result<Comando, String> {
 /// scan without Full Disk Access still exits 0 and produces a report; the
 /// only way to notice is to look at `errors` after the fact, which is
 /// exactly what this does.
-fn evaluar_export(export_path: &Path) -> Resultado {
+fn evaluar_export(export_path: &Path, hay_acceso_total: bool) -> Resultado {
     let contents = match std::fs::read_to_string(export_path) {
         Ok(c) => c,
         Err(e) => return Resultado::Fallo(format!("no se generó el reporte: {e}")),
@@ -428,22 +455,28 @@ fn evaluar_export(export_path: &Path) -> Resultado {
         Ok(v) => v,
         Err(e) => return Resultado::Fallo(format!("reporte ilegible: {e}")),
     };
-    let sin_permisos = json
+    let errores_de_permisos = json
         .get("errors")
         .and_then(|e| e.as_array())
         .map(|errores| {
-            errores.iter().any(|e| {
-                e.as_str()
-                    .map(|s| s.to_lowercase().contains("permisos"))
-                    .unwrap_or(false)
-            })
+            errores
+                .iter()
+                .filter(|e| {
+                    e.as_str()
+                        .map(|s| s.to_lowercase().contains("permiso"))
+                        .unwrap_or(false)
+                })
+                .count()
         })
-        .unwrap_or(false);
+        .unwrap_or(0);
 
-    if sin_permisos {
-        Resultado::SinPermisos
-    } else {
-        Resultado::Exito
+    match (errores_de_permisos, hay_acceso_total) {
+        (0, _) => Resultado::Exito,
+        // Sin el permiso concedido, los errores son la señal de que hay que
+        // concederlo: es el primer arranque de cualquier usuario nuevo.
+        (_, false) => Resultado::SinPermisos,
+        // Con el permiso ya concedido, lo que queda son carpetas de root.
+        (n, true) => Resultado::Parcial(n),
     }
 }
 
@@ -680,7 +713,7 @@ mod tests {
             r#"{"errors": ["Sin permisos: /Library/Application Support"]}"#,
         )
         .unwrap();
-        let resultado = evaluar_export(&ruta);
+        let resultado = evaluar_export(&ruta, false);
         let _ = std::fs::remove_file(&ruta);
 
         assert!(matches!(resultado, Resultado::SinPermisos));
@@ -726,11 +759,39 @@ mod tests {
         );
     }
 
+    /// Con el permiso ya concedido, unas pocas carpetas de `root` no son un
+    /// fallo del permiso. Mandar al usuario a activar lo que ya tiene
+    /// activado fue el bug real: un escaneo del disco entero siempre topa
+    /// con ellas, así que el aviso salía siempre.
+    #[test]
+    fn con_acceso_concedido_las_carpetas_de_root_no_piden_el_permiso() {
+        let ruta = ruta_temporal("json");
+        std::fs::write(
+            &ruta,
+            r#"{"errors": ["Sin permisos para leer: /usr/sbin/authserver",
+                           "Sin permisos para leer: /Library/Application Support/Avast/config/chest-data"]}"#,
+        )
+        .unwrap();
+        let resultado = evaluar_export(&ruta, true);
+        let _ = std::fs::remove_file(&ruta);
+
+        match resultado {
+            Resultado::Parcial(2) => {}
+            otro => panic!("esperaba Parcial(2), salió {otro:?}"),
+        }
+        let resumen = resultado.resumen();
+        assert!(
+            !resumen.contains("Acceso total al disco"),
+            "sigue pidiendo un permiso ya concedido: {resumen}"
+        );
+        assert!(resumen.contains("sudo"), "no dice cuál es el remedio real");
+    }
+
     #[test]
     fn un_export_limpio_es_exito() {
         let ruta = ruta_temporal("json");
         std::fs::write(&ruta, r#"{"errors": [], "total_size": 123}"#).unwrap();
-        let resultado = evaluar_export(&ruta);
+        let resultado = evaluar_export(&ruta, true);
         let _ = std::fs::remove_file(&ruta);
         assert!(matches!(resultado, Resultado::Exito));
     }
@@ -740,13 +801,13 @@ mod tests {
         // Silence here would be the worst outcome: the menu would claim the
         // scan completed while no report was ever written.
         assert!(matches!(
-            evaluar_export(Path::new("/no/existe/reporte.json")),
+            evaluar_export(Path::new("/no/existe/reporte.json"), true),
             Resultado::Fallo(_)
         ));
 
         let ruta = ruta_temporal("json");
         std::fs::write(&ruta, "esto no es json").unwrap();
-        let resultado = evaluar_export(&ruta);
+        let resultado = evaluar_export(&ruta, true);
         let _ = std::fs::remove_file(&ruta);
         assert!(matches!(resultado, Resultado::Fallo(_)));
     }
