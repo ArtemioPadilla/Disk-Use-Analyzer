@@ -916,6 +916,11 @@ class DiskAnalyzer:
         prestado.cache_locations = self.cache_locations
         prestado.large_files = self.large_files
         prestado.docker_stats = self.docker_stats
+        # Both classes name this attribute the same (self.min_size, bytes);
+        # propagate it so the shared Descargas Antiguas rule respects the
+        # size floor the CLI user configured, instead of always falling back
+        # to the core's own default.
+        prestado.min_size = self.min_size
         recommendations = prestado.generate_recommendations()
 
         recommendations.extend(self.detect_smart_recommendations())

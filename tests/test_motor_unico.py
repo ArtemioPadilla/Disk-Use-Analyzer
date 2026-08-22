@@ -12,7 +12,7 @@ de display en español y ya difiere entre copias ('Cache de Simuladores' contra
 import sys
 
 sys.path.insert(0, '.')
-from disk_analyzer import DiskAnalyzer
+from disk_analyzer import DiskAnalyzer, MB
 from disk_analyzer_core import DiskAnalyzerCore
 
 
@@ -53,3 +53,36 @@ def test_los_ids_no_se_repiten():
     core.find_cache_locations()
     ids = [r['id'] for r in core.generate_recommendations()]
     assert len(ids) == len(set(ids)), f"ids duplicados: {ids}"
+
+
+def _un_download_viejo():
+    return [{'path': '/Users/x/Downloads/old.zip', 'size': 5 * MB,
+              'age_days': 45, 'extension': '.zip'}]
+
+
+def test_descargas_antiguas_respeta_min_size_en_el_core():
+    """La regla del core tiene que reflejar self.min_size en el comando, no
+    un umbral fijo -- si no, 'Descargas Antiguas' lista hasta los ficheros
+    minúsculos, algo mucho menos útil que lo que mostraba la CLI antes de
+    la fusión."""
+    core = DiskAnalyzerCore('.', min_size_mb=42)
+    core.cache_locations = []
+    core.docker_stats = None
+    core.large_files = _un_download_viejo()
+    recs = {r['id']: r for r in core.generate_recommendations()}
+    assert 'descargas_antiguas' in recs
+    assert '+42M' in recs['descargas_antiguas']['command'], recs['descargas_antiguas']['command']
+
+
+def test_la_cli_propaga_min_size_al_core_prestado():
+    """Regresión: la delegación de disk_analyzer.py olvidaba pasar
+    min_size al DiskAnalyzerCore prestado, así que 'Descargas Antiguas'
+    dejaba de filtrar por tamaño para la CLI (y para la web, que comparte
+    la misma regla) sin que ningún test lo anclara."""
+    cli = DiskAnalyzer('.', min_size_mb=77)
+    cli.cache_locations = []
+    cli.docker_stats = None
+    cli.large_files = _un_download_viejo()
+    recs = {r['id']: r for r in cli.generate_recommendations()}
+    assert 'descargas_antiguas' in recs
+    assert '+77M' in recs['descargas_antiguas']['command'], recs['descargas_antiguas']['command']

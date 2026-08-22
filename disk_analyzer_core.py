@@ -626,9 +626,15 @@ class DiskAnalyzerCore:
         old_downloads = [f for f in self.large_files if '/Downloads/' in f['path'] and f['age_days'] > 30]
         if old_downloads:
             size = sum(f['size'] for f in old_downloads)
+            # Fold in the user's configured min_size (self.min_size, in bytes,
+            # set in __init__ with a 10 MB default) so the diagnostic only
+            # lists files worth reviewing -- without this, "old downloads"
+            # includes every tiny file older than 30 days, which is a
+            # longer and less useful list than what the CLI used to show.
+            min_size_mb = int(self.min_size / MB)
             recommendations.append({'id': 'descargas_antiguas', 'tier': 2, 'priority': 'Moderado', 'type': 'Descargas Antiguas',
                 'description': f'{len(old_downloads)} archivos ({self.format_size(size)})',
-                'space': size, 'command': 'find ~/Downloads -mtime +30 -type f -ls',
+                'space': size, 'command': f'find ~/Downloads -mtime +30 -size +{min_size_mb}M -type f -ls',
                 'efecto': 'solo_lista'})
 
         if self.docker_stats and self.docker_stats['available'] and self.docker_stats['reclaimable'] > 100 * MB:
