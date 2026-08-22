@@ -80,6 +80,10 @@ export interface Recommendation {
   description: string;
   space: number;
   command: string;
+  /** Qué hace realmente el comando. Opcional: los informes viejos no lo traen. */
+  efecto?: 'borra' | 'irreversible' | 'solo_lista';
+  /** Identificador estable, ver Task 6. Opcional por la misma razón. */
+  id?: string;
 }
 
 export interface AnalysisReport {

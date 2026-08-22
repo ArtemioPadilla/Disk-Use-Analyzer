@@ -569,27 +569,31 @@ class DiskAnalyzerCore:
             recommendations.append({'tier': 1, 'priority': 'Seguro', 'type': cache_types.LOGS,
                 'description': f'{self.format_size(sum(l["size"] for l in log_locs))} en logs',
                 'space': sum(l['size'] for l in log_locs),
-                'command': comandos.borrar_contenido([l['path'] for l in log_locs])})
+                'command': comandos.borrar_contenido([l['path'] for l in log_locs]),
+                'efecto': 'borra'})
 
         brew_files = [f for f in self.large_files if 'Homebrew/downloads' in f['path']]
         if brew_files:
             size = sum(f['size'] for f in brew_files)
             recommendations.append({'tier': 1, 'priority': 'Seguro', 'type': 'Cache de Homebrew',
                 'description': f'{len(brew_files)} descargas ({self.format_size(size)})',
-                'space': size, 'command': 'brew cleanup --prune=all'})
+                'space': size, 'command': 'brew cleanup --prune=all',
+                'efecto': 'irreversible'})
 
         vscode_locs = [l for l in self.cache_locations if l['type'] == cache_types.VSCODE]
         if vscode_locs and sum(l['size'] for l in vscode_locs) > 10 * MB:
             recommendations.append({'tier': 1, 'priority': 'Seguro', 'type': 'Cache de VS Code',
                 'description': f'{self.format_size(sum(l["size"] for l in vscode_locs))} en cache',
                 'space': sum(l['size'] for l in vscode_locs),
-                'command': comandos.borrar_contenido([l['path'] for l in vscode_locs])})
+                'command': comandos.borrar_contenido([l['path'] for l in vscode_locs]),
+                'efecto': 'borra'})
 
         npm_locs = [l for l in self.cache_locations if l['type'] == cache_types.NPM]
         if npm_locs and sum(l['size'] for l in npm_locs) > 50 * MB:
             recommendations.append({'tier': 1, 'priority': 'Seguro', 'type': 'Cache de npm',
                 'description': f'{self.format_size(sum(l["size"] for l in npm_locs))} en cache',
-                'space': sum(l['size'] for l in npm_locs), 'command': 'npm cache clean --force'})
+                'space': sum(l['size'] for l in npm_locs), 'command': 'npm cache clean --force',
+                'efecto': 'irreversible'})
 
         # TIER 2: Moderado
         sim_files = [f for f in self.large_files
@@ -598,19 +602,22 @@ class DiskAnalyzerCore:
             recommendations.append({'tier': 2, 'priority': 'Moderado', 'type': 'Cache de Simuladores',
                 'description': f'{len(sim_files)} archivos ({self.format_size(sum(f["size"] for f in sim_files))})',
                 'space': sum(f['size'] for f in sim_files),
-                'command': 'xcrun simctl delete unavailable && rm -rf ~/Library/Developer/CoreSimulator/Caches/'})
+                'command': 'xcrun simctl delete unavailable && rm -rf ~/Library/Developer/CoreSimulator/Caches/',
+                'efecto': 'irreversible'})
 
         old_downloads = [f for f in self.large_files if '/Downloads/' in f['path'] and f['age_days'] > 30]
         if old_downloads:
             size = sum(f['size'] for f in old_downloads)
             recommendations.append({'tier': 2, 'priority': 'Moderado', 'type': 'Descargas Antiguas',
                 'description': f'{len(old_downloads)} archivos ({self.format_size(size)})',
-                'space': size, 'command': 'find ~/Downloads -mtime +30 -type f -ls'})
+                'space': size, 'command': 'find ~/Downloads -mtime +30 -type f -ls',
+                'efecto': 'solo_lista'})
 
         if self.docker_stats and self.docker_stats['available'] and self.docker_stats['reclaimable'] > 100 * MB:
             recommendations.append({'tier': 2, 'priority': 'Moderado', 'type': 'Docker',
                 'description': f'{self.format_size(self.docker_stats["reclaimable"])} recuperable',
-                'space': self.docker_stats['reclaimable'], 'command': 'docker system prune -a -f'})
+                'space': self.docker_stats['reclaimable'], 'command': 'docker system prune -a -f',
+                'efecto': 'irreversible'})
 
         # TIER 3: Agresivo
         cache_general = [l for l in self.cache_locations if l['type'] == cache_types.GENERAL and '/.cache' in l['path']]
@@ -618,14 +625,16 @@ class DiskAnalyzerCore:
             recommendations.append({'tier': 3, 'priority': 'Agresivo', 'type': 'Cache General (~/.cache)',
                 'description': f'{self.format_size(sum(l["size"] for l in cache_general))} (modelos ML, pip, etc.)',
                 'space': sum(l['size'] for l in cache_general),
-                'command': 'du -sh ~/.cache/*/ | sort -hr | head -20'})
+                'command': 'du -sh ~/.cache/*/ | sort -hr | head -20',
+                'efecto': 'solo_lista'})
 
         # TIER 4: Máximo
         huge = [f for f in self.large_files if f['size'] > GB and not self.is_protected_path(f['path'])]
         if huge:
             recommendations.append({'tier': 4, 'priority': 'Máximo', 'type': 'Archivos Gigantes',
                 'description': f'{len(huge)} archivos > 1GB ({self.format_size(sum(f["size"] for f in huge))})',
-                'space': sum(f['size'] for f in huge), 'command': '# Revisa la lista de archivos grandes'})
+                'space': sum(f['size'] for f in huge), 'command': '# Revisa la lista de archivos grandes',
+                'efecto': 'solo_lista'})
 
         return sorted(recommendations, key=lambda x: (x['tier'], -x['space']))
     
