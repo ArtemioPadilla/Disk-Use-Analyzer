@@ -560,13 +560,27 @@ class DiskAnalyzerCore:
         }
     
     def generate_recommendations(self) -> List[Dict]:
-        """Genera recomendaciones agrupadas por nivel de agresividad (4 tiers)"""
+        """Genera recomendaciones agrupadas por nivel de agresividad (4 tiers).
+
+        This is the single source of these tiered rules. It used to be
+        duplicated in disk_analyzer.py (CLI + menu-bar app), and the two
+        copies had already drifted -- the web UI and the menu-bar app could
+        recommend different things for the same disk. disk_analyzer.py now
+        delegates here; its own detect_smart_recommendations() (advanced
+        pattern-based detections: stale conda envs, orphan node_modules,
+        etc.) stays CLI-only and is appended on top of what this returns.
+
+        Every recommendation carries a stable 'id' slug so callers (and
+        future per-rule config) don't have to match on the Spanish display
+        'type' string, which can change and already differed between the
+        two former copies.
+        """
         recommendations = []
 
         # TIER 1: Seguro
         log_locs = [l for l in self.cache_locations if l['type'] == cache_types.LOGS]
         if log_locs and sum(l['size'] for l in log_locs) > 10 * MB:
-            recommendations.append({'tier': 1, 'priority': 'Seguro', 'type': cache_types.LOGS,
+            recommendations.append({'id': 'logs', 'tier': 1, 'priority': 'Seguro', 'type': cache_types.LOGS,
                 'description': f'{self.format_size(sum(l["size"] for l in log_locs))} en logs',
                 'space': sum(l['size'] for l in log_locs),
                 'command': comandos.borrar_contenido([l['path'] for l in log_locs]),
@@ -575,14 +589,14 @@ class DiskAnalyzerCore:
         brew_files = [f for f in self.large_files if 'Homebrew/downloads' in f['path']]
         if brew_files:
             size = sum(f['size'] for f in brew_files)
-            recommendations.append({'tier': 1, 'priority': 'Seguro', 'type': 'Cache de Homebrew',
+            recommendations.append({'id': 'homebrew', 'tier': 1, 'priority': 'Seguro', 'type': 'Cache de Homebrew',
                 'description': f'{len(brew_files)} descargas ({self.format_size(size)})',
                 'space': size, 'command': 'brew cleanup --prune=all',
                 'efecto': 'irreversible'})
 
         vscode_locs = [l for l in self.cache_locations if l['type'] == cache_types.VSCODE]
         if vscode_locs and sum(l['size'] for l in vscode_locs) > 10 * MB:
-            recommendations.append({'tier': 1, 'priority': 'Seguro', 'type': 'Cache de VS Code',
+            recommendations.append({'id': 'vscode', 'tier': 1, 'priority': 'Seguro', 'type': 'Cache de VS Code',
                 'description': f'{self.format_size(sum(l["size"] for l in vscode_locs))} en cache',
                 'space': sum(l['size'] for l in vscode_locs),
                 'command': comandos.borrar_contenido([l['path'] for l in vscode_locs]),
@@ -590,16 +604,20 @@ class DiskAnalyzerCore:
 
         npm_locs = [l for l in self.cache_locations if l['type'] == cache_types.NPM]
         if npm_locs and sum(l['size'] for l in npm_locs) > 50 * MB:
-            recommendations.append({'tier': 1, 'priority': 'Seguro', 'type': 'Cache de npm',
+            recommendations.append({'id': 'npm', 'tier': 1, 'priority': 'Seguro', 'type': 'Cache de npm',
                 'description': f'{self.format_size(sum(l["size"] for l in npm_locs))} en cache',
                 'space': sum(l['size'] for l in npm_locs), 'command': 'npm cache clean --force',
                 'efecto': 'irreversible'})
 
         # TIER 2: Moderado
+        # This rule used to exist in both copies under different display
+        # names ('Cache de Simuladores' here, 'Cache de Simuladores iOS' in
+        # the CLI) but with the identical condition, tier and command --
+        # same rule, drifted label. Unified under the core's label.
         sim_files = [f for f in self.large_files
                      if 'CoreSimulator' in f['path'] and not self.is_protected_path(f['path'])]
         if sim_files:
-            recommendations.append({'tier': 2, 'priority': 'Moderado', 'type': 'Cache de Simuladores',
+            recommendations.append({'id': 'simuladores', 'tier': 2, 'priority': 'Moderado', 'type': 'Cache de Simuladores',
                 'description': f'{len(sim_files)} archivos ({self.format_size(sum(f["size"] for f in sim_files))})',
                 'space': sum(f['size'] for f in sim_files),
                 'command': 'xcrun simctl delete unavailable && rm -rf ~/Library/Developer/CoreSimulator/Caches/',
@@ -608,13 +626,13 @@ class DiskAnalyzerCore:
         old_downloads = [f for f in self.large_files if '/Downloads/' in f['path'] and f['age_days'] > 30]
         if old_downloads:
             size = sum(f['size'] for f in old_downloads)
-            recommendations.append({'tier': 2, 'priority': 'Moderado', 'type': 'Descargas Antiguas',
+            recommendations.append({'id': 'descargas_antiguas', 'tier': 2, 'priority': 'Moderado', 'type': 'Descargas Antiguas',
                 'description': f'{len(old_downloads)} archivos ({self.format_size(size)})',
                 'space': size, 'command': 'find ~/Downloads -mtime +30 -type f -ls',
                 'efecto': 'solo_lista'})
 
         if self.docker_stats and self.docker_stats['available'] and self.docker_stats['reclaimable'] > 100 * MB:
-            recommendations.append({'tier': 2, 'priority': 'Moderado', 'type': 'Docker',
+            recommendations.append({'id': 'docker', 'tier': 2, 'priority': 'Moderado', 'type': 'Docker',
                 'description': f'{self.format_size(self.docker_stats["reclaimable"])} recuperable',
                 'space': self.docker_stats['reclaimable'], 'command': 'docker system prune -a -f',
                 'efecto': 'irreversible'})
@@ -622,18 +640,49 @@ class DiskAnalyzerCore:
         # TIER 3: Agresivo
         cache_general = [l for l in self.cache_locations if l['type'] == cache_types.GENERAL and '/.cache' in l['path']]
         if cache_general and sum(l['size'] for l in cache_general) > 100 * MB:
-            recommendations.append({'tier': 3, 'priority': 'Agresivo', 'type': 'Cache General (~/.cache)',
+            recommendations.append({'id': 'cache_general', 'tier': 3, 'priority': 'Agresivo', 'type': 'Cache General (~/.cache)',
                 'description': f'{self.format_size(sum(l["size"] for l in cache_general))} (modelos ML, pip, etc.)',
                 'space': sum(l['size'] for l in cache_general),
                 'command': 'du -sh ~/.cache/*/ | sort -hr | head -20',
                 'efecto': 'solo_lista'})
 
+        # Moved here from the CLI-only copy of this method (it existed only
+        # there, so it would have silently disappeared for web users -- and
+        # from the menu-bar app too, once the CLI stopped duplicating it).
+        xcode_locs = [l for l in self.cache_locations if l['type'] == cache_types.XCODE]
+        if xcode_locs and sum(l['size'] for l in xcode_locs) > 100 * MB:
+            recommendations.append({'id': 'xcode_deriveddata', 'tier': 3, 'priority': 'Agresivo', 'type': 'Xcode DerivedData',
+                'description': f'{self.format_size(sum(l["size"] for l in xcode_locs))} en datos de compilación (se regeneran al compilar)',
+                'space': sum(l['size'] for l in xcode_locs),
+                'command': comandos.borrar_contenido([l['path'] for l in xcode_locs]),
+                'efecto': 'borra'})
+
+        # Moved here from the CLI-only copy (see comment above).
+        sim_runtimes = [f for f in self.large_files
+                        if 'iOSSimulatorRuntime' in f['path'] or 'SimRuntime' in f['path']]
+        if sim_runtimes and sum(f['size'] for f in sim_runtimes) > GB:
+            recommendations.append({'id': 'runtimes_simuladores', 'tier': 3, 'priority': 'Agresivo', 'type': 'Runtimes de Simuladores',
+                'description': f'{self.format_size(sum(f["size"] for f in sim_runtimes))} en runtimes de iOS Simulator (eliminar desde Xcode > Settings > Platforms)',
+                'space': sum(f['size'] for f in sim_runtimes),
+                'command': 'xcrun simctl runtime list',
+                'efecto': 'solo_lista'})
+
         # TIER 4: Máximo
         huge = [f for f in self.large_files if f['size'] > GB and not self.is_protected_path(f['path'])]
         if huge:
-            recommendations.append({'tier': 4, 'priority': 'Máximo', 'type': 'Archivos Gigantes',
+            recommendations.append({'id': 'archivos_gigantes', 'tier': 4, 'priority': 'Máximo', 'type': 'Archivos Gigantes',
                 'description': f'{len(huge)} archivos > 1GB ({self.format_size(sum(f["size"] for f in huge))})',
                 'space': sum(f['size'] for f in huge), 'command': '# Revisa la lista de archivos grandes',
+                'efecto': 'solo_lista'})
+
+        # Moved here from the CLI-only copy (see comment above).
+        vm_files = [f for f in self.large_files
+                    if any(ext in f['extension'] for ext in ['.vmdk', '.vdi', '.qcow2'])]
+        if vm_files:
+            recommendations.append({'id': 'maquinas_virtuales', 'tier': 4, 'priority': 'Máximo', 'type': 'Máquinas Virtuales',
+                'description': f'{len(vm_files)} archivos de VMs ({self.format_size(sum(f["size"] for f in vm_files))})',
+                'space': sum(f['size'] for f in vm_files),
+                'command': 'find / -name "*.vmdk" -o -name "*.vdi" -o -name "*.qcow2" 2>/dev/null | head -20',
                 'efecto': 'solo_lista'})
 
         return sorted(recommendations, key=lambda x: (x['tier'], -x['space']))
