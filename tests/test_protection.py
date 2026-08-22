@@ -74,3 +74,39 @@ class TestFreeFunctionBehaviors:
 
     def test_normal_user_file_is_not_protected(self):
         assert is_protected_path(str(Path.home() / "Downloads" / "movie.mp4")) is False
+
+
+class TestCaseInsensitivity:
+    """APFS no distingue mayúsculas de minúsculas por defecto: '/bin' y
+    '/BIN' son el mismo directorio. Verificado que, antes de este fix,
+    `/BIN` no lo capturaba `PROTECTED_ROOT_DIRS` (comparación case-sensitive
+    contra {'/bin', '/sbin'}), y como ni '/bin' ni '/sbin' están en
+    RUTAS_DE_DATOS_DE_USUARIO, `puede_borrarse('/BIN')` caía en su
+    `return True` final -- en un filesystem que no distingue caja, eso es
+    literalmente /bin.
+    """
+
+    @pytest.mark.parametrize("path", ["/BIN", "/Bin", "/bIn/ls", "/SBIN"])
+    def test_root_dirs_protected_regardless_of_case(self, path):
+        assert is_protected_path(path) is True
+
+    @pytest.mark.parametrize("path", [
+        "/system/library/x",
+        "/SYSTEM/LIBRARY/X",
+        "/System/library",   # el directorio en sí, sin barra final, caja mixta
+        "/SYSTEM/LIBRARY",
+    ])
+    def test_system_prefixes_protected_regardless_of_case(self, path):
+        assert is_protected_path(path) is True
+
+    @pytest.mark.parametrize("path", [
+        "/Applications/Foo.APP/Contents/MacOS/Foo",
+        "/Applications/Foo.app/CONTENTS/MacOS/Foo",
+        "/APPLICATIONS/FOO.APP/CONTENTS/MACOS/FOO",
+    ])
+    def test_app_contents_marker_protected_regardless_of_case(self, path):
+        assert is_protected_path(path) is True
+
+    @pytest.mark.parametrize("filename", ["SLEEPIMAGE", "SwapFile"])
+    def test_protected_filenames_protected_regardless_of_case(self, filename):
+        assert is_protected_path(str(Path.home() / "somewhere" / filename)) is True
