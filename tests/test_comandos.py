@@ -12,6 +12,21 @@ import tempfile
 
 from analyzer.comandos import borrar_contenido, borrar_rutas, escapar
 
+# Desde que comandos.py instala la verja de protection.puede_borrarse
+# (Task 7), un sandbox bajo el directorio temporal del sistema
+# (tempfile.TemporaryDirectory() por defecto, que en macOS resuelve a
+# /private/var/folders/...) ya no genera comando: esa ruta está protegida a
+# propósito (ver tests/test_puede_borrarse.py::test_los_temporales_del_sistema_los_gestiona_macos).
+# Los tests de este módulo verifican el escapado de shell, no la política de
+# qué es borrable, así que el sandbox se crea dentro de una caché real y
+# conocida (~/Library/Caches) para que siga pasando la verja.
+_RAIZ_SANDBOX = os.path.expanduser("~/Library/Caches")
+
+
+def _sandbox():
+    os.makedirs(_RAIZ_SANDBOX, exist_ok=True)
+    return tempfile.TemporaryDirectory(dir=_RAIZ_SANDBOX)
+
 
 def _ejecutar(cmd: str, cwd: str) -> int:
     return subprocess.run(["/bin/sh", "-c", cmd], cwd=cwd,
@@ -24,7 +39,7 @@ def test_una_ruta_maliciosa_no_ejecuta_comandos_extra():
     Reproducido en producción: `x' ; rm -rf victim ; touch pwned '` con la
     plantilla vieja generaba tres comandos y borraba una carpeta ajena.
     """
-    with tempfile.TemporaryDirectory() as box:
+    with _sandbox() as box:
         os.makedirs(os.path.join(box, "victima"))
         malicioso = os.path.join(box, "x' ; rm -rf victima ; touch pwned '")
         os.makedirs(malicioso)
@@ -45,7 +60,7 @@ def test_borrar_contenido_borra_de_verdad():
     Con `rm -rf 'dir/*'` el shell trata el asterisco como literal, `rm -f` sale
     0 y no borra nada. La interfaz acreditaba el ahorro por ese 0.
     """
-    with tempfile.TemporaryDirectory() as box:
+    with _sandbox() as box:
         objetivo = os.path.join(box, "cache")
         os.makedirs(objetivo)
         open(os.path.join(objetivo, "a.log"), "w").write("x")
@@ -58,7 +73,7 @@ def test_borrar_contenido_borra_de_verdad():
 
 
 def test_borrar_rutas_borra_el_directorio_entero():
-    with tempfile.TemporaryDirectory() as box:
+    with _sandbox() as box:
         objetivo = os.path.join(box, "basura")
         os.makedirs(objetivo)
         _ejecutar(borrar_rutas([objetivo]), cwd=box)

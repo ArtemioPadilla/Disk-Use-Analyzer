@@ -16,6 +16,8 @@ motor no tiene dependencias.
 import shlex
 from typing import List
 
+from analyzer.protection import puede_borrarse
+
 # Rutas que jamás pueden ser el objetivo de un comando generado, por muy
 # protegida que esté la lógica que llama aquí. Es la última red, no la primera.
 _PROHIBIDAS = {"/", "//", "/.", ""}
@@ -27,10 +29,21 @@ def escapar(path: str) -> str:
 
 
 def _utiles(paths: List[str]) -> List[str]:
+    """Limpia la lista y descarta lo que `puede_borrarse` rechace.
+
+    `protection.puede_borrarse` existía desde antes pero nadie fuera de sus
+    propios tests la llamaba: una verja de seguridad construida y no
+    instalada. Este es el paso obligado de todo comando de borrado que
+    genera el motor -- para esquivarla habría que evitar `comandos.py` por
+    completo, y ese es justo el módulo que toda regla de generate_recommendations
+    y detect_smart_recommendations ya usa para construir sus 'rm -rf'.
+    """
     limpias = []
     for p in paths:
         p = (p or "").rstrip("/") if (p or "").rstrip("/") else (p or "")
         if p.strip() in _PROHIBIDAS or not p.strip():
+            continue
+        if not puede_borrarse(p):
             continue
         limpias.append(p)
     return limpias

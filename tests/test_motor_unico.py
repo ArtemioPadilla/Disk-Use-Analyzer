@@ -22,6 +22,7 @@ cierra. El estado sintético de `_estado_sintetico()` dispara las 12 reglas
 a la vez, así que la comparación deja de ser vacua en una máquina/runner sin
 cachés reales.
 """
+import os
 import sys
 from unittest.mock import patch
 
@@ -212,8 +213,15 @@ def test_xcode_deriveddata_no_incluye_archives():
     regla al core, filtrar por type=XCODE a secas metía los .xcarchive --
     builds firmadas y dSYMs de versiones ya publicadas, irreversibles -- en
     un comando 'rm -rf' descrito como "se regeneran al compilar". Este test
-    fija que el comando solo toca DerivedData."""
-    home = '/Users/prueba'
+    fija que el comando solo toca DerivedData.
+
+    Usa el $HOME real (no '/Users/prueba' como el resto del fixture): desde
+    que comandos.py instala la verja de protection.puede_borrarse (Task 7),
+    esta genera comandos reales para rutas dentro del HOME real -- un HOME
+    sintético cae bajo '/Users' (RUTAS_DE_DATOS_DE_USUARIO) y el comando
+    saldría vacío, lo que volvería vacuas las dos aserciones de contenido de
+    abajo."""
+    home = os.path.expanduser('~')
     core = DiskAnalyzerCore('.')
     core.cache_locations = [
         {'path': f'{home}/Library/Developer/Xcode/DerivedData', 'size': 500 * MB, 'type': 'Xcode Cache'},

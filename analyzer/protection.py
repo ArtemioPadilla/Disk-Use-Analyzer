@@ -88,6 +88,17 @@ def _coincide_con_permitidas(file_path: str) -> bool:
         os.path.realpath(os.path.expanduser('~/Library/Application Support/Code/Cache')),
         os.path.realpath(os.path.expanduser('~/Library/Application Support/Code/CachedData')),
         os.path.realpath(os.path.expanduser('~/Library/Containers/com.docker.docker/Data')),
+        # El usuario ya decidió tirar esto -- vaciar la papelera es la regla
+        # de nivel 1 de generate_recommendations() (id 'papelera').
+        os.path.realpath(os.path.expanduser('~/.Trash')),
+        # Igual que DerivedData arriba: una ruta con nombre fijo bajo
+        # Library/Developer/Xcode, no una clasificación por `type`. No es lo
+        # mismo que el bug de cache_types.XCODE que confundía DerivedData con
+        # Archives por type -- aquí es detect_smart_recommendations()
+        # (id 'xcode_archives_antiguos') apuntando a esta ruta exacta, con su
+        # propio umbral de tamaño (>1GB) y descripción honesta sobre qué
+        # implica borrarlo.
+        os.path.realpath(os.path.expanduser('~/Library/Developer/Xcode/Archives')),
     ]
     return any(ruta_cf == p.lower() or ruta_cf.startswith(p.lower() + '/') for p in permitidas)
 

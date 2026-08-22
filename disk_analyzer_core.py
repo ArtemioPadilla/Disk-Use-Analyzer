@@ -613,6 +613,17 @@ class DiskAnalyzerCore:
                 'space': sum(l['size'] for l in npm_locs), 'command': 'npm cache clean --force',
                 'efecto': 'irreversible'})
 
+        # La papelera: espacio que el usuario ya decidió tirar. Nivel 1 sin
+        # discusión, y además es lo único que hace que "mover a la papelera"
+        # libere algo de verdad en el mismo volumen.
+        papelera = [l for l in self.cache_locations if l['type'] == cache_types.TRASH]
+        if papelera and sum(l['size'] for l in papelera) > 100 * MB:
+            total = sum(l['size'] for l in papelera)
+            recommendations.append({'id': 'papelera', 'tier': 1, 'priority': 'Seguro', 'type': cache_types.TRASH,
+                'description': f'{self.format_size(total)} ya en la papelera',
+                'space': total, 'efecto': 'borra',
+                'command': comandos.borrar_contenido([l['path'] for l in papelera])})
+
         # TIER 2: Moderado
         # This rule used to exist in both copies under different display
         # names ('Cache de Simuladores' here, 'Cache de Simuladores iOS' in
@@ -646,6 +657,32 @@ class DiskAnalyzerCore:
                 'description': f'{self.format_size(self.docker_stats["reclaimable"])} recuperable de {self.format_size(self.docker_stats.get("total_size", 0))} total',
                 'space': self.docker_stats['reclaimable'], 'command': 'docker system prune -a -f',
                 'efecto': 'irreversible'})
+
+        # Cachés de aplicaciones: 21,4 GB medidos en la máquina de desarrollo y
+        # ninguna regla los miraba. Nivel 2 y no 1 porque algunas apps guardan
+        # ahí cosas que tardan en regenerarse (índices, miniaturas).
+        #
+        # IMPORTANT: cache_types.GENERAL también agrupa
+        # ~/Library/Developer/CoreSimulator/Devices (simuladores instalados,
+        # no una caché regenerable) y /private/var/folders (gestionado por
+        # macOS -- ver protection.py y test_puede_borrarse.py). Filtrar solo
+        # por type aquí arrastraría ambos a un 'efecto: borra' que no les
+        # corresponde -- el mismo defecto que ya se coló una vez con
+        # cache_types.XCODE y DerivedData/Archives (ver el comentario en
+        # xcode_deriveddata más abajo). Por eso esta regla acota también por
+        # ruta, a 'Library/Caches' explícitamente.
+        app_caches = [l for l in self.cache_locations
+                      if l['type'] == cache_types.GENERAL
+                      and 'Library/Caches' in l['path']]
+        if app_caches and sum(l['size'] for l in app_caches) > 500 * MB:
+            total = sum(l['size'] for l in app_caches)
+            recommendations.append({
+                'id': 'caches_de_apps', 'tier': 2, 'priority': 'Moderado',
+                'type': 'Cachés de aplicaciones',
+                'description': f'{self.format_size(total)} en ~/Library/Caches',
+                'space': total, 'efecto': 'borra',
+                'command': comandos.borrar_contenido(
+                    [l['path'] for l in app_caches])})
 
         # TIER 3: Agresivo
         cache_general = [l for l in self.cache_locations if l['type'] == cache_types.GENERAL and '/.cache' in l['path']]
