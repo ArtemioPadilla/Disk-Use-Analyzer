@@ -3,7 +3,6 @@ import { render, cleanup, waitFor, screen, fireEvent } from '@testing-library/re
 import { act } from '@testing-library/react';
 import { nivelDe } from './CleanupWizard';
 import CleanupWizard from './CleanupWizard';
-import { useCleanupRunner } from '../hooks/useCleanupRunner';
 
 const mockRun = vi.fn();
 
@@ -18,8 +17,23 @@ describe('nivelDe', () => {
   });
 
   it('trata lo desconocido como lo más restrictivo, no como Seguro', () => {
-    for (const rec of [{}, { tier: undefined }, { tier: null }, { tier: 0 },
-                       { tier: NaN }, { tier: 'dos' }, { tier: 9 }]) {
+    // Rechaza: undefined, null, 0, NaN, no-integers, strings, booleans, arrays, objetos
+    for (const rec of [
+      {},
+      { tier: undefined },
+      { tier: null },
+      { tier: 0 },
+      { tier: NaN },
+      { tier: 'dos' },
+      { tier: '1' },           // string, not number
+      { tier: 9 },             // out of range
+      { tier: true },          // boolean - Number(true)===1 is the bug we fix
+      { tier: false },         // boolean - Number(false)===0
+      { tier: [1] },           // array - Number([1])===1 is also a bug
+      { tier: ['1'] },         // array of string
+      { tier: 2.5 },           // non-integer number
+      { tier: {} },            // object
+    ]) {
       expect(nivelDe(rec as any)).toBe(4);
     }
   });

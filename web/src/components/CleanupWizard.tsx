@@ -12,10 +12,13 @@ import { TIER_META } from '../lib/tiers';
  * El código anterior hacía `r.tier || 1`, que convertía `undefined`, `null` y
  * `0` en Seguro — y Seguro es justo lo que el botón de "ejecutar todo" lanza
  * sin revisión. Ante una recomendación malformada, lo correcto es lo contrario.
+ *
+ * Verifica el tipo ANTES de coercionar. Rechaza: booleans (Number(true)===1),
+ * arrays (Number([1])===1), strings ("1" !== 1), y números no-enteros.
  */
 export function nivelDe(rec: { tier?: unknown }): number {
-  const n = Number(rec?.tier);
-  return Number.isInteger(n) && n >= 1 && n <= 4 ? n : 4;
+  const n = rec?.tier;
+  return typeof n === 'number' && Number.isInteger(n) && n >= 1 && n <= 4 ? n : 4;
 }
 
 export default function CleanupWizard() {
