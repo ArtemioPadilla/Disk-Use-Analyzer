@@ -26,6 +26,7 @@ from analyzer.constants import (
 from analyzer import protection
 from analyzer import cache_types
 from analyzer import measurement
+from analyzer import comandos
 
 class DiskAnalyzer:
     def __init__(self, start_path: str, min_size_mb: float = 10):
@@ -755,7 +756,7 @@ class DiskAnalyzer:
                             f'({self.format_size(size)}) en {parent}'
                         ),
                         'space': size,
-                        'command': f"rm -rf '{dir_path}'",
+                        'command': comandos.borrar_rutas([dir_path]),
                     })
         except Exception:
             pass
@@ -878,7 +879,7 @@ class DiskAnalyzer:
                         f'Los archivos se pueden eliminar si ya no necesitas distribuir esas builds.'
                     ),
                     'space': archives_size,
-                    'command': f"rm -rf '{xcode_archives_path}'/*",
+                    'command': comandos.borrar_contenido([xcode_archives_path]),
                 })
         except Exception:
             pass
@@ -901,7 +902,7 @@ class DiskAnalyzer:
                     'type': cache_types.LOGS,
                     'description': f'{self.format_size(size)} en logs del sistema',
                     'space': size,
-                    'command': ' && '.join(f"rm -rf '{l['path']}/*'" for l in log_locs)
+                    'command': comandos.borrar_contenido([l['path'] for l in log_locs])
                 })
 
         # Homebrew caches
@@ -926,7 +927,7 @@ class DiskAnalyzer:
                     'type': 'Cache de VS Code',
                     'description': f'{self.format_size(size)} en cache de VS Code',
                     'space': size,
-                    'command': ' && '.join(f"rm -rf '{l['path']}/*'" for l in vscode_locs)
+                    'command': comandos.borrar_contenido([l['path'] for l in vscode_locs])
                 })
 
         # npm cache

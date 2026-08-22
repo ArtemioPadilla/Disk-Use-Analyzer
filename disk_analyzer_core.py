@@ -24,6 +24,7 @@ from analyzer.constants import (
 from analyzer import protection
 from analyzer import cache_types
 from analyzer import measurement
+from analyzer import comandos
 
 class DiskAnalyzerCore:
     """Core disk analysis functionality with progress callback support"""
@@ -568,7 +569,7 @@ class DiskAnalyzerCore:
             recommendations.append({'tier': 1, 'priority': 'Seguro', 'type': cache_types.LOGS,
                 'description': f'{self.format_size(sum(l["size"] for l in log_locs))} en logs',
                 'space': sum(l['size'] for l in log_locs),
-                'command': ' && '.join(f"rm -rf '{l['path']}/*'" for l in log_locs)})
+                'command': comandos.borrar_contenido([l['path'] for l in log_locs])})
 
         brew_files = [f for f in self.large_files if 'Homebrew/downloads' in f['path']]
         if brew_files:
@@ -582,7 +583,7 @@ class DiskAnalyzerCore:
             recommendations.append({'tier': 1, 'priority': 'Seguro', 'type': 'Cache de VS Code',
                 'description': f'{self.format_size(sum(l["size"] for l in vscode_locs))} en cache',
                 'space': sum(l['size'] for l in vscode_locs),
-                'command': ' && '.join(f"rm -rf '{l['path']}/*'" for l in vscode_locs)})
+                'command': comandos.borrar_contenido([l['path'] for l in vscode_locs])})
 
         npm_locs = [l for l in self.cache_locations if l['type'] == cache_types.NPM]
         if npm_locs and sum(l['size'] for l in npm_locs) > 50 * MB:
