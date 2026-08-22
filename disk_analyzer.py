@@ -1351,7 +1351,7 @@ class DiskAnalyzer:
         if cache_files:
             print(f"\n   # Limpiar archivos de cache grandes ({len(cache_files)} archivos)")
             for f in cache_files[:5]:
-                print(f"   rm -f '{f['path']}'")
+                print(f"   rm -f {comandos.escapar(f['path'])}")
             if len(cache_files) > 5:
                 print(f"   # ... y {len(cache_files) - 5} archivos más de cache")
         

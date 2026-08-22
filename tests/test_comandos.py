@@ -4,6 +4,8 @@ Los dos fallos que estos tests fijan estaban en producción y se reprodujeron:
 una carpeta con un apóstrofe en el nombre ejecutaba comandos arbitrarios, y el
 glob entrecomillado hacía que el borrado no borrara nada y saliera con éxito.
 """
+import contextlib
+import io
 import os
 import subprocess
 import tempfile
@@ -173,3 +175,43 @@ def test_du_sh_otros_escapa_la_ruta_y_de_verdad_lista_el_contenido():
         assert not os.path.exists(os.path.join(box, "pwned")), (
             "se ejecutó un comando arbitrario embebido en el nombre de la carpeta"
         )
+
+
+def test_print_report_escapa_el_rm_f_sugerido_para_cache():
+    """disk_analyzer.py:1354 imprimía `rm -f '{f['path']}'` en el reporte de
+    consola (sección "COMANDOS DE LIMPIEZA SUGERIDOS") con comillas simples
+    manuales sin escapar -- el mismo patrón que el bug original, solo que
+    aquí nadie lo ejecuta automáticamente: el CLI se lo ofrece a un humano
+    para copiar y pegar. El aviso de "revisa antes de ejecutar" no protege
+    de nada porque nadie audita el entrecomillado a ojo, así que cuenta como
+    el mismo defecto.
+    """
+    analyzer = DiskAnalyzer(".")
+    peligroso = "/tmp/x' ; touch pwned ; echo '/cache.db"
+
+    report = {
+        'summary': {
+            'total_size': 0, 'files_scanned': 0, 'large_files_count': 1,
+            'recoverable_space': 0,
+        },
+        'docker': None,
+        'recommendations': [],
+        'top_directories': [],
+        'top_file_types': [],
+        'large_files': [
+            {'path': peligroso, 'size': 1024, 'age_days': 5, 'is_cache': True},
+        ],
+        'cache_locations': [],
+    }
+
+    buffer = io.StringIO()
+    with contextlib.redirect_stdout(buffer):
+        analyzer.print_report(report)
+    salida = buffer.getvalue()
+
+    lineas_rm = [l.strip() for l in salida.splitlines() if l.strip().startswith('rm -f')]
+    assert lineas_rm, "no se imprimió ninguna línea 'rm -f' (fixture desalineado)"
+
+    # Si el nombre volviera a interpolarse sin escapar, shlex.split trocearía
+    # el comando en piezas de más en vez de tratar la ruta como un solo token.
+    assert shlex.split(lineas_rm[0]) == ["rm", "-f", peligroso]
