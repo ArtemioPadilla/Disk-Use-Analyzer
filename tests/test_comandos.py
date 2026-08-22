@@ -86,3 +86,90 @@ def test_la_raiz_nunca_genera_comando():
     """Salvaguarda de último recurso: nada construye un borrado de `/`."""
     assert borrar_contenido(["/"]) == ""
     assert borrar_rutas(["/"]) == ""
+
+
+# -- Ronda de arreglo 1: tres sitios que el grep del brief no cazaba porque
+# ninguno usa `rm -rf`. Misma clase de bug (interpolación sin escapar en un
+# 'command' que se ejecuta con sh -c), así que entran en el alcance del task. --
+
+import shlex
+from pathlib import Path
+
+from disk_analyzer import DiskAnalyzer
+
+
+def test_conda_env_remove_escapa_el_nombre_del_entorno():
+    """disk_analyzer.py:723 interpolaba `env_name` sin comillas ni escapado.
+
+    `env_name` es el nombre de un subdirectorio de un envs-dir de conda,
+    tan controlable como cualquier otra ruta del escaneo. Antes del arreglo
+    ni siquiera había comillas que romper: `conda env remove -n {env_name}`
+    era interpolación directa.
+    """
+    analyzer = DiskAnalyzer(".")
+    home = str(Path.home())
+    base = f"{home}/miniconda3/envs"
+    env_name = "x'; touch pwned; echo '"
+    dir_path = f"{base}/{env_name}"
+
+    analyzer.directory_sizes[dir_path] = 10 * 1024 * 1024
+    analyzer.large_files = [
+        {"path": f"{dir_path}/lib/x", "size": 1024, "age_days": 200}
+    ]
+
+    recs = analyzer.detect_smart_recommendations()
+    conda_recs = [r for r in recs if r["type"] == "Entorno Conda Obsoleto"]
+    assert conda_recs, "la recomendación de conda no se generó (fixture desalineado)"
+
+    cmd = conda_recs[0]["command"]
+    # Si el nombre volviera a interpolarse sin escapar, `shlex.split` partiría
+    # el comando en piezas extra en vez de tratar el nombre como un solo token.
+    assert shlex.split(cmd) == ["conda", "env", "remove", "-n", env_name]
+
+
+def test_git_gc_escapa_la_ruta_del_repo():
+    """disk_analyzer.py:813 usaba comillas simples manuales sin escapar
+    el contenido -- el mismo patrón exacto del bug original.
+    """
+    analyzer = DiskAnalyzer(".")
+    repo_path = "/tmp/x' ; touch pwned ; echo '/repo"
+    analyzer.large_files = [
+        {
+            "path": f"{repo_path}/.git/objects/pack/pack-abc.pack",
+            "size": 200 * 1024 * 1024,
+        }
+    ]
+
+    recs = analyzer.detect_smart_recommendations()
+    git_recs = [r for r in recs if r["type"] == "Git Pack Files Grandes"]
+    assert git_recs, "la recomendación de git gc no se generó (fixture desalineado)"
+
+    cmd = git_recs[0]["command"]
+    assert shlex.split(cmd) == ["cd", repo_path, "&&", "git", "gc", "--aggressive"]
+
+
+def test_du_sh_otros_escapa_la_ruta_y_de_verdad_lista_el_contenido():
+    """disk_analyzer.py:3974 interpolaba `path` dentro de comillas dobles, que
+    no neutralizan `$(...)`: dentro de comillas dobles POSIX, la sustitución
+    de comandos SÍ se expande (a diferencia de las comillas simples). Con la
+    plantilla vieja, un nombre de carpeta con `$(touch pwned)` ejecutaba
+    `touch pwned` al construir el argumento de `du`, antes incluso de que
+    `du` se ejecutara.
+    """
+    analyzer = DiskAnalyzer(".")
+    with tempfile.TemporaryDirectory() as box:
+        peligroso = os.path.join(box, "x$(touch pwned)y")
+        os.makedirs(peligroso)
+        open(os.path.join(peligroso, "a"), "w").write("x" * 1024)
+
+        commands = analyzer._generate_category_cleanup_commands(
+            "Otros", [(peligroso, 2 * 1024 * 1024 * 1024)]
+        )
+        assert commands, "no se generó comando para 'Otros' (fixture desalineado)"
+        cmd = commands[0]["command"]
+
+        _ejecutar(cmd, cwd=box)
+
+        assert not os.path.exists(os.path.join(box, "pwned")), (
+            "se ejecutó un comando arbitrario embebido en el nombre de la carpeta"
+        )

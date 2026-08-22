@@ -720,7 +720,7 @@ class DiskAnalyzer:
                                 f'({self.format_size(size)})'
                             ),
                             'space': size,
-                            'command': f'conda env remove -n {env_name}',
+                            'command': f'conda env remove -n {comandos.escapar(env_name)}',
                         })
         except Exception:
             pass
@@ -810,7 +810,7 @@ class DiskAnalyzer:
                         f'Ejecuta gc para compactar.'
                     ),
                     'space': total_pack,
-                    'command': f"cd '{repo_path}' && git gc --aggressive",
+                    'command': f'cd {comandos.escapar(repo_path)} && git gc --aggressive',
                 })
         except Exception:
             pass
@@ -3971,7 +3971,7 @@ class DiskAnalyzer:
                         continue
                     commands.append({
                         'description': f'Revisar directorio grande: {dir_name}',
-                        'command': f'du -sh "{path}"/* | sort -hr | head -20',
+                        'command': f'du -sh {comandos.escapar(path)}/* | sort -hr | head -20',
                         'risk': 'N/A',
                         'space_estimate': self.format_size(size)
                     })
