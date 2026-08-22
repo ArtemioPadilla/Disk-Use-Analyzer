@@ -13,6 +13,28 @@ const STORAGE_KEY = 'disk-analyzer-cleaned';
 // a genuinely stuck queue recovers within one page visit.
 const STUCK_JOB_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes
 
+// The disk-space measurement must never hang the queue. `request()` (see
+// web/src/lib/api.ts) has no timeout or AbortController, so a server that
+// accepts the connection and never responds — busy with a scan, say — would
+// leave that await unresolved forever. In startJob() this happens before the
+// watchdog above is even armed (it's only set once createTerminal resolves);
+// in finishActiveJob() the watchdog for the job that just exited has already
+// been cleared. A few seconds is plenty for a call to localhost; if we don't
+// hear back in time, fall back to the estimate — the same outcome as any
+// other measurement failure.
+const MEASURE_TIMEOUT_MS = 3000;
+
+/** Race `p` against a timeout, resolving to `null` (never rejecting) if the timeout wins. */
+function conLimite<T>(p: Promise<T>, ms: number): Promise<T | null> {
+  return new Promise<T | null>(resolve => {
+    const timer = setTimeout(() => resolve(null), ms);
+    p.then(
+      v => { clearTimeout(timer); resolve(v); },
+      () => { clearTimeout(timer); resolve(null); },
+    );
+  });
+}
+
 export interface CleanupJob {
   command: string;
   space: number;
@@ -135,9 +157,10 @@ async function startJob(job: CleanupJob): Promise<void> {
   // reflects what the command actually freed instead of trusting its
   // estimate. Stored on the job itself (not a module variable) since several
   // jobs pass through this queue over the page's lifetime.
-  const libreAntes = await api.getSystemInfo()
-    .then(i => i.disk_usage?.free ?? null)
-    .catch(() => null);
+  const libreAntes = await conLimite(
+    api.getSystemInfo().then(i => i.disk_usage?.free ?? null),
+    MEASURE_TIMEOUT_MS,
+  );
   const queuedJob: QueuedJob = { ...job, libreAntes };
   try {
     const { pty_id } = await api.createTerminal(job.command);
@@ -194,9 +217,10 @@ async function finishActiveJob(ptyId: string, code: number | null): Promise<void
     // measurement itself isn't available.
     let liberado = job.space;
     if (job.libreAntes != null) {
-      const libreDespues = await api.getSystemInfo()
-        .then(i => i.disk_usage?.free ?? null)
-        .catch(() => null);
+      const libreDespues = await conLimite(
+        api.getSystemInfo().then(i => i.disk_usage?.free ?? null),
+        MEASURE_TIMEOUT_MS,
+      );
       if (libreDespues != null) {
         // Another process can write to disk while cleanup runs; never
         // credit a negative saving.

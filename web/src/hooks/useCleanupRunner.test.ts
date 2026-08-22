@@ -384,4 +384,90 @@ describe('useCleanupRunner', () => {
 
     expect(visto).toHaveBeenCalledWith(expect.objectContaining({ space: 42, estimado: 42 }));
   });
+
+  it('si la medición "antes" va bien pero "después" falla, cae al estimado', async () => {
+    mockedGetSystemInfo
+      .mockResolvedValueOnce({ disk_usage: { free: 10e9 } } as any)
+      .mockRejectedValueOnce(new Error('offline'));
+
+    const visto = vi.fn();
+    on('cleanup:completed', visto);
+    await ejecutarYCompletar({ command: 'rm -rf x', space: 20 }, 0);
+
+    expect(visto).toHaveBeenCalledWith(expect.objectContaining({ space: 20, estimado: 20 }));
+  });
+
+  it('si la medición "antes" falla, no se intenta medir "después" y cae al estimado', async () => {
+    mockedGetSystemInfo.mockRejectedValueOnce(new Error('offline'));
+
+    const visto = vi.fn();
+    on('cleanup:completed', visto);
+    await ejecutarYCompletar({ command: 'rm -rf x', space: 15 }, 0);
+
+    expect(visto).toHaveBeenCalledWith(expect.objectContaining({ space: 15, estimado: 15 }));
+    // libreAntes quedó en null, así que finishActiveJob nunca intenta la
+    // segunda medición — solo se llamó a getSystemInfo una vez.
+    expect(mockedGetSystemInfo).toHaveBeenCalledTimes(1);
+  });
+
+  // ── Fix round 6: la medición no puede colgar la cola ─────────────────────
+  //
+  // request() (web/src/lib/api.ts) no tiene timeout ni AbortController: un
+  // servidor que acepta la conexión y nunca responde (ocupado con un scan,
+  // por ejemplo) dejaría el await de la medición sin resolver para siempre.
+  // conLimite() acota ambas mediciones a MEASURE_TIMEOUT_MS (3000ms aquí)
+  // para que ese escenario caiga al estimado en vez de colgar la cola.
+
+  it('si la medición "antes" se cuelga, expira y no bloquea la cola', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    mockedGetSystemInfo.mockImplementationOnce(() => new Promise(() => { /* never resolves */ }));
+
+    const visto = vi.fn();
+    on('cleanup:completed', visto);
+
+    const { result } = renderHook(() => useCleanupRunner());
+    act(() => { result.current.run({ command: 'rm -rf x', space: 7 }); });
+
+    // La medición "antes" nunca resuelve — avanza más allá de su propio
+    // límite para que startJob() pueda seguir y crear el terminal.
+    await act(async () => { await vi.advanceTimersByTimeAsync(3000); });
+
+    await waitFor(() => expect(mockedCreate).toHaveBeenCalledTimes(1));
+    act(() => { emit('terminal:exited', { pty_id: 'pty-1', code: 0 }); });
+    await waitFor(() => expect(visto).toHaveBeenCalled());
+
+    expect(visto).toHaveBeenCalledWith(expect.objectContaining({ space: 7, estimado: 7 }));
+
+    vi.useRealTimers();
+  });
+
+  it('si la medición "después" se cuelga, expira, credita el estimado y la cola sigue', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    mockedGetSystemInfo
+      .mockResolvedValueOnce({ disk_usage: { free: 10e9 } } as any) // "antes" ok
+      .mockImplementationOnce(() => new Promise(() => { /* never resolves */ })); // "después" se cuelga
+
+    const visto = vi.fn();
+    on('cleanup:completed', visto);
+
+    const { result } = renderHook(() => useCleanupRunner());
+    act(() => { result.current.run({ command: 'rm -rf x', space: 9 }); });
+    await waitFor(() => expect(mockedCreate).toHaveBeenCalledTimes(1));
+
+    act(() => { emit('terminal:exited', { pty_id: 'pty-1', code: 0 }); });
+
+    // La medición "después" nunca resuelve — avanza más allá de su límite
+    // para que se acredite en vez de quedarse colgado para siempre.
+    await act(async () => { await vi.advanceTimersByTimeAsync(3000); });
+
+    await waitFor(() => expect(visto).toHaveBeenCalled());
+    expect(visto).toHaveBeenCalledWith(expect.objectContaining({ space: 9, estimado: 9 }));
+
+    // La cola no quedó atascada: un trabajo encolado detrás sigue pudiendo arrancar.
+    mockedGetSystemInfo.mockRejectedValue(new Error('offline'));
+    act(() => { result.current.run({ command: 'rm -rf y', space: 3 }); });
+    await waitFor(() => expect(mockedCreate).toHaveBeenCalledTimes(2));
+
+    vi.useRealTimers();
+  });
 });
