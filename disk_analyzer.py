@@ -714,6 +714,7 @@ class DiskAnalyzer:
                     if has_stale and size > 0:
                         smart_recs.append({
                             'tier': 2, 'priority': 'Moderado',
+                            'id': 'conda_obsoleto',
                             'type': 'Entorno Conda Obsoleto',
                             'description': (
                                 f'Entorno conda "{env_name}" sin actividad reciente '
@@ -751,6 +752,7 @@ class DiskAnalyzer:
                 if stale and size > 0:
                     smart_recs.append({
                         'tier': 2, 'priority': 'Moderado',
+                        'id': 'node_modules_huerfano',
                         'type': 'node_modules Huerfano',
                         'description': (
                             f'node_modules sin actividad de proyecto en 60+ dias '
@@ -776,6 +778,7 @@ class DiskAnalyzer:
                 total = homebrew_python_size + anaconda_python_size
                 smart_recs.append({
                     'tier': 3, 'priority': 'Agresivo',
+                    'id': 'python_multiple',
                     'type': 'Multiples Instalaciones Python',
                     'description': (
                         f'Se detectaron instalaciones de Python tanto en Homebrew '
@@ -806,6 +809,7 @@ class DiskAnalyzer:
                 repo_name = os.path.basename(repo_path)
                 smart_recs.append({
                     'tier': 2, 'priority': 'Moderado',
+                    'id': 'git_pack_files',
                     'type': 'Git Pack Files Grandes',
                     'description': (
                         f'Repositorio "{repo_name}" tiene pack files de '
@@ -845,6 +849,7 @@ class DiskAnalyzer:
                         )
                         smart_recs.append({
                             'tier': 3, 'priority': 'Agresivo',
+                            'id': 'time_machine_snapshots',
                             'type': 'Snapshots Locales de Time Machine',
                             'description': (
                                 f'{len(snapshot_dates)} snapshot(s) local(es) de Time Machine. '
@@ -880,6 +885,7 @@ class DiskAnalyzer:
             if archives_size > 1 * GB:
                 smart_recs.append({
                     'tier': 3, 'priority': 'Agresivo',
+                    'id': 'xcode_archives_antiguos',
                     'type': 'Xcode Archives Antiguos',
                     'description': (
                         f'{self.format_size(archives_size)} en Xcode Archives. '

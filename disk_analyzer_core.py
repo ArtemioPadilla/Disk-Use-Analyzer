@@ -32,7 +32,11 @@ class DiskAnalyzerCore:
     def __init__(self, start_path: str, min_size_mb: float = 10, 
                  progress_callback: Optional[Callable] = None):
         self.start_path = Path(start_path).expanduser()
-        self.min_size = min_size_mb * MB
+        # Floor at 1 MB, matching disk_analyzer.DiskAnalyzer -- a min_size
+        # of 0 would treat every file as "large" and also produces a
+        # nonsensical 'find ... -size +0M' filter in the Descargas Antiguas
+        # command (matches everything, defeating the point of the filter).
+        self.min_size = max(min_size_mb, 1) * MB
         self.total_scanned = 0
         self.errors = []
         self.cache_locations = []
@@ -605,7 +609,7 @@ class DiskAnalyzerCore:
         npm_locs = [l for l in self.cache_locations if l['type'] == cache_types.NPM]
         if npm_locs and sum(l['size'] for l in npm_locs) > 50 * MB:
             recommendations.append({'id': 'npm', 'tier': 1, 'priority': 'Seguro', 'type': 'Cache de npm',
-                'description': f'{self.format_size(sum(l["size"] for l in npm_locs))} en cache',
+                'description': f'{self.format_size(sum(l["size"] for l in npm_locs))} en cache de npm (se regenera con npm install)',
                 'space': sum(l['size'] for l in npm_locs), 'command': 'npm cache clean --force',
                 'efecto': 'irreversible'})
 
@@ -633,13 +637,13 @@ class DiskAnalyzerCore:
             # longer and less useful list than what the CLI used to show.
             min_size_mb = int(self.min_size / MB)
             recommendations.append({'id': 'descargas_antiguas', 'tier': 2, 'priority': 'Moderado', 'type': 'Descargas Antiguas',
-                'description': f'{len(old_downloads)} archivos ({self.format_size(size)})',
+                'description': f'{len(old_downloads)} archivos en Downloads con más de 30 días ({self.format_size(size)})',
                 'space': size, 'command': f'find ~/Downloads -mtime +30 -size +{min_size_mb}M -type f -ls',
                 'efecto': 'solo_lista'})
 
         if self.docker_stats and self.docker_stats['available'] and self.docker_stats['reclaimable'] > 100 * MB:
             recommendations.append({'id': 'docker', 'tier': 2, 'priority': 'Moderado', 'type': 'Docker',
-                'description': f'{self.format_size(self.docker_stats["reclaimable"])} recuperable',
+                'description': f'{self.format_size(self.docker_stats["reclaimable"])} recuperable de {self.format_size(self.docker_stats.get("total_size", 0))} total',
                 'space': self.docker_stats['reclaimable'], 'command': 'docker system prune -a -f',
                 'efecto': 'irreversible'})
 
@@ -647,7 +651,7 @@ class DiskAnalyzerCore:
         cache_general = [l for l in self.cache_locations if l['type'] == cache_types.GENERAL and '/.cache' in l['path']]
         if cache_general and sum(l['size'] for l in cache_general) > 100 * MB:
             recommendations.append({'id': 'cache_general', 'tier': 3, 'priority': 'Agresivo', 'type': 'Cache General (~/.cache)',
-                'description': f'{self.format_size(sum(l["size"] for l in cache_general))} (modelos ML, pip, etc.)',
+                'description': f'{self.format_size(sum(l["size"] for l in cache_general))} en ~/.cache (modelos ML, pip, etc. — se re-descargan)',
                 'space': sum(l['size'] for l in cache_general),
                 'command': 'du -sh ~/.cache/*/ | sort -hr | head -20',
                 'efecto': 'solo_lista'})
@@ -655,7 +659,23 @@ class DiskAnalyzerCore:
         # Moved here from the CLI-only copy of this method (it existed only
         # there, so it would have silently disappeared for web users -- and
         # from the menu-bar app too, once the CLI stopped duplicating it).
-        xcode_locs = [l for l in self.cache_locations if l['type'] == cache_types.XCODE]
+        #
+        # IMPORTANT: cache_types.XCODE covers BOTH
+        # ~/Library/Developer/Xcode/DerivedData AND .../Xcode/Archives
+        # (classify() matches on the substring 'xcode' anywhere in the path,
+        # see analyzer/cache_types.py). Archives hold signed builds and
+        # dSYMs needed to symbolicate crashes from already-shipped versions
+        # -- they do NOT regenerate on build, unlike DerivedData. Filtering
+        # cache_locations by type alone here would silently fold Archives
+        # into an 'efecto: borra' rule described as "se regeneran al
+        # compilar", which is false and irreversible for real archived
+        # builds. detect_smart_recommendations() already has an honest,
+        # size-gated rule for Archives ('Xcode Archives Antiguos', id
+        # 'xcode_archives_antiguos'), so this rule stays scoped to
+        # DerivedData only -- widening it to Archives would also
+        # double-count recoverable space against that other rule.
+        xcode_locs = [l for l in self.cache_locations
+                      if l['type'] == cache_types.XCODE and 'DerivedData' in l['path']]
         if xcode_locs and sum(l['size'] for l in xcode_locs) > 100 * MB:
             recommendations.append({'id': 'xcode_deriveddata', 'tier': 3, 'priority': 'Agresivo', 'type': 'Xcode DerivedData',
                 'description': f'{self.format_size(sum(l["size"] for l in xcode_locs))} en datos de compilación (se regeneran al compilar)',
