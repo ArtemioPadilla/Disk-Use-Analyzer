@@ -721,6 +721,7 @@ class DiskAnalyzer:
                             ),
                             'space': size,
                             'command': f'conda env remove -n {comandos.escapar(env_name)}',
+                            'efecto': 'irreversible',
                         })
         except Exception:
             pass
@@ -757,6 +758,7 @@ class DiskAnalyzer:
                         ),
                         'space': size,
                         'command': comandos.borrar_rutas([dir_path]),
+                        'efecto': 'borra',
                     })
         except Exception:
             pass
@@ -787,6 +789,7 @@ class DiskAnalyzer:
                         '#   brew uninstall python  # si usas Anaconda\n'
                         '#   conda deactivate && rm -rf ~/anaconda3  # si usas Homebrew'
                     ),
+                    'efecto': 'solo_lista',
                 })
         except Exception:
             pass
@@ -811,6 +814,7 @@ class DiskAnalyzer:
                     ),
                     'space': total_pack,
                     'command': f'cd {comandos.escapar(repo_path)} && git gc --aggressive',
+                    'efecto': 'irreversible',
                 })
         except Exception:
             pass
@@ -848,6 +852,7 @@ class DiskAnalyzer:
                             ),
                             'space': len(snapshot_dates) * GB,
                             'command': commands,
+                            'efecto': 'irreversible',
                         })
         except Exception:
             pass
@@ -880,6 +885,7 @@ class DiskAnalyzer:
                     ),
                     'space': archives_size,
                     'command': comandos.borrar_contenido([xcode_archives_path]),
+                    'efecto': 'borra',
                 })
         except Exception:
             pass
