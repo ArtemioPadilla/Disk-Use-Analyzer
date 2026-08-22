@@ -847,10 +847,12 @@ class DiskAnalyzer:
                             'tier': 3, 'priority': 'Agresivo',
                             'type': 'Snapshots Locales de Time Machine',
                             'description': (
-                                f'{len(snapshot_dates)} snapshot(s) local(es) de Time Machine '
-                                f'detectados. Pueden ocupar varios GB.'
+                                f'{len(snapshot_dates)} snapshot(s) local(es) de Time Machine. '
+                                f'macOS no expone cuánto ocupan: pueden ir de unos megas a '
+                                f'varios GB según lo que haya cambiado en el disco. '
+                                f'El comando pide privilegios de administrador (sudo).'
                             ),
-                            'space': len(snapshot_dates) * GB,
+                            'space': 0,  # macOS no expone el tamaño real; no inventamos GB
                             'command': commands,
                             'efecto': 'irreversible',
                         })

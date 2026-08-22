@@ -145,3 +145,18 @@ def test_recomendaciones_inteligentes_con_efecto_correcto():
         assert recs[tipo]['efecto'] == efecto, (
             f"{tipo}: esperaba efecto={efecto!r}, encontré {recs[tipo].get('efecto')!r}"
         )
+
+
+def test_snapshots_time_machine_no_inventa_espacio():
+    """macOS no expone cuánto ocupa un snapshot local: `len(snapshot_dates) * GB`
+    era un número puesto a dedo (un GB fijo por snapshot), y ese campo
+    alimenta el total recuperable de la interfaz. No podemos reclamar un
+    espacio que no medimos: 'space' tiene que ser 0 hasta que exista una
+    medición real."""
+    recs = {r['type']: r for r in _recomendaciones_inteligentes()}
+    tipo = 'Snapshots Locales de Time Machine'
+    assert tipo in recs, f"No se disparó la detección: {tipo}"
+    assert recs[tipo]['space'] == 0, (
+        f"{tipo}: 'space' no puede ser una estimación inventada, "
+        f"encontré {recs[tipo]['space']!r}"
+    )
