@@ -916,8 +916,15 @@ class DiskAnalyzer:
         CLI/app de bandeja (patrones avanzados: entornos conda, node_modules
         huerfanos, etc.) y se anade encima, tal y como hacia el codigo
         anterior.
+
+        prestado.generate_recommendations() ya descarta sus propias
+        recomendaciones con 'command' vacio (ver
+        descartar_recomendaciones_sin_comando en disk_analyzer_core.py), pero
+        detect_smart_recommendations() es una fuente propia de este fichero
+        que no pasa por ahi, asi que el filtro se reaplica despues de anexar
+        su salida.
         """
-        from disk_analyzer_core import DiskAnalyzerCore
+        from disk_analyzer_core import DiskAnalyzerCore, descartar_recomendaciones_sin_comando
         prestado = DiskAnalyzerCore(str(self.start_path))
         prestado.cache_locations = self.cache_locations
         prestado.large_files = self.large_files
@@ -930,6 +937,7 @@ class DiskAnalyzer:
         recommendations = prestado.generate_recommendations()
 
         recommendations.extend(self.detect_smart_recommendations())
+        recommendations = descartar_recomendaciones_sin_comando(recommendations)
 
         return sorted(recommendations, key=lambda x: (x['tier'], -x['space']))
 

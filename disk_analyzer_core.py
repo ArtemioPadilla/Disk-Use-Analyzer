@@ -26,6 +26,33 @@ from analyzer import cache_types
 from analyzer import measurement
 from analyzer import comandos
 
+
+def descartar_recomendaciones_sin_comando(recomendaciones: List[Dict]) -> List[Dict]:
+    """Descarta recomendaciones cuyo 'command' quedó vacío (o solo espacios).
+
+    Una recomendación con command vacío promete un espacio que no se puede
+    liberar: el botón que la ejecuta no hace nada. Esto pasa cuando
+    comandos.borrar_contenido/borrar_rutas descartan TODAS las rutas de una
+    regla porque ninguna pasa protection.puede_borrarse -- por ejemplo, si
+    una regla nueva apunta a una ubicación que protection.py todavía no
+    reconoce como segura (así se descubrió esta clase de fallo: Task 7,
+    con 'papelera' y 'xcode_archives_antiguos' antes de ampliar la
+    whitelist). Es una red de seguridad genérica: si la verja bloquea otra
+    ruta mañana, la recomendación desaparece por ausencia en vez de quedar
+    como un botón muerto que nadie nota.
+
+    Las recomendaciones 'solo_lista' llevan un comando real de inspección
+    (un `find`, un `du`, o un comentario de shell) como 'command', nunca la
+    cadena vacía, así que sobreviven: el filtro es literalmente sobre la
+    cadena vacía, no sobre qué tipo de comando es.
+
+    Usada por DiskAnalyzerCore.generate_recommendations() y por
+    DiskAnalyzer.generate_recommendations() (disk_analyzer.py), que la
+    reaplica después de anexar detect_smart_recommendations().
+    """
+    return [r for r in recomendaciones if (r.get('command') or '').strip()]
+
+
 class DiskAnalyzerCore:
     """Core disk analysis functionality with progress callback support"""
     
@@ -748,8 +775,9 @@ class DiskAnalyzerCore:
                 'command': 'find / -name "*.vmdk" -o -name "*.vdi" -o -name "*.qcow2" 2>/dev/null | head -20',
                 'efecto': 'solo_lista'})
 
+        recommendations = descartar_recomendaciones_sin_comando(recommendations)
         return sorted(recommendations, key=lambda x: (x['tier'], -x['space']))
-    
+
     def _get_cleanup_command_for_downloads(self) -> str:
         """Get platform-specific cleanup command for downloads"""
         if self.is_windows:

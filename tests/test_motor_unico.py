@@ -37,10 +37,22 @@ IDS_ESPERADOS = {
 }
 
 
-def _estado_sintetico(home='/Users/prueba'):
+def _estado_sintetico(home=None):
     """Estado sintético diseñado para disparar las 12 reglas de nivel a la
     vez, sin depender de qué cachés existan de verdad en la máquina que
-    corre el test. Devuelve (cache_locations, large_files, docker_stats)."""
+    corre el test. Devuelve (cache_locations, large_files, docker_stats).
+
+    `home` por defecto es el $HOME real de quien corre el test, no un
+    '/Users/prueba' sintético: desde que generate_recommendations() descarta
+    toda recomendación con 'command' vacío (Task 7, ronda de arreglo 1), un
+    home sintético cae bajo '/Users' (RUTAS_DE_DATOS_DE_USUARIO), su comando
+    sale vacío por la verja de protection.puede_borrarse, y la recomendación
+    entera desaparece -- exactamente lo que este fixture necesita evitar
+    para poder seguir dependiendo de las 12 reglas presentes a la vez. Sigue
+    aceptando un `home` explícito para quien quiera aislarse del $HOME real
+    a propósito."""
+    if home is None:
+        home = os.path.expanduser('~')
     cache_locations = [
         {'path': f'{home}/Library/Logs', 'size': 50 * MB, 'type': 'Logs del Sistema'},
         {'path': f'{home}/Library/Application Support/Code/Cache', 'size': 50 * MB, 'type': 'VS Code Cache'},

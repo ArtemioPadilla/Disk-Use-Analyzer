@@ -126,6 +126,19 @@ def puede_borrarse(file_path: str) -> bool:
     if is_protected_path(ruta):
         return False
 
+    # Segundo eje de la verja: por NOMBRE, no por ubicación. `_coincide_con_permitidas`
+    # es una whitelist de rutas fijas -- pero detect_smart_recommendations()
+    # encuentra `node_modules` huérfanos en rutas arbitrarias del usuario
+    # (cualquier proyecto, en cualquier parte), así que no hay una ubicación
+    # fija que añadir ahí. `node_modules` se regenera con `npm install`: el
+    # nombre por sí solo basta para considerarlo seguro, siempre que
+    # `is_protected_path` ya lo haya dejado pasar (arriba). Deliberadamente
+    # estrecho -- SOLO este nombre exacto, nada de listas de patrones
+    # abiertas. No añadir más casos de este eje sin una decisión de producto
+    # explícita (ver tests/test_puede_borrarse.py).
+    if Path(ruta).name == 'node_modules':
+        return True
+
     for cruda in RUTAS_DE_DATOS_DE_USUARIO:
         prohibida = os.path.realpath(os.path.expanduser(cruda))
         # La ruta prohibida en sí, y todo lo que cuelga de ella salvo que una

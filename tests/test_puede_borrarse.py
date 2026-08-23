@@ -63,6 +63,42 @@ def test_las_caches_conocidas_si_se_borran(ruta):
     assert puede_borrarse(ruta), f"{ruta} debería poder limpiarse"
 
 
+# -- Segundo eje de la verja: por NOMBRE, no por ubicación (Task 7, ronda de
+# arreglo 1). detect_smart_recommendations() encuentra node_modules
+# huérfanos en cualquier proyecto del usuario -- rutas arbitrarias, no una
+# ubicación fija que se pueda añadir a _coincide_con_permitidas. Decisión de
+# producto explícita: node_modules se regenera con `npm install`, así que el
+# nombre solo basta, siempre que is_protected_path ya lo haya dejado pasar. --
+
+@pytest.mark.parametrize("ruta", [
+    os.path.join(CASA, "Documents/repos/x/node_modules"),
+    os.path.join(CASA, "Developer/algun-proyecto/node_modules"),
+    "/Volumes/Backup Time Machine/proyecto/node_modules",
+])
+def test_node_modules_se_puede_borrar_por_nombre_aunque_este_en_datos_de_usuario(ruta):
+    assert puede_borrarse(ruta), (
+        f"{ruta} debería poder limpiarse: se llama 'node_modules'"
+    )
+
+
+@pytest.mark.parametrize("ruta", [
+    os.path.join(CASA, "Documents/repos/x"),
+    os.path.join(CASA, "Documents"),
+])
+def test_el_padre_de_node_modules_no_se_puede_borrar(ruta):
+    """El eje por nombre es estrecho a propósito: solo el directorio que se
+    llama exactamente 'node_modules', nunca su padre ni el resto de
+    ~/Documents."""
+    assert not puede_borrarse(ruta), f"{ruta} salió como borrable"
+
+
+def test_node_modules_sigue_protegido_si_esta_bajo_una_ruta_de_sistema():
+    """El eje por nombre no pasa por encima de is_protected_path: la regla
+    del brief para instalar la verja era 'siempre que siga pasando
+    is_protected_path', no un comodín absoluto."""
+    assert not puede_borrarse("/System/Library/node_modules")
+
+
 def test_una_ruta_relativa_o_vacia_nunca_se_borra(monkeypatch):
     # cwd deliberadamente fuera de cualquier prefijo prohibido: /cores no
     # aparece en RUTAS_DE_DATOS_DE_USUARIO ni en is_protected_path. Si el
