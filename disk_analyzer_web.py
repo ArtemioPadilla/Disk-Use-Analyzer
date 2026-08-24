@@ -28,7 +28,7 @@ import uvicorn
 
 # Import our core analyzer
 from disk_analyzer_core import DiskAnalyzerCore, MB, GB, IS_MACOS, IS_WINDOWS
-from analyzer.protection import is_protected_path
+from analyzer.protection import is_protected_path, puede_borrarse
 from pty_manager import PTYManager
 from agents_manager import AgentsManager
 from persona_detector import detect_personas, generate_persona_recommendations
@@ -893,7 +893,19 @@ def _perform_cleanup_deletes(actions: list) -> tuple:
 
     for action in actions:
         target = Path(action["path"]).resolve()
-        if is_protected_path(str(target)):
+        # is_protected_path is an OS blacklist -- it says nothing about user
+        # data (~/Downloads, ~/Documents, iCloud Drive, ... all come back
+        # False from it, i.e. "deletable"). The gate that answers the actual
+        # question here -- is it SAFE to delete this without a human looking
+        # -- is analyzer.protection.puede_borrarse, the same one
+        # analyzer/comandos.py installs in front of every generated shell
+        # command. This endpoint deletes directly via shutil.rmtree/unlink,
+        # bypassing comandos.py entirely, so it needs its own call to the
+        # gate. Verified against the real home: of 10 targets, two that
+        # puede_borrarse explicitly forbids (~/Downloads,
+        # ~/Library/Developer/CoreSimulator/Devices) were deleted anyway
+        # under the old is_protected_path-only filter.
+        if not puede_borrarse(str(target)):
             errors.append({"path": str(target), "error": "Ruta protegida del sistema"})
             continue
         try:

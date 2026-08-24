@@ -20,9 +20,15 @@ mover a otro Mac.
 
 ## "Abrir analizador completo"
 
-El ítem arranca el servidor web empaquetado y abre el navegador en él. Si ya
-había uno escuchando en el 8000 —por ejemplo un `make web` tuyo—, lo reutiliza
-en vez de pelearse por el puerto.
+El ítem arranca el servidor web empaquetado en un **puerto efímero** que pide al
+sistema, y abre el navegador en él. Solo reutiliza un servidor si es el que
+arrancó la propia app y su proceso sigue vivo.
+
+Antes usaba el 8000 fijo y solo comprobaba que *algo* aceptara conexiones ahí,
+así que un Django o un Rails tuyo en ese puerto se abría en el navegador como si
+fuera el analizador. Como la app abre el navegador ella misma, el número de
+puerto nunca lo ves: fijarlo solo servía para chocar. `make web` se queda con el
+8000, que es su comportamiento documentado.
 
 **Se ata solo a `127.0.0.1`, no a toda la red.** El servidor por defecto escucha
 en `0.0.0.0` porque el acceso desde otros dispositivos es una función

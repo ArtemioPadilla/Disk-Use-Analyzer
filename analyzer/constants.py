@@ -110,6 +110,37 @@ PROTECTED_PATH_PREFIXES = [
     '/private/var/folders/',
 ]
 
+# Rutas cuyo borrado destruye datos del usuario. `PROTECTED_PATH_PREFIXES` es
+# una lista negra del sistema operativo y no cubre nada de esto: verificado que
+# ~/Documents, iCloud Drive y /Volumes/... salían como borrables.
+#
+# Se guardan relativas a $HOME (o absolutas cuando no dependen del usuario) y se
+# expanden al comprobar, para que los tests no dependan de quién ejecuta.
+RUTAS_DE_DATOS_DE_USUARIO = [
+    '~',
+    '~/Documents',
+    '~/Desktop',
+    '~/Pictures',
+    '~/Movies',
+    '~/Music',
+    '~/Library/Mobile Documents',   # iCloud Drive
+    '~/Library/Messages',
+    '~/Library/Mail',
+    '~/Library/Photos',
+    '~/Library/Keychains',
+    '~/Library/Application Support/MobileSync',  # backups de iPhone
+    '/Volumes',                     # discos externos y Time Machine
+    '/Users',
+    '/System',
+    '/Library',
+    '/private',
+    '/usr',
+    '/etc',
+    '/var',
+    '/opt',
+    '/Applications',
+]
+
 # Prefijos que protegen internos de apps (Contents/ dentro de un .app o .AppBundle)
 # pero NO el .app en sí (el usuario puede borrar una app entera)
 PROTECTED_APP_MARKERS = ['.app/', '.AppBundle/']

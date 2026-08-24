@@ -1,14 +1,15 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { renderHook, act, waitFor } from '@testing-library/react';
 import { useCleanupRunner, __resetCleanupRunnerForTests } from './useCleanupRunner';
-import { emit } from '../lib/events';
+import { emit, on } from '../lib/events';
 import { api } from '../lib/api';
 
 vi.mock('../lib/api', () => ({
-  api: { createTerminal: vi.fn() },
+  api: { createTerminal: vi.fn(), getSystemInfo: vi.fn() },
 }));
 
 const mockedCreate = vi.mocked(api.createTerminal);
+const mockedGetSystemInfo = vi.mocked(api.getSystemInfo);
 
 beforeEach(() => {
   localStorage.clear();
@@ -16,7 +17,25 @@ beforeEach(() => {
   vi.useRealTimers();
   __resetCleanupRunnerForTests();
   mockedCreate.mockResolvedValue({ pty_id: 'pty-1', created_at: '2026-01-01T00:00:00Z' } as any);
+  // Default: the disk measurement is unavailable, so completed jobs fall
+  // back to the recommendation's own estimate — this is what every test
+  // below that doesn't care about disk measurement relies on. Tests that
+  // do care override this per-call with mockResolvedValueOnce.
+  mockedGetSystemInfo.mockRejectedValue(new Error('getSystemInfo not mocked in this test'));
 });
+
+/**
+ * Queue `job`, let it start (mockedCreate always resolves to pty-1 unless a
+ * test overrides it), fire its exit with `code`, and wait for the queue to
+ * settle before returning.
+ */
+async function ejecutarYCompletar(job: { command: string; space: number }, code: number): Promise<void> {
+  const { result } = renderHook(() => useCleanupRunner());
+  act(() => { result.current.run(job); });
+  await waitFor(() => expect(mockedCreate).toHaveBeenCalledTimes(1));
+  act(() => { emit('terminal:exited', { pty_id: 'pty-1', code }); });
+  await waitFor(() => expect(result.current.running.has(job.command)).toBe(false));
+}
 
 describe('useCleanupRunner', () => {
   it('credits the saving only after the command exits with code 0', async () => {
@@ -305,6 +324,149 @@ describe('useCleanupRunner', () => {
     await waitFor(() => expect(mockedCreate).toHaveBeenCalledTimes(2));
     act(() => { emit('terminal:exited', { pty_id: 'stuck-pty-2', code: 0 }); });
     await waitFor(() => expect(result.current.completed.has('next-cmd')).toBe(true));
+
+    vi.useRealTimers();
+  });
+
+  // ── Fix round 5: credit what the disk shows, not the exit code ──────────
+  //
+  // Crediting savings off the exit code is what let a no-op command report
+  // "85 MB liberados". `rm -f` returns 0 whether it deleted everything or
+  // nothing — the exit code proves nothing about space. Only the disk does.
+
+  it('acredita el espacio realmente liberado, no el estimado', async () => {
+    // libre antes: 10 GB; después: 12 GB  →  se liberaron 2 GB
+    mockedGetSystemInfo
+      .mockResolvedValueOnce({ disk_usage: { free: 10e9 } } as any)
+      .mockResolvedValueOnce({ disk_usage: { free: 12e9 } } as any);
+
+    const visto = vi.fn();
+    on('cleanup:completed', visto);
+    await ejecutarYCompletar({ command: 'rm -rf x', space: 99e9 }, 0);
+
+    expect(visto).toHaveBeenCalledWith(
+      expect.objectContaining({ space: 2e9, estimado: 99e9 }),
+    );
+  });
+
+  it('un comando que no libera nada acredita cero, no su estimación', async () => {
+    mockedGetSystemInfo
+      .mockResolvedValueOnce({ disk_usage: { free: 10e9 } } as any)
+      .mockResolvedValueOnce({ disk_usage: { free: 10e9 } } as any);
+
+    const visto = vi.fn();
+    on('cleanup:completed', visto);
+    await ejecutarYCompletar({ command: "rm -rf 'x/*'", space: 85e6 }, 0);
+
+    expect(visto).toHaveBeenCalledWith(expect.objectContaining({ space: 0 }));
+  });
+
+  it('nunca acredita un ahorro negativo', async () => {
+    // Otro proceso escribió mientras corría la limpieza.
+    mockedGetSystemInfo
+      .mockResolvedValueOnce({ disk_usage: { free: 12e9 } } as any)
+      .mockResolvedValueOnce({ disk_usage: { free: 10e9 } } as any);
+
+    const visto = vi.fn();
+    on('cleanup:completed', visto);
+    await ejecutarYCompletar({ command: 'rm -rf x', space: 1e9 }, 0);
+
+    expect(visto).toHaveBeenCalledWith(expect.objectContaining({ space: 0 }));
+  });
+
+  it('si getSystemInfo falla, cae al espacio estimado sin romper la cola', async () => {
+    // Ambas llamadas (antes y después) fallan — comportamiento por defecto
+    // del beforeEach de este archivo. La limpieza debe seguir acreditándose
+    // con la estimación, no quedar colgada ni lanzar.
+    const visto = vi.fn();
+    on('cleanup:completed', visto);
+    await ejecutarYCompletar({ command: 'rm -rf x', space: 42 }, 0);
+
+    expect(visto).toHaveBeenCalledWith(expect.objectContaining({ space: 42, estimado: 42 }));
+  });
+
+  it('si la medición "antes" va bien pero "después" falla, cae al estimado', async () => {
+    mockedGetSystemInfo
+      .mockResolvedValueOnce({ disk_usage: { free: 10e9 } } as any)
+      .mockRejectedValueOnce(new Error('offline'));
+
+    const visto = vi.fn();
+    on('cleanup:completed', visto);
+    await ejecutarYCompletar({ command: 'rm -rf x', space: 20 }, 0);
+
+    expect(visto).toHaveBeenCalledWith(expect.objectContaining({ space: 20, estimado: 20 }));
+  });
+
+  it('si la medición "antes" falla, no se intenta medir "después" y cae al estimado', async () => {
+    mockedGetSystemInfo.mockRejectedValueOnce(new Error('offline'));
+
+    const visto = vi.fn();
+    on('cleanup:completed', visto);
+    await ejecutarYCompletar({ command: 'rm -rf x', space: 15 }, 0);
+
+    expect(visto).toHaveBeenCalledWith(expect.objectContaining({ space: 15, estimado: 15 }));
+    // libreAntes quedó en null, así que finishActiveJob nunca intenta la
+    // segunda medición — solo se llamó a getSystemInfo una vez.
+    expect(mockedGetSystemInfo).toHaveBeenCalledTimes(1);
+  });
+
+  // ── Fix round 6: la medición no puede colgar la cola ─────────────────────
+  //
+  // request() (web/src/lib/api.ts) no tiene timeout ni AbortController: un
+  // servidor que acepta la conexión y nunca responde (ocupado con un scan,
+  // por ejemplo) dejaría el await de la medición sin resolver para siempre.
+  // conLimite() acota ambas mediciones a MEASURE_TIMEOUT_MS (3000ms aquí)
+  // para que ese escenario caiga al estimado en vez de colgar la cola.
+
+  it('si la medición "antes" se cuelga, expira y no bloquea la cola', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    mockedGetSystemInfo.mockImplementationOnce(() => new Promise(() => { /* never resolves */ }));
+
+    const visto = vi.fn();
+    on('cleanup:completed', visto);
+
+    const { result } = renderHook(() => useCleanupRunner());
+    act(() => { result.current.run({ command: 'rm -rf x', space: 7 }); });
+
+    // La medición "antes" nunca resuelve — avanza más allá de su propio
+    // límite para que startJob() pueda seguir y crear el terminal.
+    await act(async () => { await vi.advanceTimersByTimeAsync(3000); });
+
+    await waitFor(() => expect(mockedCreate).toHaveBeenCalledTimes(1));
+    act(() => { emit('terminal:exited', { pty_id: 'pty-1', code: 0 }); });
+    await waitFor(() => expect(visto).toHaveBeenCalled());
+
+    expect(visto).toHaveBeenCalledWith(expect.objectContaining({ space: 7, estimado: 7 }));
+
+    vi.useRealTimers();
+  });
+
+  it('si la medición "después" se cuelga, expira, credita el estimado y la cola sigue', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    mockedGetSystemInfo
+      .mockResolvedValueOnce({ disk_usage: { free: 10e9 } } as any) // "antes" ok
+      .mockImplementationOnce(() => new Promise(() => { /* never resolves */ })); // "después" se cuelga
+
+    const visto = vi.fn();
+    on('cleanup:completed', visto);
+
+    const { result } = renderHook(() => useCleanupRunner());
+    act(() => { result.current.run({ command: 'rm -rf x', space: 9 }); });
+    await waitFor(() => expect(mockedCreate).toHaveBeenCalledTimes(1));
+
+    act(() => { emit('terminal:exited', { pty_id: 'pty-1', code: 0 }); });
+
+    // La medición "después" nunca resuelve — avanza más allá de su límite
+    // para que se acredite en vez de quedarse colgado para siempre.
+    await act(async () => { await vi.advanceTimersByTimeAsync(3000); });
+
+    await waitFor(() => expect(visto).toHaveBeenCalled());
+    expect(visto).toHaveBeenCalledWith(expect.objectContaining({ space: 9, estimado: 9 }));
+
+    // La cola no quedó atascada: un trabajo encolado detrás sigue pudiendo arrancar.
+    mockedGetSystemInfo.mockRejectedValue(new Error('offline'));
+    act(() => { result.current.run({ command: 'rm -rf y', space: 3 }); });
+    await waitFor(() => expect(mockedCreate).toHaveBeenCalledTimes(2));
 
     vi.useRealTimers();
   });

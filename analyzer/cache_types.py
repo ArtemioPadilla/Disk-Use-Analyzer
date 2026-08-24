@@ -9,6 +9,7 @@ Ported from DiskAnalyzerCore.categorize_cache (disk_analyzer_core.py), which
 both DiskAnalyzer.classify_cache (CLI) and DiskAnalyzerCore.categorize_cache
 now delegate to (Task 4 of the shared-engine refactor).
 """
+import os
 from pathlib import Path
 
 DOCKER = 'Docker'
@@ -52,6 +53,40 @@ ALL_LABELS = (
 SAFE_TO_CLEAN = frozenset({LOGS, VSCODE, NPM, XCODE})
 
 
+def _sin_nombre_de_usuario(path_str: str) -> str:
+    """Strips the home directory -- and with it, the username -- from a path
+    before classification looks at it.
+
+    `classify` matches on substrings of the *whole* lowercased path. A
+    macOS home directory is `/Users/<username>`, so before this stripping a
+    username that happens to contain 'log', 'code' or 'node' (e.g. 'logan',
+    'nicode', 'anode') made every single path under that user's home --
+    including `~/Downloads` -- match LOGS/VSCODE/NPM respectively, landing
+    it in SAFE_TO_CLEAN. Verified: user 'logan' -> `~/Downloads` classified
+    as LOGS.
+
+    Two strategies, tried in order:
+    1. Strip the real `$HOME` prefix, if the path is under it (covers the
+       common case, including non-`/Users` homes).
+    2. Generic fallback: if the path looks like `/Users/<name>/...` or
+       `/home/<name>/...` (a synthetic username that isn't the real $HOME,
+       as in tests and in multi-user scans), drop that two-component
+       prefix too.
+
+    Classification then runs on what's left -- 'Library/Logs', '.npm', etc
+    -- never on the username itself.
+    """
+    partes = Path(path_str).parts
+    home_partes = Path(os.path.expanduser('~')).parts
+    if len(partes) >= len(home_partes) and partes[:len(home_partes)] == home_partes:
+        resto = partes[len(home_partes):]
+        return str(Path(*resto)) if resto else ''
+    if len(partes) >= 3 and partes[1].lower() in ('users', 'home'):
+        resto = partes[3:]
+        return str(Path(*resto)) if resto else ''
+    return path_str
+
+
 def classify(path: Path) -> str:
     """Classify a cache location by path. Order matters: first match wins.
 
@@ -68,8 +103,11 @@ def classify(path: Path) -> str:
     'xcode' and 'node') now resolves to XCODE where the pre-fix code would
     have hit that later branch (e.g. NPM) instead. Only single-keyword paths
     are guaranteed unaffected by moving 'xcode' to the front.
+
+    The path is stripped of its home directory (username) before any of
+    this matching happens -- see `_sin_nombre_de_usuario`.
     """
-    path_str = str(path).lower()
+    path_str = _sin_nombre_de_usuario(str(path)).lower()
 
     if 'xcode' in path_str:
         return XCODE

@@ -13,10 +13,42 @@ const STORAGE_KEY = 'disk-analyzer-cleaned';
 // a genuinely stuck queue recovers within one page visit.
 const STUCK_JOB_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes
 
+// The disk-space measurement must never hang the queue. `request()` (see
+// web/src/lib/api.ts) has no timeout or AbortController, so a server that
+// accepts the connection and never responds — busy with a scan, say — would
+// leave that await unresolved forever. In startJob() this happens before the
+// watchdog above is even armed (it's only set once createTerminal resolves);
+// in finishActiveJob() the watchdog for the job that just exited has already
+// been cleared. A few seconds is plenty for a call to localhost; if we don't
+// hear back in time, fall back to the estimate — the same outcome as any
+// other measurement failure.
+const MEASURE_TIMEOUT_MS = 3000;
+
+/** Race `p` against a timeout, resolving to `null` (never rejecting) if the timeout wins. */
+function conLimite<T>(p: Promise<T>, ms: number): Promise<T | null> {
+  return new Promise<T | null>(resolve => {
+    const timer = setTimeout(() => resolve(null), ms);
+    p.then(
+      v => { clearTimeout(timer); resolve(v); },
+      () => { clearTimeout(timer); resolve(null); },
+    );
+  });
+}
+
 export interface CleanupJob {
   command: string;
   space: number;
   label?: string;
+}
+
+// Internal, queue-only shape: adds the free-space measurement taken right
+// before the command started. Kept out of the public CleanupJob so callers
+// of run() never have to supply it — it's captured by startJob() itself and
+// carried on the job object (not a module-level variable) because several
+// jobs can be in flight in the queue over time and a shared variable would
+// get clobbered between them.
+interface QueuedJob extends CleanupJob {
+  libreAntes: number | null;
 }
 
 export interface CleanupRunner {
@@ -101,7 +133,7 @@ function getServerSnapshot(): CleanupState {
 // this module starts at most one command at a time, crediting (or failing)
 // each before starting the next.
 const queue: CleanupJob[] = [];
-const jobs: Record<string, CleanupJob> = {}; // pty_id -> the one active job, while one is in flight
+const jobs: Record<string, QueuedJob> = {}; // pty_id -> the one active job, while one is in flight
 let processing = false;
 let watchdog: ReturnType<typeof setTimeout> | null = null;
 
@@ -121,9 +153,18 @@ function scheduleNext(): void {
 }
 
 async function startJob(job: CleanupJob): Promise<void> {
+  // Measure free disk space before the command runs, so the eventual credit
+  // reflects what the command actually freed instead of trusting its
+  // estimate. Stored on the job itself (not a module variable) since several
+  // jobs pass through this queue over the page's lifetime.
+  const libreAntes = await conLimite(
+    api.getSystemInfo().then(i => i.disk_usage?.free ?? null),
+    MEASURE_TIMEOUT_MS,
+  );
+  const queuedJob: QueuedJob = { ...job, libreAntes };
   try {
     const { pty_id } = await api.createTerminal(job.command);
-    jobs[pty_id] = job;
+    jobs[pty_id] = queuedJob;
     emit('terminal:open', { pty_id, command: job.command });
     watchdog = setTimeout(() => giveUpOn(pty_id), STUCK_JOB_TIMEOUT_MS);
   } catch (e: any) {
@@ -150,7 +191,7 @@ function giveUpOn(ptyId: string): void {
   scheduleNext();
 }
 
-function finishActiveJob(ptyId: string, code: number | null): void {
+async function finishActiveJob(ptyId: string, code: number | null): Promise<void> {
   const job = jobs[ptyId];
   // An exit for a pty this module isn't tracking — either something
   // unrelated (a manually opened shell) or a duplicate event for a job
@@ -169,7 +210,24 @@ function finishActiveJob(ptyId: string, code: number | null): void {
     const nextCompleted = new Set(state.completed).add(job.command);
     persist(nextCompleted);
     setState({ running: nextRunning, completed: nextCompleted });
-    emit('cleanup:completed', { command: job.command, space: job.space });
+
+    // The exit code proves nothing about the space freed: `rm -f` returns 0
+    // whether it deleted everything or nothing. Measure the disk instead,
+    // and only fall back to the recommendation's own estimate when the
+    // measurement itself isn't available.
+    let liberado = job.space;
+    if (job.libreAntes != null) {
+      const libreDespues = await conLimite(
+        api.getSystemInfo().then(i => i.disk_usage?.free ?? null),
+        MEASURE_TIMEOUT_MS,
+      );
+      if (libreDespues != null) {
+        // Another process can write to disk while cleanup runs; never
+        // credit a negative saving.
+        liberado = Math.max(0, libreDespues - job.libreAntes);
+      }
+    }
+    emit('cleanup:completed', { command: job.command, space: liberado, estimado: job.space });
   } else {
     setState({ running: nextRunning, error: `${job.label ?? job.command} exited with code ${code}` });
   }

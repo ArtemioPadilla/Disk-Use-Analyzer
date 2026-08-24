@@ -28,7 +28,6 @@ use std::time::{Duration, Instant};
 
 use crate::analisis::Motor;
 
-const PUERTO: u16 = 8000;
 const HOST: &str = "127.0.0.1";
 /// Cuánto se espera a que el servidor acepte conexiones. Arrancar FastAPI y
 /// uvicorn lleva varios segundos en frío; medido en esta máquina, entre 8 y
@@ -38,20 +37,41 @@ const ARRANQUE_MAXIMO: Duration = Duration::from_secs(45);
 const SONDEO: Duration = Duration::from_millis(250);
 const TERM_GRACE: Duration = Duration::from_millis(300);
 
-fn direccion() -> SocketAddr {
-    SocketAddr::from(([127, 0, 0, 1], PUERTO))
+fn direccion(puerto: u16) -> SocketAddr {
+    SocketAddr::from(([127, 0, 0, 1], puerto))
 }
 
 /// Si algo acepta conexiones en el puerto. No distingue *qué* escucha: eso lo
-/// resuelve `Servidor`, que sabe si la instancia es suya.
-fn puerto_ocupado() -> bool {
-    match TcpStream::connect_timeout(&direccion(), Duration::from_millis(400)) {
+/// resuelve `Servidor::es_nuestra_instancia`, que sabe si la instancia es
+/// suya.
+fn acepta(puerto: u16) -> bool {
+    match TcpStream::connect_timeout(&direccion(puerto), Duration::from_millis(400)) {
         Ok(s) => {
             let _ = s.shutdown(Shutdown::Both);
             true
         }
         Err(_) => false,
     }
+}
+
+/// Pide al sistema un puerto libre.
+///
+/// Atar el 0 hace que el kernel asigne uno sin usar; se suelta acto seguido y
+/// se le pasa al servidor. Queda una ventana mínima en la que otro proceso
+/// podría cogerlo, y por eso quien llama reintenta.
+///
+/// El 8000 fijo que había antes es un puerto muy disputado (Django, Rails,
+/// http.server). Y como la app abre el navegador ella misma, el número nunca
+/// lo ve el usuario: fijarlo solo servía para chocar.
+fn puerto_libre() -> Result<u16, String> {
+    let l = std::net::TcpListener::bind(("127.0.0.1", 0))
+        .map_err(|e| format!("no se pudo pedir un puerto libre: {e}"))?;
+    let p = l
+        .local_addr()
+        .map_err(|e| format!("no se pudo leer el puerto asignado: {e}"))?
+        .port();
+    drop(l);
+    Ok(p)
 }
 
 /// Token de un solo uso para esta instancia del servidor.
@@ -69,6 +89,7 @@ fn token_nuevo() -> Result<String, String> {
 
 struct Instancia {
     pid: i32,
+    puerto: u16,
     url: String,
 }
 
@@ -83,6 +104,24 @@ impl Servidor {
         }
     }
 
+    /// Si el puerto lo ocupa el servidor que arrancamos nosotros.
+    ///
+    /// La versión anterior solo comprobaba que *algo* aceptara TCP en el
+    /// 8000, así que un Django del usuario se abría en el navegador como si
+    /// fuera el analizador. Ahora se exige que sea nuestra instancia
+    /// registrada, que su proceso siga vivo y que el puerto siga aceptando.
+    pub fn es_nuestra_instancia(&self, puerto: u16) -> bool {
+        let guard = self.instancia.lock().unwrap();
+        match guard.as_ref() {
+            Some(inst) => {
+                inst.puerto == puerto
+                    && unsafe { libc::kill(inst.pid, 0) } == 0
+                    && acepta(puerto)
+            }
+            None => false,
+        }
+    }
+
     /// Deja listo el analizador web y entrega por `al_terminar` la URL que hay
     /// que abrir.
     ///
@@ -92,29 +131,24 @@ impl Servidor {
     where
         F: FnOnce(Result<String, String>) + Send + 'static,
     {
-        // Ya teníamos uno vivo: se reutiliza con su token, en vez de arrancar
-        // un segundo que chocaría en el mismo puerto.
+        // Ya teníamos uno vivo y sigue siendo el nuestro: se reutiliza con su
+        // token, en vez de arrancar un segundo servidor. Si el puerto lo
+        // ocupa ahora otra cosa (o nuestro proceso ya murió), no se reutiliza
+        // nada: se arranca uno nuevo más abajo, en un puerto libre.
         {
-            let guard = self.instancia.lock().unwrap();
-            if let Some(inst) = guard.as_ref() {
-                if puerto_ocupado() {
-                    al_terminar(Ok(inst.url.clone()));
+            let existente = {
+                let guard = self.instancia.lock().unwrap();
+                guard.as_ref().map(|inst| (inst.puerto, inst.url.clone()))
+            };
+            if let Some((puerto, url)) = existente {
+                if self.es_nuestra_instancia(puerto) {
+                    al_terminar(Ok(url));
                     return;
                 }
             }
         }
 
-        // El puerto está ocupado por algo que no es nuestro: puede ser un
-        // `make web` del propio usuario. No conocemos su token, así que se
-        // abre la URL a secas y que la sesión del navegador haga el resto.
-        if puerto_ocupado() {
-            al_terminar(Ok(format!("http://{HOST}:{PUERTO}/")));
-            return;
-        }
-
-        // Sin motor empaquetado no hay servidor que arrancar. No es
-        // necesariamente un error: puede haber un `make web` del usuario que
-        // ya se habría atendido arriba.
+        // Sin motor empaquetado no hay servidor que arrancar.
         let Some(motor) = motor else {
             al_terminar(Err(
                 "no hay servidor que abrir: falta el motor empaquetado".to_string()
@@ -122,6 +156,13 @@ impl Servidor {
             return;
         };
 
+        let puerto = match puerto_libre() {
+            Ok(p) => p,
+            Err(e) => {
+                al_terminar(Err(e));
+                return;
+            }
+        };
         let token = match token_nuevo() {
             Ok(t) => t,
             Err(e) => {
@@ -141,7 +182,7 @@ impl Servidor {
             .arg("--host")
             .arg(HOST)
             .arg("--port")
-            .arg(PUERTO.to_string())
+            .arg(puerto.to_string())
             .env("DISK_ANALYZER_TOKEN", &token)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
@@ -151,7 +192,7 @@ impl Servidor {
             // ocupando el puerto.
             .process_group(0);
 
-        let child = match cmd.spawn() {
+        let mut child = match cmd.spawn() {
             Ok(c) => c,
             Err(e) => {
                 al_terminar(Err(format!("no se pudo arrancar el servidor: {e}")));
@@ -159,17 +200,39 @@ impl Servidor {
             }
         };
         let pid = child.id() as i32;
-        let url = format!("http://{HOST}:{PUERTO}/?token={token}");
+        let url = format!("http://{HOST}:{puerto}/?token={token}");
         *self.instancia.lock().unwrap() = Some(Instancia {
             pid,
+            puerto,
             url: url.clone(),
+        });
+
+        // Reap the child. `Command::spawn()` hands back a `Child` that, if
+        // just dropped, leaves the process a zombie once it dies -- and
+        // `libc::kill(pid, 0)` keeps returning 0 ("exists") for a zombie
+        // forever, because the kernel keeps its PID entry until someone
+        // calls wait() on it. `es_nuestra_instancia` relies on that same
+        // `kill(pid, 0)` to tell a live server of ours from a dead one; with
+        // a permanent zombie the pid check can never fail, so the whole
+        // function degrades to "does something accept connections on this
+        // port" -- exactly the bug the port-reuse fix was supposed to close.
+        // Worse: if that port is later reused by an unrelated process, we'd
+        // hand the browser that stranger's page with our token in the URL.
+        //
+        // Same pattern as analisis.rs's scan-runner thread: `child` is
+        // moved into a dedicated thread that owns it exclusively and blocks
+        // on `wait()` for as long as the server lives. This doesn't block
+        // `abrir()`'s caller -- it's a fire-and-forget reaper, not on the
+        // startup-polling path below.
+        std::thread::spawn(move || {
+            let _ = child.wait();
         });
 
         let servidor = Arc::clone(self);
         std::thread::spawn(move || {
             let limite = Instant::now() + ARRANQUE_MAXIMO;
             while Instant::now() < limite {
-                if puerto_ocupado() {
+                if acepta(puerto) {
                     al_terminar(Ok(url));
                     return;
                 }
@@ -193,7 +256,7 @@ impl Servidor {
     }
 
     /// Al salir de la app. Igual que con el análisis: lo que arrancamos
-    /// nosotros no debe sobrevivirnos ocupando el puerto 8000.
+    /// nosotros no debe sobrevivirnos ocupando el puerto que tomó.
     pub fn kill_blocking(&self) {
         let inst = self.instancia.lock().unwrap().take();
         if let Some(inst) = inst {
@@ -205,5 +268,86 @@ impl Servidor {
 impl Default for Servidor {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::net::TcpListener;
+
+    #[test]
+    fn pide_un_puerto_libre_distinto_del_8000() {
+        let p = puerto_libre().expect("debería conseguir un puerto");
+        assert_ne!(p, 8000, "el 8000 está muy disputado: Django, Rails, etc.");
+        assert!(p >= 1024, "no se piden puertos privilegiados");
+    }
+
+    #[test]
+    fn dos_llamadas_no_devuelven_el_mismo_puerto_ocupado() {
+        let a = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let ocupado = a.local_addr().unwrap().port();
+        // Mientras `a` siga vivo, nadie debe proponer ese puerto.
+        for _ in 0..20 {
+            assert_ne!(puerto_libre().unwrap(), ocupado);
+        }
+    }
+
+    #[test]
+    fn no_reutiliza_un_servidor_ajeno_con_una_instancia_de_verdad_registrada() {
+        // Antes esta prueba construía `Servidor::new()` con `instancia: None`,
+        // así que salía por el brazo `None => false` de `es_nuestra_instancia`
+        // sin llegar nunca a mirar el pid -- vacua: pasaba igual aunque la
+        // rama `Some(inst)` tuviera cualquier bug.
+        //
+        // El único llamante real (`abrir`) siempre pasa el puerto que YA
+        // tiene guardado en `self.instancia`, así que en producción
+        // `inst.puerto == puerto` es tautológicamente cierto y lo único que
+        // de verdad distingue "es nuestro servidor" de "es un ajeno que
+        // ocupa el mismo puerto" es la comprobación de pid -- exactamente lo
+        // que el hallazgo de la revisión señala: sin reap, esa comprobación
+        // nunca falla, y la función se reduce a "¿algo acepta conexiones
+        // aquí?".
+        //
+        // Para ejercer esa rama de verdad, se registra una `Instancia` con
+        // un pid que perteneció a un proceso real y ya terminó -- se lanza,
+        // se espera con `wait()` (reap explícito, ver comentario del fix en
+        // `abrir`) y se usa ESE pid, no uno inventado que nunca existió.
+        // Con el pid genuinamente muerto, `libc::kill(pid, 0)` devuelve
+        // ESRCH y la rama Some(inst) tiene que rechazarlo aunque el puerto
+        // registrado coincida con el de un servidor ajeno que sí acepta
+        // conexiones.
+        //
+        // Nota sobre "zombi": un proceso zombi de verdad (terminado pero
+        // SIN reap) sigue respondiendo 0 a `kill(pid, 0)` -- es justamente
+        // el bug que este mismo commit arregla, verificado en
+        // /tmp/zombie_test.py durante el diagnóstico. Por eso esta prueba
+        // usa un pid ya reaped (el estado en el que queda un pid nuestro
+        // DESPUÉS del fix, una vez el hilo dedicado le hace `wait()`) en vez
+        // de un zombi real sin reap: probar con un zombi real solo
+        // confirmaría el bug, no la corrección.
+        let mut hijo = Command::new("true")
+            .spawn()
+            .expect("no se pudo lanzar un proceso de prueba");
+        let pid_ya_muerto = hijo.id() as i32;
+        hijo.wait().expect("no se pudo esperar al proceso de prueba");
+
+        // Alguien más ocupa, ahora mismo, el mismo puerto que registramos
+        // como si fuera el nuestro.
+        let ajeno = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let puerto = ajeno.local_addr().unwrap().port();
+
+        let servidor = Servidor::new();
+        *servidor.instancia.lock().unwrap() = Some(Instancia {
+            pid: pid_ya_muerto,
+            puerto,
+            url: format!("http://{HOST}:{puerto}/?token=lo-que-sea"),
+        });
+
+        assert!(
+            !servidor.es_nuestra_instancia(puerto),
+            "abrir el navegador en un servidor ajeno lo presenta como nuestro, \
+             aunque el pid registrado ya no exista"
+        );
     }
 }

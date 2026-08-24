@@ -5,6 +5,22 @@ import { formatBytes } from '../lib/format';
 import { useCleanupRunner } from '../hooks/useCleanupRunner';
 import { TIER_META } from '../lib/tiers';
 
+/**
+ * El nivel de riesgo de una recomendación, o el más restrictivo si no se
+ * puede saber.
+ *
+ * El código anterior hacía `r.tier || 1`, que convertía `undefined`, `null` y
+ * `0` en Seguro — y Seguro es justo lo que el botón de "ejecutar todo" lanza
+ * sin revisión. Ante una recomendación malformada, lo correcto es lo contrario.
+ *
+ * Verifica el tipo ANTES de coercionar. Rechaza: booleans (Number(true)===1),
+ * arrays (Number([1])===1), strings ("1" !== 1), y números no-enteros.
+ */
+export function nivelDe(rec: { tier?: unknown }): number {
+  const n = rec?.tier;
+  return typeof n === 'number' && Number.isInteger(n) && n >= 1 && n <= 4 ? n : 4;
+}
+
 export default function CleanupWizard() {
   const [recs, setRecs] = useState<Recommendation[]>([]);
   const [expanded, setExpanded] = useState<Set<number>>(new Set([1]));
@@ -34,20 +50,20 @@ export default function CleanupWizard() {
   };
 
   const totalRecoverable = recs.reduce((s, r) => s + (r.space || 0), 0);
-  const safeTotalSpace = recs.filter(r => (r.tier || 1) === 1).reduce((s, r) => s + (r.space || 0), 0);
+  const safeTotalSpace = recs.filter(r => nivelDe(r) === 1).reduce((s, r) => s + (r.space || 0), 0);
 
   const cleanSafeItems = () => {
-    const safeRecs = recs.filter(r => (r.tier || 1) === 1 && r.command && !r.command.startsWith('#'));
+    const safeRecs = recs.filter(r => nivelDe(r) === 1 && r.command && !r.command.startsWith('#'));
     for (const rec of safeRecs) {
       run({ command: rec.command, space: rec.space, label: rec.description });
     }
   };
 
-  const safeRecsRunnable = recs.filter(r => (r.tier || 1) === 1 && r.command && !r.command.startsWith('#'));
+  const safeRecsRunnable = recs.filter(r => nivelDe(r) === 1 && r.command && !r.command.startsWith('#'));
   const safeRunning = safeRecsRunnable.some(r => running.has(r.command));
 
   const grouped = recs.reduce((acc, rec) => {
-    const tier = rec.tier || 1;
+    const tier = nivelDe(rec);
     if (!acc[tier]) acc[tier] = [];
     acc[tier].push(rec);
     return acc;

@@ -26,6 +26,7 @@ from analyzer.constants import (
 from analyzer import protection
 from analyzer import cache_types
 from analyzer import measurement
+from analyzer import comandos
 
 class DiskAnalyzer:
     def __init__(self, start_path: str, min_size_mb: float = 10):
@@ -713,13 +714,15 @@ class DiskAnalyzer:
                     if has_stale and size > 0:
                         smart_recs.append({
                             'tier': 2, 'priority': 'Moderado',
+                            'id': 'conda_obsoleto',
                             'type': 'Entorno Conda Obsoleto',
                             'description': (
                                 f'Entorno conda "{env_name}" sin actividad reciente '
                                 f'({self.format_size(size)})'
                             ),
                             'space': size,
-                            'command': f'conda env remove -n {env_name}',
+                            'command': f'conda env remove -n {comandos.escapar(env_name)}',
+                            'efecto': 'irreversible',
                         })
         except Exception:
             pass
@@ -749,13 +752,15 @@ class DiskAnalyzer:
                 if stale and size > 0:
                     smart_recs.append({
                         'tier': 2, 'priority': 'Moderado',
+                        'id': 'node_modules_huerfano',
                         'type': 'node_modules Huerfano',
                         'description': (
                             f'node_modules sin actividad de proyecto en 60+ dias '
                             f'({self.format_size(size)}) en {parent}'
                         ),
                         'space': size,
-                        'command': f"rm -rf '{dir_path}'",
+                        'command': comandos.borrar_rutas([dir_path]),
+                        'efecto': 'borra',
                     })
         except Exception:
             pass
@@ -773,6 +778,7 @@ class DiskAnalyzer:
                 total = homebrew_python_size + anaconda_python_size
                 smart_recs.append({
                     'tier': 3, 'priority': 'Agresivo',
+                    'id': 'python_multiple',
                     'type': 'Multiples Instalaciones Python',
                     'description': (
                         f'Se detectaron instalaciones de Python tanto en Homebrew '
@@ -786,6 +792,7 @@ class DiskAnalyzer:
                         '#   brew uninstall python  # si usas Anaconda\n'
                         '#   conda deactivate && rm -rf ~/anaconda3  # si usas Homebrew'
                     ),
+                    'efecto': 'solo_lista',
                 })
         except Exception:
             pass
@@ -802,6 +809,7 @@ class DiskAnalyzer:
                 repo_name = os.path.basename(repo_path)
                 smart_recs.append({
                     'tier': 2, 'priority': 'Moderado',
+                    'id': 'git_pack_files',
                     'type': 'Git Pack Files Grandes',
                     'description': (
                         f'Repositorio "{repo_name}" tiene pack files de '
@@ -809,7 +817,8 @@ class DiskAnalyzer:
                         f'Ejecuta gc para compactar.'
                     ),
                     'space': total_pack,
-                    'command': f"cd '{repo_path}' && git gc --aggressive",
+                    'command': f'cd {comandos.escapar(repo_path)} && git gc --aggressive',
+                    'efecto': 'irreversible',
                 })
         except Exception:
             pass
@@ -840,13 +849,17 @@ class DiskAnalyzer:
                         )
                         smart_recs.append({
                             'tier': 3, 'priority': 'Agresivo',
+                            'id': 'time_machine_snapshots',
                             'type': 'Snapshots Locales de Time Machine',
                             'description': (
-                                f'{len(snapshot_dates)} snapshot(s) local(es) de Time Machine '
-                                f'detectados. Pueden ocupar varios GB.'
+                                f'{len(snapshot_dates)} snapshot(s) local(es) de Time Machine. '
+                                f'macOS no expone cuánto ocupan: pueden ir de unos megas a '
+                                f'varios GB según lo que haya cambiado en el disco. '
+                                f'El comando pide privilegios de administrador (sudo).'
                             ),
-                            'space': len(snapshot_dates) * GB,
+                            'space': 0,  # macOS no expone el tamaño real; no inventamos GB
                             'command': commands,
+                            'efecto': 'irreversible',
                         })
         except Exception:
             pass
@@ -872,13 +885,15 @@ class DiskAnalyzer:
             if archives_size > 1 * GB:
                 smart_recs.append({
                     'tier': 3, 'priority': 'Agresivo',
+                    'id': 'xcode_archives_antiguos',
                     'type': 'Xcode Archives Antiguos',
                     'description': (
                         f'{self.format_size(archives_size)} en Xcode Archives. '
                         f'Los archivos se pueden eliminar si ya no necesitas distribuir esas builds.'
                     ),
                     'space': archives_size,
-                    'command': f"rm -rf '{xcode_archives_path}'/*",
+                    'command': comandos.borrar_contenido([xcode_archives_path]),
+                    'efecto': 'borra',
                 })
         except Exception:
             pass
@@ -886,170 +901,43 @@ class DiskAnalyzer:
         return smart_recs
 
     def generate_recommendations(self) -> List[Dict]:
-        """Genera recomendaciones agrupadas por nivel de agresividad.
-        Cada recomendación tiene un 'tier' (1-4) de conservador a agresivo."""
-        recommendations = []
+        """Delegado en el motor compartido (disk_analyzer_core.DiskAnalyzerCore).
 
-        # ── TIER 1: Seguro (auto-limpiable, sin revisión) ──
-        # Logs del sistema
-        log_locs = [l for l in self.cache_locations if l['type'] == cache_types.LOGS]
-        if log_locs:
-            size = sum(l['size'] for l in log_locs)
-            if size > 10 * MB:
-                recommendations.append({
-                    'tier': 1, 'priority': 'Seguro',
-                    'type': cache_types.LOGS,
-                    'description': f'{self.format_size(size)} en logs del sistema',
-                    'space': size,
-                    'command': ' && '.join(f"rm -rf '{l['path']}/*'" for l in log_locs)
-                })
+        Antes habia aqui una segunda implementacion de los mismos niveles,
+        que ya habia divergido de la del core: la web recomendaba una cosa y
+        la app de bandeja otra sobre el mismo disco, porque la app de bandeja
+        ejecuta este fichero (ver desktop/src-tauri/src/analisis.rs), no el
+        core. Las cuatro reglas que solo existian aqui (Xcode DerivedData,
+        Runtimes de Simuladores, Maquinas Virtuales, y la variante de Cache
+        de Simuladores) se movieron a disk_analyzer_core.py para que ninguna
+        interfaz pierda recomendaciones.
 
-        # Homebrew caches
-        brew_files = [f for f in self.large_files if 'Homebrew/downloads' in f['path']]
-        if brew_files:
-            size = sum(f['size'] for f in brew_files)
-            recommendations.append({
-                'tier': 1, 'priority': 'Seguro',
-                'type': 'Cache de Homebrew',
-                'description': f'{len(brew_files)} descargas de Homebrew ({self.format_size(size)})',
-                'space': size,
-                'command': 'brew cleanup --prune=all'
-            })
+        detect_smart_recommendations() sigue siendo una fuente propia de la
+        CLI/app de bandeja (patrones avanzados: entornos conda, node_modules
+        huerfanos, etc.) y se anade encima, tal y como hacia el codigo
+        anterior.
 
-        # VS Code caches
-        vscode_locs = [l for l in self.cache_locations if l['type'] == cache_types.VSCODE]
-        if vscode_locs:
-            size = sum(l['size'] for l in vscode_locs)
-            if size > 10 * MB:
-                recommendations.append({
-                    'tier': 1, 'priority': 'Seguro',
-                    'type': 'Cache de VS Code',
-                    'description': f'{self.format_size(size)} en cache de VS Code',
-                    'space': size,
-                    'command': ' && '.join(f"rm -rf '{l['path']}/*'" for l in vscode_locs)
-                })
+        prestado.generate_recommendations() ya descarta sus propias
+        recomendaciones con 'command' vacio (ver
+        descartar_recomendaciones_sin_comando en disk_analyzer_core.py), pero
+        detect_smart_recommendations() es una fuente propia de este fichero
+        que no pasa por ahi, asi que el filtro se reaplica despues de anexar
+        su salida.
+        """
+        from disk_analyzer_core import DiskAnalyzerCore, descartar_recomendaciones_sin_comando
+        prestado = DiskAnalyzerCore(str(self.start_path))
+        prestado.cache_locations = self.cache_locations
+        prestado.large_files = self.large_files
+        prestado.docker_stats = self.docker_stats
+        # Both classes name this attribute the same (self.min_size, bytes);
+        # propagate it so the shared Descargas Antiguas rule respects the
+        # size floor the CLI user configured, instead of always falling back
+        # to the core's own default.
+        prestado.min_size = self.min_size
+        recommendations = prestado.generate_recommendations()
 
-        # npm cache
-        npm_locs = [l for l in self.cache_locations if l['type'] == cache_types.NPM]
-        if npm_locs:
-            size = sum(l['size'] for l in npm_locs)
-            if size > 50 * MB:
-                recommendations.append({
-                    'tier': 1, 'priority': 'Seguro',
-                    'type': 'Cache de npm',
-                    'description': f'{self.format_size(size)} en cache de npm (se regenera con npm install)',
-                    'space': size,
-                    'command': 'npm cache clean --force'
-                })
-
-        # ── TIER 2: Moderado (requiere revisión rápida) ──
-        # Simulator caches
-        sim_files = [f for f in self.large_files
-                     if 'CoreSimulator' in f['path'] and not self.is_protected_path(f['path'])]
-        if sim_files:
-            size = sum(f['size'] for f in sim_files)
-            recommendations.append({
-                'tier': 2, 'priority': 'Moderado',
-                'type': 'Cache de Simuladores iOS',
-                'description': f'{len(sim_files)} archivos de cache de simuladores ({self.format_size(size)})',
-                'space': size,
-                'command': 'xcrun simctl delete unavailable && rm -rf ~/Library/Developer/CoreSimulator/Caches/'
-            })
-
-        # Old downloads
-        old_downloads = [f for f in self.large_files
-                         if '/Downloads/' in f['path'] and f['age_days'] > 30]
-        if old_downloads:
-            size = sum(f['size'] for f in old_downloads)
-            recommendations.append({
-                'tier': 2, 'priority': 'Moderado',
-                'type': 'Descargas Antiguas',
-                'description': f'{len(old_downloads)} archivos en Downloads con más de 30 días ({self.format_size(size)})',
-                'space': size,
-                'command': f"find ~/Downloads -mtime +30 -size +{int(self.min_size/MB)}M -type f -ls"
-            })
-
-        # Docker
-        if self.docker_stats and self.docker_stats['available'] and self.docker_stats['reclaimable'] > 100 * MB:
-            recommendations.append({
-                'tier': 2, 'priority': 'Moderado',
-                'type': 'Docker',
-                'description': f'Docker: {self.format_size(self.docker_stats["reclaimable"])} recuperable de {self.format_size(self.docker_stats["total_size"])} total',
-                'space': self.docker_stats['reclaimable'],
-                'command': 'docker system prune -a -f'
-            })
-
-        # ── TIER 3: Agresivo (puede requerir re-descargas) ──
-        # ~/.cache (huggingface, pip, etc.)
-        cache_general = [l for l in self.cache_locations
-                         if l['type'] == cache_types.GENERAL and '/.cache' in l['path']]
-        if cache_general:
-            size = sum(l['size'] for l in cache_general)
-            if size > 100 * MB:
-                recommendations.append({
-                    'tier': 3, 'priority': 'Agresivo',
-                    'type': 'Cache General (~/.cache)',
-                    'description': f'{self.format_size(size)} en ~/.cache (modelos ML, pip, etc. — se re-descargan)',
-                    'space': size,
-                    'command': 'du -sh ~/.cache/*/ | sort -hr | head -20'
-                })
-
-        # Xcode DerivedData
-        xcode_locs = [l for l in self.cache_locations if l['type'] == cache_types.XCODE]
-        if xcode_locs:
-            size = sum(l['size'] for l in xcode_locs)
-            if size > 100 * MB:
-                recommendations.append({
-                    'tier': 3, 'priority': 'Agresivo',
-                    'type': 'Xcode DerivedData',
-                    'description': f'{self.format_size(size)} en datos de compilación (se regeneran al compilar)',
-                    'space': size,
-                    'command': 'rm -rf ~/Library/Developer/Xcode/DerivedData/*'
-                })
-
-        # Old Simulator runtimes (the protected DMGs — user can remove via Xcode)
-        sim_runtimes = [f for f in self.large_files
-                        if 'iOSSimulatorRuntime' in f['path'] or 'SimRuntime' in f['path']]
-        if sim_runtimes:
-            size = sum(f['size'] for f in sim_runtimes)
-            if size > 1 * GB:
-                recommendations.append({
-                    'tier': 3, 'priority': 'Agresivo',
-                    'type': 'Runtimes de Simuladores',
-                    'description': f'{self.format_size(size)} en runtimes de iOS Simulator (eliminar desde Xcode > Settings > Platforms)',
-                    'space': size,
-                    'command': 'xcrun simctl runtime list'
-                })
-
-        # ── TIER 4: Máximo (requiere decisiones del usuario) ──
-        # Large files > 1GB that are not protected
-        huge_deletable = [f for f in self.large_files
-                          if f['size'] > GB and not self.is_protected_path(f['path'])]
-        if huge_deletable:
-            size = sum(f['size'] for f in huge_deletable)
-            recommendations.append({
-                'tier': 4, 'priority': 'Máximo',
-                'type': 'Archivos Gigantes',
-                'description': f'{len(huge_deletable)} archivos de más de 1GB que puedes revisar ({self.format_size(size)})',
-                'space': size,
-                'command': '# Revisa la tabla de archivos grandes arriba'
-            })
-
-        # VMs
-        dev_files = [f for f in self.large_files
-                     if any(ext in f['extension'] for ext in ['.vmdk', '.vdi', '.qcow2'])]
-        if dev_files:
-            size = sum(f['size'] for f in dev_files)
-            recommendations.append({
-                'tier': 4, 'priority': 'Máximo',
-                'type': 'Máquinas Virtuales',
-                'description': f'{len(dev_files)} archivos de VMs ({self.format_size(size)})',
-                'space': size,
-                'command': 'find / -name "*.vmdk" -o -name "*.vdi" -o -name "*.qcow2" 2>/dev/null | head -20'
-            })
-
-        # -- Recomendaciones inteligentes --
         recommendations.extend(self.detect_smart_recommendations())
+        recommendations = descartar_recomendaciones_sin_comando(recommendations)
 
         return sorted(recommendations, key=lambda x: (x['tier'], -x['space']))
 
@@ -1350,7 +1238,7 @@ class DiskAnalyzer:
         if cache_files:
             print(f"\n   # Limpiar archivos de cache grandes ({len(cache_files)} archivos)")
             for f in cache_files[:5]:
-                print(f"   rm -f '{f['path']}'")
+                print(f"   rm -f {comandos.escapar(f['path'])}")
             if len(cache_files) > 5:
                 print(f"   # ... y {len(cache_files) - 5} archivos más de cache")
         
@@ -3970,7 +3858,7 @@ class DiskAnalyzer:
                         continue
                     commands.append({
                         'description': f'Revisar directorio grande: {dir_name}',
-                        'command': f'du -sh "{path}"/* | sort -hr | head -20',
+                        'command': f'du -sh {comandos.escapar(path)}/* | sort -hr | head -20',
                         'risk': 'N/A',
                         'space_estimate': self.format_size(size)
                     })
@@ -4500,14 +4388,27 @@ class DiskAnalyzer:
             print("\n🔍 SIMULACIÓN DE LIMPIEZA (dry-run):")
         else:
             print("\n🧹 LIMPIANDO ARCHIVOS DE CACHE:")
-        
+
         total_cleaned = 0
-        
+
         for cache_loc in self.cache_locations:
             path = Path(cache_loc['path'])
-            
+
             # Solo limpiar caches seguros — NUNCA Downloads ni Cache General
             safe_to_clean = cache_loc['type'] in cache_types.SAFE_TO_CLEAN
+
+            # La verja: aunque el type clasifique la ruta como "segura", no se
+            # borra nada que protection.puede_borrarse rechace. Es la misma
+            # verja que instala analyzer/comandos.py para todo comando
+            # generado -- este método no pasa por comandos.py (borra
+            # directamente con unlink()/rglob()), así que sin esta llamada
+            # queda fuera de la verja. Sin ella, un usuario cuyo nombre
+            # contiene una subcadena que cache_types.classify() reconoce (p.
+            # ej. 'logan' -> 'log') podía ver ~/Downloads clasificado como un
+            # tipo seguro y borrado permanentemente.
+            if safe_to_clean and not protection.puede_borrarse(str(path)):
+                print(f"   ⚠️  Omitido (protegido): {cache_loc['type']} - {path}")
+                safe_to_clean = False
 
             if safe_to_clean and path.exists():
                 if dry_run:

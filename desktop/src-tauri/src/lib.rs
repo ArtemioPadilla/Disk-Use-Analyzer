@@ -179,7 +179,7 @@ pub fn run() {
                     .on_menu_event(move |app, event| {
                         if event.id() == "quit" {
                             // El servidor web también: lo arrancamos nosotros,
-                            // así que no debe sobrevivirnos ocupando el 8000.
+                            // así que no debe sobrevivirnos ocupando su puerto.
                             servidor.kill_blocking();
                             // Block briefly (bounded by KILL_REAP_TIMEOUT)
                             // so the scan's process group is confirmed dead
