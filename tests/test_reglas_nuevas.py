@@ -9,6 +9,7 @@ propios tests llamaba.
 """
 import os
 import sys
+from unittest.mock import patch
 
 sys.path.insert(0, '.')
 from disk_analyzer_core import DiskAnalyzerCore
@@ -166,6 +167,75 @@ def test_una_regla_totalmente_bloqueada_por_la_verja_no_aparece():
         "la regla 'logs' apareció con una ruta que la verja debería haber "
         "descartado por completo -- si esto es intencional, contradice la "
         "garantía de que ninguna recomendación sale con 'command' vacío"
+    )
+
+
+# -- Revisión final, hallazgo 4: las cuatro reglas de nivel 1 (logs, vscode,
+# npm, papelera) filtraban solo por `type`, incumpliendo la norma que este
+# mismo módulo ya fija para caches_de_apps (arriba). Misma causa raíz que el
+# hallazgo 1: si cache_types.classify() etiqueta ~/Library/Caches como
+# VSCODE -- lo que pasaba, antes de arreglar classify(), con cualquier
+# nombre de usuario que contuviera la subcadena 'code' -- la regla vscode
+# (nivel 1, sin revisión) se llevaba esos GB en vez de caches_de_apps (nivel
+# 2, la que de verdad le corresponde). Estas pruebas no dependen de que
+# classify() tenga el bug: construyen directamente una cache_location con el
+# `type` "equivocado" para comprobar que cada regla se defiende también por
+# ruta, no solo confiando en el `type` que le pasan.
+#
+# `puede_borrarse` se parchea a "todo pasa" en las cuatro: una ruta sintética
+# como '/Users/nicode/...' no cae bajo el $HOME real de quien corre el test,
+# así que la verja la rechazaría por esa razón AJENA (cualquier ruta bajo
+# '/Users' que no sea una de las cachés conocidas del HOME real -- ver
+# protection.py) y el assert "no aparece" pasaría igual sin que el fix de
+# ESTE hallazgo tuviera nada que ver. Parcheando la verja, lo único que
+# puede hacer desaparecer la recomendación es el acotado por ruta de la
+# regla misma -- que es justo lo que se quiere probar aquí. --
+
+def test_home_con_code_no_termina_en_la_regla_vscode():
+    ruta = '/Users/nicode/Library/Caches'
+    core = _core_con([
+        {'type': cache_types.VSCODE, 'path': ruta, 'size': 21 * GB},
+    ])
+    with patch('analyzer.comandos.puede_borrarse', return_value=True):
+        recs = {r['id']: r for r in core.generate_recommendations()}
+    assert 'vscode' not in recs, (
+        f"~/Library/Caches se coló en la regla vscode: {recs.get('vscode')}"
+    )
+
+
+def test_home_con_log_no_termina_en_la_regla_logs():
+    ruta = '/Users/logan/Downloads'
+    core = _core_con([
+        {'type': cache_types.LOGS, 'path': ruta, 'size': 5 * GB},
+    ])
+    with patch('analyzer.comandos.puede_borrarse', return_value=True):
+        recs = {r['id']: r for r in core.generate_recommendations()}
+    assert 'logs' not in recs, (
+        f"~/Downloads se coló en la regla logs: {recs.get('logs')}"
+    )
+
+
+def test_home_con_node_no_termina_en_la_regla_npm():
+    ruta = '/Users/anode/Downloads'
+    core = _core_con([
+        {'type': cache_types.NPM, 'path': ruta, 'size': 5 * GB},
+    ])
+    with patch('analyzer.comandos.puede_borrarse', return_value=True):
+        recs = {r['id']: r for r in core.generate_recommendations()}
+    assert 'npm' not in recs, (
+        f"~/Downloads se coló en la regla npm: {recs.get('npm')}"
+    )
+
+
+def test_una_ruta_ajena_no_termina_en_la_regla_papelera():
+    ruta = '/Users/x/Documents/algo_que_no_es_la_papelera'
+    core = _core_con([
+        {'type': cache_types.TRASH, 'path': ruta, 'size': 5 * GB},
+    ])
+    with patch('analyzer.comandos.puede_borrarse', return_value=True):
+        recs = {r['id']: r for r in core.generate_recommendations()}
+    assert 'papelera' not in recs, (
+        f"una ruta que no es ~/.Trash se coló en la regla papelera: {recs.get('papelera')}"
     )
 
 

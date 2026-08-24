@@ -16,8 +16,21 @@ def test_every_recommendation_filter_label_is_producible():
     """Any label the recommendation logic filters on must be a real label."""
     known = set(cache_types.ALL_LABELS)
     core = DiskAnalyzerCore(".")
+    home = str(Path.home())
+    # logs/vscode/npm/papelera are scoped by path as well as by `type` (Task
+    # 4 of the final review pass, see disk_analyzer_core.py) -- an arbitrary
+    # '/fake/<label>' path no longer satisfies them, so those four need a
+    # realistic path to still fire here. Every other label keeps the
+    # arbitrary fake path: this test only needs recs non-empty, not every
+    # label to fire a recommendation on its own.
+    rutas_conocidas = {
+        cache_types.LOGS: f'{home}/Library/Logs',
+        cache_types.VSCODE: f'{home}/Library/Application Support/Code/Cache',
+        cache_types.NPM: f'{home}/.npm',
+        cache_types.TRASH: f'{home}/.Trash',
+    }
     core.cache_locations = [
-        {"path": f"/fake/{label}", "size": 5 * GB, "type": label}
+        {"path": rutas_conocidas.get(label, f"/fake/{label}"), "size": 5 * GB, "type": label}
         for label in known
     ]
     recs = core.generate_recommendations()

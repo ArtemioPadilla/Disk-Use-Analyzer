@@ -609,7 +609,24 @@ class DiskAnalyzerCore:
         recommendations = []
 
         # TIER 1: Seguro
-        log_locs = [l for l in self.cache_locations if l['type'] == cache_types.LOGS]
+        #
+        # The four rules below (logs, vscode, npm, papelera) are scoped by
+        # path as well as by `type`, matching the norm the app-caches rule
+        # (further down) and xcode_deriveddata already follow: never filter
+        # cache_locations by `type` alone. This is the same root cause as
+        # cache_types.classify() matching a username substring (Task 1 of
+        # this cleanup pass, see analyzer/cache_types.py) -- classify() is
+        # fixed now, but these four rules relied on it being right with no
+        # second check of their own. Before that fix, a home directory
+        # containing 'code' (e.g. '/Users/nicode') made classify() label
+        # ~/Library/Caches as VSCODE instead of GENERAL: the 21 GB there
+        # would then be picked up by this tier-1 'vscode' rule (unreviewed,
+        # described as "se regenera automáticamente") instead of the tier-2
+        # 'caches_de_apps' rule that's actually scoped to 'Library/Caches'.
+        # Scoping these four by path too means a future classify() bug can't
+        # repeat that escalation on its own.
+        log_locs = [l for l in self.cache_locations
+                    if l['type'] == cache_types.LOGS and 'Library/Logs' in l['path']]
         if log_locs and sum(l['size'] for l in log_locs) > 10 * MB:
             recommendations.append({'id': 'logs', 'tier': 1, 'priority': 'Seguro', 'type': cache_types.LOGS,
                 'description': f'{self.format_size(sum(l["size"] for l in log_locs))} en logs',
@@ -625,7 +642,9 @@ class DiskAnalyzerCore:
                 'space': size, 'command': 'brew cleanup --prune=all',
                 'efecto': 'irreversible'})
 
-        vscode_locs = [l for l in self.cache_locations if l['type'] == cache_types.VSCODE]
+        vscode_locs = [l for l in self.cache_locations
+                       if l['type'] == cache_types.VSCODE
+                       and ('Application Support/Code' in l['path'] or 'AppData/Roaming/Code' in l['path'])]
         if vscode_locs and sum(l['size'] for l in vscode_locs) > 10 * MB:
             recommendations.append({'id': 'vscode', 'tier': 1, 'priority': 'Seguro', 'type': 'Cache de VS Code',
                 'description': f'{self.format_size(sum(l["size"] for l in vscode_locs))} en cache',
@@ -633,7 +652,8 @@ class DiskAnalyzerCore:
                 'command': comandos.borrar_contenido([l['path'] for l in vscode_locs]),
                 'efecto': 'borra'})
 
-        npm_locs = [l for l in self.cache_locations if l['type'] == cache_types.NPM]
+        npm_locs = [l for l in self.cache_locations
+                    if l['type'] == cache_types.NPM and '/.npm' in l['path']]
         if npm_locs and sum(l['size'] for l in npm_locs) > 50 * MB:
             recommendations.append({'id': 'npm', 'tier': 1, 'priority': 'Seguro', 'type': 'Cache de npm',
                 'description': f'{self.format_size(sum(l["size"] for l in npm_locs))} en cache de npm (se regenera con npm install)',
@@ -643,7 +663,10 @@ class DiskAnalyzerCore:
         # La papelera: espacio que el usuario ya decidió tirar. Nivel 1 sin
         # discusión, y además es lo único que hace que "mover a la papelera"
         # libere algo de verdad en el mismo volumen.
-        papelera = [l for l in self.cache_locations if l['type'] == cache_types.TRASH]
+        papelera = [l for l in self.cache_locations
+                    if l['type'] == cache_types.TRASH
+                    and ('.Trash' in l['path'] or 'RECYCLE.BIN' in l['path']
+                         or '.local/share/Trash' in l['path'])]
         if papelera and sum(l['size'] for l in papelera) > 100 * MB:
             total = sum(l['size'] for l in papelera)
             recommendations.append({'id': 'papelera', 'tier': 1, 'priority': 'Seguro', 'type': cache_types.TRASH,
