@@ -198,9 +198,12 @@ class TestCacheClassification:
 class TestRecommendations:
     def test_recommendations_have_required_shape(self):
         core = DiskAnalyzerCore(".")
+        # Paths match the real cache locations the npm/vscode rules scope to
+        # (Task 4 of the final review pass) -- an arbitrary '/fake/...' path
+        # no longer fires either rule.
         core.cache_locations = [
-            {"path": "/fake/npm", "size": 3 * GB, "type": "NPM Cache"},
-            {"path": "/fake/code", "size": 2 * GB, "type": "VS Code Cache"},
+            {"path": "/fake/.npm", "size": 3 * GB, "type": "NPM Cache"},
+            {"path": "/fake/Library/Application Support/Code/Cache", "size": 2 * GB, "type": "VS Code Cache"},
         ]
         recs = core.generate_recommendations()
         assert recs, "expected recommendations for large known caches"
@@ -226,8 +229,8 @@ class TestRecommendations:
         # replaced with the wrong key -- verified by mutation (see report).
         core = DiskAnalyzerCore(".")
         core.cache_locations = [
-            {"path": "/fake/npm", "size": 9 * GB, "type": "NPM Cache"},
-            {"path": "/fake/code", "size": 3 * GB, "type": "VS Code Cache"},
+            {"path": "/fake/.npm", "size": 9 * GB, "type": "NPM Cache"},
+            {"path": "/fake/Library/Application Support/Code/Cache", "size": 3 * GB, "type": "VS Code Cache"},
         ]
         core.docker_stats = {"available": True, "reclaimable": 20 * GB}
         recs = core.generate_recommendations()

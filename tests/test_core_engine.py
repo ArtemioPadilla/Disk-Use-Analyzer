@@ -45,9 +45,13 @@ class TestRecommendationLabels:
         self.core = DiskAnalyzerCore(".")
 
     def test_vscode_and_npm_recommendations_fire(self):
-        # Labels exactly as categorize_cache produces them.
+        # Labels exactly as categorize_cache produces them. Paths also match
+        # the real cache locations these rules scope to (Task 4 of the final
+        # review pass: logs/vscode/npm/papelera filter by path as well as
+        # `type`, not just `type` alone) -- an arbitrary '/fake/...' path
+        # wouldn't fire either rule any more.
         self.core.cache_locations = [
-            {"path": "/fake/Code/Cache", "size": 2 * GB, "type": "VS Code Cache"},
+            {"path": "/fake/Library/Application Support/Code/Cache", "size": 2 * GB, "type": "VS Code Cache"},
             {"path": "/fake/.npm", "size": 3 * GB, "type": "NPM Cache"},
         ]
         recs = self.core.generate_recommendations()

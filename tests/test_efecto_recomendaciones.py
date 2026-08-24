@@ -27,14 +27,31 @@ from unittest.mock import patch
 sys.path.insert(0, '.')
 from disk_analyzer_core import DiskAnalyzerCore
 from disk_analyzer import DiskAnalyzer, MB, GB
+from tests.test_motor_unico import _estado_sintetico
 
 EFECTOS = {'borra', 'irreversible', 'solo_lista'}
 
 
 def _recomendaciones():
+    """Estado sintético (`_estado_sintetico`, compartido con
+    test_motor_unico.py), no un escaneo del disco real.
+
+    Antes esto llamaba a `core.find_cache_locations()`, que recorre
+    ~/Library/Caches, ~/.npm, etc. de verdad -- ~21 s por test, y en un
+    runner sin cachés reales devuelve una lista vacía, con lo que los tres
+    tests de este módulo pasaban sin comprobar nada (`for r in []` no
+    ejecuta ningún assert). El guard de no-vacuidad de abajo cierra ese
+    hueco: si algún día `_estado_sintetico()` deja de disparar ninguna
+    regla, estos tests fallan en vez de pasar en silencio.
+    """
+    locs, files, docker = _estado_sintetico()
     core = DiskAnalyzerCore('.')
-    core.find_cache_locations()
-    return core.generate_recommendations()
+    core.cache_locations = locs
+    core.large_files = files
+    core.docker_stats = docker
+    recs = core.generate_recommendations()
+    assert recs, "el estado sintético no disparó ninguna recomendación"
+    return recs
 
 
 def _recomendaciones_inteligentes():
