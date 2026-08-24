@@ -192,7 +192,7 @@ impl Servidor {
             // ocupando el puerto.
             .process_group(0);
 
-        let child = match cmd.spawn() {
+        let mut child = match cmd.spawn() {
             Ok(c) => c,
             Err(e) => {
                 al_terminar(Err(format!("no se pudo arrancar el servidor: {e}")));
@@ -205,6 +205,27 @@ impl Servidor {
             pid,
             puerto,
             url: url.clone(),
+        });
+
+        // Reap the child. `Command::spawn()` hands back a `Child` that, if
+        // just dropped, leaves the process a zombie once it dies -- and
+        // `libc::kill(pid, 0)` keeps returning 0 ("exists") for a zombie
+        // forever, because the kernel keeps its PID entry until someone
+        // calls wait() on it. `es_nuestra_instancia` relies on that same
+        // `kill(pid, 0)` to tell a live server of ours from a dead one; with
+        // a permanent zombie the pid check can never fail, so the whole
+        // function degrades to "does something accept connections on this
+        // port" -- exactly the bug the port-reuse fix was supposed to close.
+        // Worse: if that port is later reused by an unrelated process, we'd
+        // hand the browser that stranger's page with our token in the URL.
+        //
+        // Same pattern as analisis.rs's scan-runner thread: `child` is
+        // moved into a dedicated thread that owns it exclusively and blocks
+        // on `wait()` for as long as the server lives. This doesn't block
+        // `abrir()`'s caller -- it's a fire-and-forget reaper, not on the
+        // startup-polling path below.
+        std::thread::spawn(move || {
+            let _ = child.wait();
         });
 
         let servidor = Arc::clone(self);
@@ -273,14 +294,60 @@ mod tests {
     }
 
     #[test]
-    fn no_reutiliza_un_servidor_ajeno() {
-        // Alguien ocupa un puerto sin ser nuestro servidor.
+    fn no_reutiliza_un_servidor_ajeno_con_una_instancia_de_verdad_registrada() {
+        // Antes esta prueba construía `Servidor::new()` con `instancia: None`,
+        // así que salía por el brazo `None => false` de `es_nuestra_instancia`
+        // sin llegar nunca a mirar el pid -- vacua: pasaba igual aunque la
+        // rama `Some(inst)` tuviera cualquier bug.
+        //
+        // El único llamante real (`abrir`) siempre pasa el puerto que YA
+        // tiene guardado en `self.instancia`, así que en producción
+        // `inst.puerto == puerto` es tautológicamente cierto y lo único que
+        // de verdad distingue "es nuestro servidor" de "es un ajeno que
+        // ocupa el mismo puerto" es la comprobación de pid -- exactamente lo
+        // que el hallazgo de la revisión señala: sin reap, esa comprobación
+        // nunca falla, y la función se reduce a "¿algo acepta conexiones
+        // aquí?".
+        //
+        // Para ejercer esa rama de verdad, se registra una `Instancia` con
+        // un pid que perteneció a un proceso real y ya terminó -- se lanza,
+        // se espera con `wait()` (reap explícito, ver comentario del fix en
+        // `abrir`) y se usa ESE pid, no uno inventado que nunca existió.
+        // Con el pid genuinamente muerto, `libc::kill(pid, 0)` devuelve
+        // ESRCH y la rama Some(inst) tiene que rechazarlo aunque el puerto
+        // registrado coincida con el de un servidor ajeno que sí acepta
+        // conexiones.
+        //
+        // Nota sobre "zombi": un proceso zombi de verdad (terminado pero
+        // SIN reap) sigue respondiendo 0 a `kill(pid, 0)` -- es justamente
+        // el bug que este mismo commit arregla, verificado en
+        // /tmp/zombie_test.py durante el diagnóstico. Por eso esta prueba
+        // usa un pid ya reaped (el estado en el que queda un pid nuestro
+        // DESPUÉS del fix, una vez el hilo dedicado le hace `wait()`) en vez
+        // de un zombi real sin reap: probar con un zombi real solo
+        // confirmaría el bug, no la corrección.
+        let mut hijo = Command::new("true")
+            .spawn()
+            .expect("no se pudo lanzar un proceso de prueba");
+        let pid_ya_muerto = hijo.id() as i32;
+        hijo.wait().expect("no se pudo esperar al proceso de prueba");
+
+        // Alguien más ocupa, ahora mismo, el mismo puerto que registramos
+        // como si fuera el nuestro.
         let ajeno = TcpListener::bind(("127.0.0.1", 0)).unwrap();
         let puerto = ajeno.local_addr().unwrap().port();
+
         let servidor = Servidor::new();
+        *servidor.instancia.lock().unwrap() = Some(Instancia {
+            pid: pid_ya_muerto,
+            puerto,
+            url: format!("http://{HOST}:{puerto}/?token=lo-que-sea"),
+        });
+
         assert!(
             !servidor.es_nuestra_instancia(puerto),
-            "abrir el navegador en un servidor ajeno lo presenta como nuestro"
+            "abrir el navegador en un servidor ajeno lo presenta como nuestro, \
+             aunque el pid registrado ya no exista"
         );
     }
 }
