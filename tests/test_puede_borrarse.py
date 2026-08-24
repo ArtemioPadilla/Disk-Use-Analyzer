@@ -63,6 +63,44 @@ def test_las_caches_conocidas_si_se_borran(ruta):
     assert puede_borrarse(ruta), f"{ruta} debería poder limpiarse"
 
 
+@pytest.mark.parametrize("ruta", [
+    os.path.join(CASA, "Downloads"),
+    os.path.join(CASA, "Library/Developer/CoreSimulator/Devices"),
+    os.path.join(CASA, "Library/Developer/CoreSimulator/Devices/ABCD-1234/data"),
+])
+def test_las_rutas_que_el_endpoint_web_borraba_igual_siguen_prohibidas(ruta):
+    """Revisión final (ola de saneamiento), hallazgo 2: sobre el home real,
+    de 10 objetivos que el endpoint de limpieza web mandaba a
+    _perform_cleanup_deletes, dos eran cosas que esta verja prohíbe
+    explícitamente -- ~/Downloads y
+    ~/Library/Developer/CoreSimulator/Devices -- y se borraban igual
+    porque ese endpoint solo filtraba con is_protected_path (lista negra
+    del sistema operativo), no con puede_borrarse. Esto fija el lado de la
+    verja: si alguna vez vuelve a fallar, no es porque puede_borrarse haya
+    dejado de rechazarlas."""
+    assert not puede_borrarse(ruta), f"{ruta} salió como borrable"
+
+
+def test_containers_docker_data_ya_no_esta_en_la_whitelist():
+    """~/Library/Containers/com.docker.docker/Data estuvo en
+    _coincide_con_permitidas, pero ninguna regla de generate_recommendations
+    ni de detect_smart_recommendations genera un comando de borrado contra
+    esa ruta -- la limpieza de Docker siempre pasa por `docker system
+    prune`/`docker volume`/`docker image`. Bajo esa ruta viven los
+    volúmenes CON NOMBRE de Docker (bases de datos y otros datos
+    persistentes del usuario), así que estar en la whitelist era un
+    borrado silencioso de datos de usuario esperando un disparador: el
+    endpoint web de limpieza (`_perform_cleanup_deletes`) podía llegar a
+    ella a través de find_cache_locations() + una categoría "Docker"
+    elegida a mano. Se quitó de la whitelist; este test fija que se queda
+    fuera."""
+    ruta = os.path.join(CASA, "Library/Containers/com.docker.docker/Data")
+    assert not _coincide_con_permitidas(ruta), (
+        f"{ruta} sigue en la whitelist de cachés conocidas"
+    )
+    assert not puede_borrarse(ruta), f"{ruta} salió como borrable"
+
+
 # -- Segundo eje de la verja: por NOMBRE, no por ubicación (Task 7, ronda de
 # arreglo 1). detect_smart_recommendations() encuentra node_modules
 # huérfanos en cualquier proyecto del usuario -- rutas arbitrarias, no una

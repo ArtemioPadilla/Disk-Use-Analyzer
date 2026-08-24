@@ -115,10 +115,10 @@ class TestCleanupExecute:
                 pass
 
         monkeypatch.setattr(disk_analyzer_web, "DiskAnalyzerCore", FakeAnalyzer)
-        # _perform_cleanup_deletes now calls the shared analyzer.protection.is_protected_path
-        # free function directly (imported into this module's namespace), instead of a
-        # DiskAnalyzerCore instance method -- patch it at its new call site.
-        monkeypatch.setattr(disk_analyzer_web, "is_protected_path", lambda path: path.startswith("/System"))
+        # _perform_cleanup_deletes now calls the shared analyzer.protection.puede_borrarse
+        # free function directly (imported into this module's namespace), instead of the
+        # weaker is_protected_path OS-blacklist check -- patch it at its new call site.
+        monkeypatch.setattr(disk_analyzer_web, "puede_borrarse", lambda path: not path.startswith("/System"))
         resp = self.client.post(
             "/api/cleanup/execute",
             json={"paths": [str(tmp_path)], "dry_run": False},
@@ -131,3 +131,51 @@ class TestCleanupExecute:
         # The protected path must be skipped, reported as error, never deleted
         error_paths = [e["path"] for e in body["errors"]]
         assert any("/System" in p for p in error_paths)
+
+    def test_execute_refuses_downloads_and_coresimulator_even_though_not_os_protected(self, tmp_path, monkeypatch):
+        """Revisión final, hallazgo 2: is_protected_path (lista negra del
+        sistema operativo) devuelve False para ~/Downloads y para
+        ~/Library/Developer/CoreSimulator/Devices -- ninguna de las dos es
+        "del sistema". Antes de este fix, _perform_cleanup_deletes solo
+        miraba is_protected_path, así que las borraba igual. Ahora tiene
+        que consultar puede_borrarse (la whitelist real), que sí las
+        rechaza. Este test usa rutas reales (no monkeypatchea
+        puede_borrarse) para probar el filtro de verdad, con
+        shutil.rmtree parcheado para no depender de que existan de verdad
+        en la máquina que corre el test."""
+        import os
+        home = os.path.expanduser("~")
+        downloads = home + "/Downloads"
+        coresim = home + "/Library/Developer/CoreSimulator/Devices"
+        victim = tmp_path / "cache_dir"
+        victim.mkdir()
+        (victim / "junk.bin").write_bytes(b"x" * 1024)
+
+        class FakeAnalyzer:
+            def __init__(self, path):
+                self.cache_locations = [
+                    {"path": str(victim), "size": 1024, "type": "Cache General"},
+                    {"path": downloads, "size": 999, "type": "Downloads"},
+                    {"path": coresim, "size": 999, "type": "Cache General"},
+                ]
+
+            def find_cache_locations(self):
+                pass
+
+        monkeypatch.setattr(disk_analyzer_web, "DiskAnalyzerCore", FakeAnalyzer)
+        monkeypatch.setattr(disk_analyzer_web.shutil, "rmtree", lambda p: None)
+        monkeypatch.setattr(disk_analyzer_web.Path, "is_dir", lambda self: True)
+        monkeypatch.setattr(disk_analyzer_web.Path, "is_file", lambda self: False)
+
+        resp = self.client.post(
+            "/api/cleanup/execute",
+            json={"paths": [str(tmp_path)], "dry_run": False},
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        deleted_paths = [d["path"] for d in body["deleted"]]
+        error_paths = [e["path"] for e in body["errors"]]
+        assert downloads not in deleted_paths, "~/Downloads no debe borrarse nunca"
+        assert coresim not in deleted_paths, "CoreSimulator Devices no debe borrarse nunca"
+        assert downloads in error_paths
+        assert coresim in error_paths

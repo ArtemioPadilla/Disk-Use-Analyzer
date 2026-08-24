@@ -87,7 +87,25 @@ def _coincide_con_permitidas(file_path: str) -> bool:
         os.path.realpath(os.path.expanduser('~/Library/Developer/Xcode/DerivedData')),
         os.path.realpath(os.path.expanduser('~/Library/Application Support/Code/Cache')),
         os.path.realpath(os.path.expanduser('~/Library/Application Support/Code/CachedData')),
-        os.path.realpath(os.path.expanduser('~/Library/Containers/com.docker.docker/Data')),
+        # NOTA: ~/Library/Containers/com.docker.docker/Data estuvo aquí y se
+        # quitó (revisión final, ola de saneamiento). Buscado: ninguna regla
+        # de generate_recommendations ni de detect_smart_recommendations
+        # genera un comando de borrado contra esta ruta -- la limpieza de
+        # Docker siempre pasa por `docker system prune`/`docker volume`/
+        # `docker image`, nunca por un rm -rf directo sobre este directorio.
+        # find_cache_locations() sí lo escanea (está en CACHE_DIRS, clasifica
+        # como cache_types.DOCKER) y por eso puede llegar como 'action' al
+        # endpoint web de limpieza con una categoría "Docker" elegida a mano
+        # -- ese es el único camino real hacia _perform_cleanup_deletes que
+        # podía tocarlo, y es justo el que este fix (Task 2) empieza a pasar
+        # por puede_borrarse. Bajo esa ruta viven los volúmenes con NOMBRE de
+        # Docker -- bases de datos y otros datos persistentes del usuario,
+        # no una caché regenerable -- así que estar en esta whitelist era un
+        # borrado silencioso de datos de usuario esperando un disparador. Si
+        # se necesita una regla real de "liberar espacio de Docker por
+        # tamaño de disco" en el futuro, debe ir por `docker system prune`
+        # como las demás, no reabrir esta entrada.
+        #
         # El usuario ya decidió tirar esto -- vaciar la papelera es la regla
         # de nivel 1 de generate_recommendations() (id 'papelera').
         os.path.realpath(os.path.expanduser('~/.Trash')),
