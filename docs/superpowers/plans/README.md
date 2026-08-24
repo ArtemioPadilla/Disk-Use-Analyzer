@@ -7,8 +7,8 @@ cuál es la siguiente acción y cómo ejecutarla.
 
 ## Estado de un vistazo
 
-Última actualización: 20 de agosto de 2026. Tests: **151** (backend) + **69**
-(frontend) + **11** (app de bandeja, Rust) = **231**, los tres cableados al CI
+Última actualización: 23 de agosto de 2026. Tests: **247** (backend) + **85**
+(frontend) + **20** (app de bandeja, Rust) = **352**, los tres cableados al CI
 de GitHub Actions y a `make test`.
 
 | Fase | Alcance | Plan | Estado |
@@ -39,6 +39,48 @@ verificando cada push y cada pull request. Quedan:
    por corridas anteriores con `sudo`, y eso ya provocó un fallo real (un 500 al
    no poder escribir el log de agents).
 2. **Rebanadas B y C de la app de bandeja** (ver más abajo).
+
+## Saneamiento de la limpieza (23 de agosto de 2026)
+
+La maquinaria de limpieza tenía defectos serios que se descubrieron al planear
+acciones de limpieza en el menú de la bandeja. Se sanearon antes de construir
+encima, en [su propio plan](2026-08-21-saneamiento-limpieza.md) de 8 tasks.
+
+Lo que estaba roto, todo reproducido antes de escribir el plan:
+
+- **Inyección de shell:** las rutas se interpolaban sin escapar en cadenas que
+  se ejecutan con `sh -c`. Una carpeta llamada `x' ; rm -rf victim ; '` ejecutaba
+  comandos arbitrarios.
+- **Limpiezas que no limpiaban:** el glob iba dentro de las comillas, así que
+  `rm -rf 'dir/*'` salía con código 0 sin borrar nada — y la interfaz acreditaba
+  el ahorro por ese 0.
+- **`make clean-cache` borraba `~/Downloads` según el nombre del usuario.** El
+  clasificador miraba subcadenas de la ruta completa: un usuario `logan` tenía
+  su carpeta de Descargas clasificada como logs del sistema.
+- **La protección no protegía tus datos:** `~/Documents`, iCloud Drive y
+  `/Volumes` salían como borrables.
+- **La bandeja abría lo que hubiera en el puerto 8000** presentándolo como el
+  analizador.
+
+Lo que dejó, además de los arreglos: una **verja de borrado**
+(`puede_borrarse`) instalada en los tres caminos que borran, un `id` estable y
+un campo `efecto` (`borra` / `irreversible` / `solo_lista`) por recomendación,
+una sola definición de los niveles de riesgo, y el ahorro medido del disco en
+vez de deducido del código de salida. Las invariantes de seguridad están en
+`CLAUDE.md`.
+
+**Lo que queda para un plan siguiente**, y por qué se dejó fuera:
+
+- El campo `efecto` está construido y **ningún componente lo lee todavía**, así
+  que las recomendaciones que solo listan siguen ofreciéndose con botón.
+- El número de cabecera sigue inflado: suma cachés que nunca se ofrecen.
+- `nivelDe` solo se usa en `CleanupWizard`; los otros tres botones por lotes
+  leen `tier` en crudo.
+- Dos reglas (`node_modules_huerfano`, `git_pack_files`) no pueden dispararse
+  nunca: sus rutas están en `IGNORE_PATTERNS`, así que el escáner no las ve.
+- El botón "Liberar lo seguro" en el menú, la configuración de qué es seguro y
+  la ventana nativa: lo que originó todo esto, aplazado a propósito hasta que
+  la base fuera segura.
 
 ## Trabajo aparte: app de bandeja de macOS
 

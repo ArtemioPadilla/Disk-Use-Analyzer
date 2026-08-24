@@ -10,7 +10,38 @@ There is a phased improvement plan in progress. **Before starting work on the ba
 - `docs/superpowers/plans/2026-07-15-roadmap-mejoras.md` — the deep assessment (19 verified findings) and the scope of the 6 phases
 - `docs/superpowers/plans/2026-07-15-registro-ejecucion.md` — what was actually implemented, with commits, approved plan deviations, and deferred findings
 
-Current state: Phases 1 (backend bugs), 2 (security), 3 (shared engine) and 5 (tests + CI) are all merged to `main`. Phase 4 (frontend) is complete on `feat/fase4-frontend`, pending merge: the frontend now has its own test suite (66 tests, `npm test` inside `web/`, wired into CI and `make test`), and every cleanup flow (`QuickActions`, `CleanupWizard`, `GuidedDeclutter`, `WhatIfSandbox`, `ReverseView`, `DockerPanel`) runs its commands through the single shared `useCleanupRunner` hook — it's the only thing that talks to `api.createTerminal`/tracks `terminal:exited` for cleanup, and it only credits savings when a command exits 0. Auth is on by default: the server prints a link with a one-time token (`http://localhost:8000/?token=...`) on startup, the frontend stores it in `sessionStorage` and strips it from the URL, and a new token is minted on every restart — reopen the printed link after restarting the server. Use `--no-auth` to disable this on an isolated network.
+Current state: Phases 1 (backend bugs), 2 (security), 3 (shared engine) and 5 (tests + CI) are all merged to `main`. Phase 4 (frontend) is complete on `feat/fase4-frontend`, pending merge: the frontend now has its own test suite (66 tests, `npm test` inside `web/`, wired into CI and `make test`), and every cleanup flow (`QuickActions`, `CleanupWizard`, `GuidedDeclutter`, `WhatIfSandbox`, `ReverseView`, `DockerPanel`) runs its commands through the single shared `useCleanupRunner` hook — it's the only thing that talks to `api.createTerminal`/tracks `terminal:exited` for cleanup, and it credits savings by measuring free disk space before and after, not by
+trusting the exit code — `rm -f` returns 0 whether it deleted everything or
+nothing. Auth is on by default: the server prints a link with a one-time token (`http://localhost:8000/?token=...`) on startup, the frontend stores it in `sessionStorage` and strips it from the URL, and a new token is minted on every restart — reopen the printed link after restarting the server. Use `--no-auth` to disable this on an isolated network.
+
+## Safety invariant: the deletion gate
+
+`analyzer/protection.py::puede_borrarse` is the whitelist that decides what an
+automatic deletion may touch. It is **stricter and different** from
+`is_protected_path`, which only says "this belongs to the OS".
+
+Every path that reaches a deletion must pass it. It is installed at the three
+places that delete:
+
+- `analyzer/comandos.py` — `borrar_contenido`/`borrar_rutas` drop paths that
+  fail the gate, so every generated shell command is filtered. Never build a
+  deletion command by interpolating a path yourself; that is how a folder named
+  `x' ; rm -rf victim ; '` came to execute arbitrary commands.
+- `disk_analyzer.py::clean_cache` — bulk permanent deletion from the CLI.
+- `disk_analyzer_web.py::_perform_cleanup_deletes` — bulk deletion from the API.
+
+`/api/files/delete` deliberately still uses `is_protected_path`: it is a
+single file the user picked, and on macOS it moves to the Finder trash.
+
+**Two rules that exist because breaking them cost real data:**
+
+1. **No cleanup rule filters by `cache_types` alone — always scope by path too.**
+   A rule filtered by `type == XCODE` and shipped deleting the user's
+   `.xcarchive` files (signed builds and dSYMs, which never regenerate) with a
+   description that read "they regenerate when you build".
+2. **`cache_types.classify()` must never see the username.** It matches
+   substrings, so a user named `logan` had `~/Downloads` classified as system
+   logs — and `make clean-cache` deleted it permanently.
 
 ## Build and Test Commands
 
