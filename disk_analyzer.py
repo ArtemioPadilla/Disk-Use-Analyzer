@@ -4388,14 +4388,27 @@ class DiskAnalyzer:
             print("\n🔍 SIMULACIÓN DE LIMPIEZA (dry-run):")
         else:
             print("\n🧹 LIMPIANDO ARCHIVOS DE CACHE:")
-        
+
         total_cleaned = 0
-        
+
         for cache_loc in self.cache_locations:
             path = Path(cache_loc['path'])
-            
+
             # Solo limpiar caches seguros — NUNCA Downloads ni Cache General
             safe_to_clean = cache_loc['type'] in cache_types.SAFE_TO_CLEAN
+
+            # La verja: aunque el type clasifique la ruta como "segura", no se
+            # borra nada que protection.puede_borrarse rechace. Es la misma
+            # verja que instala analyzer/comandos.py para todo comando
+            # generado -- este método no pasa por comandos.py (borra
+            # directamente con unlink()/rglob()), así que sin esta llamada
+            # queda fuera de la verja. Sin ella, un usuario cuyo nombre
+            # contiene una subcadena que cache_types.classify() reconoce (p.
+            # ej. 'logan' -> 'log') podía ver ~/Downloads clasificado como un
+            # tipo seguro y borrado permanentemente.
+            if safe_to_clean and not protection.puede_borrarse(str(path)):
+                print(f"   ⚠️  Omitido (protegido): {cache_loc['type']} - {path}")
+                safe_to_clean = False
 
             if safe_to_clean and path.exists():
                 if dry_run:
