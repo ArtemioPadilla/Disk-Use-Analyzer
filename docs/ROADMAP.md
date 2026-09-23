@@ -27,12 +27,11 @@ Estados: ✅ hecho · 🔶 en parte · ⬜ pendiente · ❓ pendiente de una dec
 | [E3 · Interfaz web](#e3--interfaz-web) | 7 páginas, terminal, asistentes, ahorro medido | `efecto` sin usar, `nivelDe` en 1 de 4 botones | Que lo que solo lista deje de tener botón |
 | [E4 · App de barra de menús](#e4--app-de-barra-de-menús) | Rebanada A, analizador completo, puerto efímero | "Liberar lo seguro", rebanadas B y C | "Liberar lo seguro", **después** de E2 |
 | [E5 · Distribución](#e5--distribución) | App autocontenida, releases firmados ad hoc | Certificado, notarización, Intel | Certificado autofirmado |
-| [E6 · Salud del repo](#e6--salud-del-repo-y-del-proceso) | CI en tres suites | Fase 0, `main` sin proteger, Dependabot apagado | Fase 0 |
+| [E6 · Salud del repo](#e6--salud-del-repo-y-del-proceso) | CI en tres suites, Fase 0 | `main` sin proteger, Dependabot apagado | Proteger `main` |
 
 ## Orden recomendado
 
-1. **E6.1 y E6.3 — higiene.** Una tarde. La Fase 0 lleva pendiente desde julio y ya
-   causó un fallo fantasma de tests.
+1. ~~**E6.1 — Fase 0.**~~ Hecha el 22 de septiembre. Queda **E6.3**, proteger `main`: es una decisión tuya.
 2. **E2.1 y el resto de E2/E3 abierto — cerrar el saneamiento.** Un plan de unos
    cinco tasks. Empieza por E2.1, el bug más visible.
 3. **E4.1 — "Liberar lo seguro" en el menú.** Lo que originó el saneamiento.
@@ -173,7 +172,7 @@ comentario de `puerto_libre` promete un reintento que nadie hace.
 | | Historia | Hecho cuando… | Plan |
 |---|---|---|---|
 | ✅ | CI en las tres suites | Backend, frontend y Rust en cada PR | [Fase 5](superpowers/plans/2026-08-01-mejoras-fase5-tests-y-ci.md) |
-| ⬜ | **E6.1** Fase 0: higiene | 0 ficheros de `root` en el repo (hoy 20) y 0 `.pyc` versionados (hoy 2). Necesita `sudo` | [Roadmap de mejoras](superpowers/plans/2026-07-15-roadmap-mejoras.md#fase-0--higiene-del-repo-15-min-sin-plan-tdd) |
+| ✅ | **E6.1** Fase 0: higiene | 0 ficheros de `root` en el repo y 0 `.pyc` versionados. No hizo falta `sudo`: los 20 de root eran informes sin versionar en un directorio propio | [Roadmap de mejoras](superpowers/plans/2026-07-15-roadmap-mejoras.md#fase-0--higiene-del-repo-15-min-sin-plan-tdd) |
 | ✅ | **E6.2** `CLAUDE.md` dice la verdad | El párrafo de estado ya no dice "Phase 4 pending merge, 66 tests" ni que el ahorro se acredita por el código de salida | Este roadmap |
 | ❓ | **E6.3** `main` protegida | El CI bloquea el merge en rojo. Ya se mergeó una vez con el backend en rojo (PR #16) | — |
 | ⬜ | **E6.4** Dependabot activo | Alertas de dependencias encendidas (hoy desactivadas) | — |

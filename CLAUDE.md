@@ -13,8 +13,8 @@ implementation plan (the planning documents are in Spanish).
 - `docs/superpowers/plans/2026-07-15-registro-ejecucion.md` — what was actually implemented, with commits and deviations
 
 Current state: the improvement plan (phases 1–5), the menu-bar app's slice A and
-the cleanup hardening plan are all merged to `main`; phase 0 (repo hygiene) is
-still open. Every cleanup flow in the web UI (`QuickActions`, `CleanupWizard`,
+the cleanup hardening plan are all merged to `main`, and so is phase 0 (repo
+hygiene). Every cleanup flow in the web UI (`QuickActions`, `CleanupWizard`,
 `GuidedDeclutter`, `WhatIfSandbox`, `ReverseView`, `DockerPanel`) runs its
 commands through the single shared `useCleanupRunner` hook — it's the only thing
 that talks to `api.createTerminal`/tracks `terminal:exited` for cleanup, and it
