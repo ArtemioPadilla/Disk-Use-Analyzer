@@ -1,5 +1,8 @@
 # Interactive UX Overhaul — Implementation Plan
 
+> **Estado: completado** (`36c28dc`, `7837fb5`, `b53b0d0`, `7908b68`). Las casillas de este plan nunca se marcaron; el trabajo está hecho y verificado contra el código en la revisión del 22 de septiembre de 2026. Ver [`docs/ROADMAP.md`](../../ROADMAP.md).
+
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Transform the HTML report from a passive data dashboard into an interactive, narrative-driven cleanup experience that answers "what should I delete?" within 5 seconds of opening.

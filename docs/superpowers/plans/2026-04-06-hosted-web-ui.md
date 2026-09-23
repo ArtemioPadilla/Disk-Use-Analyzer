@@ -1,5 +1,8 @@
 # Hosted Web UI Implementation Plan
 
+> **Estado: completado** (`e6fea81` → `fa88a8d`). Las casillas de este plan nunca se marcaron; el trabajo está hecho y verificado contra el código en la revisión del 22 de septiembre de 2026. Ver [`docs/ROADMAP.md`](../../ROADMAP.md).
+
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Build a modern Astro + React web UI served by the existing FastAPI backend, with a floating terminal for live shell command execution.

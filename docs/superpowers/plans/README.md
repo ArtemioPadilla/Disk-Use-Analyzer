@@ -5,6 +5,10 @@ ejecutables. Si retomas el trabajo (persona nueva, agente nuevo o workflow
 automatizado), **lee este archivo primero**: te dice en qué estado está todo,
 cuál es la siguiente acción y cómo ejecutarla.
 
+> **Para saber qué hacer después, empieza por [`docs/ROADMAP.md`](../../ROADMAP.md)**:
+> épicas, historias con criterio de aceptación, orden recomendado y decisiones
+> abiertas. Este fichero sigue siendo el detalle del plan de mejoras.
+
 ## Estado de un vistazo
 
 Última actualización: 23 de agosto de 2026. Tests: **247** (backend) + **85**
