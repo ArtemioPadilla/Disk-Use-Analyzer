@@ -2,17 +2,29 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-## Active Work: Improvement Plan
+## Active Work: Roadmap
 
-There is a phased improvement plan in progress. **Before starting work on the backend, security, or the web UI, read `docs/superpowers/plans/README.md`** — it holds the current state, the next action, and the gotchas of the intermediate state (the plan documents are in Spanish).
+**Before starting work, read `docs/ROADMAP.md`** — epics, stories with acceptance
+criteria, the recommended order, and the decisions still open. It links every
+implementation plan (the planning documents are in Spanish).
 
-- `docs/superpowers/plans/README.md` — entry point: status table, next action, how to execute a plan, verification commands
-- `docs/superpowers/plans/2026-07-15-roadmap-mejoras.md` — the deep assessment (19 verified findings) and the scope of the 6 phases
-- `docs/superpowers/plans/2026-07-15-registro-ejecucion.md` — what was actually implemented, with commits, approved plan deviations, and deferred findings
+- `docs/ROADMAP.md` — what exists, what is missing, in which order and why
+- `docs/superpowers/plans/README.md` — detail of the phased improvement plan, and how to execute a plan
+- `docs/superpowers/plans/2026-07-15-registro-ejecucion.md` — what was actually implemented, with commits and deviations
 
-Current state: Phases 1 (backend bugs), 2 (security), 3 (shared engine) and 5 (tests + CI) are all merged to `main`. Phase 4 (frontend) is complete on `feat/fase4-frontend`, pending merge: the frontend now has its own test suite (66 tests, `npm test` inside `web/`, wired into CI and `make test`), and every cleanup flow (`QuickActions`, `CleanupWizard`, `GuidedDeclutter`, `WhatIfSandbox`, `ReverseView`, `DockerPanel`) runs its commands through the single shared `useCleanupRunner` hook — it's the only thing that talks to `api.createTerminal`/tracks `terminal:exited` for cleanup, and it credits savings by measuring free disk space before and after, not by
-trusting the exit code — `rm -f` returns 0 whether it deleted everything or
-nothing. Auth is on by default: the server prints a link with a one-time token (`http://localhost:8000/?token=...`) on startup, the frontend stores it in `sessionStorage` and strips it from the URL, and a new token is minted on every restart — reopen the printed link after restarting the server. Use `--no-auth` to disable this on an isolated network.
+Current state: the improvement plan (phases 1–5), the menu-bar app's slice A and
+the cleanup hardening plan are all merged to `main`; phase 0 (repo hygiene) is
+still open. Every cleanup flow in the web UI (`QuickActions`, `CleanupWizard`,
+`GuidedDeclutter`, `WhatIfSandbox`, `ReverseView`, `DockerPanel`) runs its
+commands through the single shared `useCleanupRunner` hook — it's the only thing
+that talks to `api.createTerminal`/tracks `terminal:exited` for cleanup, and it
+credits savings by measuring free disk space before and after, not by trusting
+the exit code — `rm -f` returns 0 whether it deleted everything or nothing. Auth
+is on by default: the server prints a link with a one-time token
+(`http://localhost:8000/?token=...`) on startup, the frontend stores it in
+`sessionStorage` and strips it from the URL, and a new token is minted on every
+restart — reopen the printed link after restarting the server. Use `--no-auth`
+to disable this on an isolated network.
 
 ## Safety invariant: the deletion gate
 
@@ -276,7 +288,7 @@ When modifying the web interface:
 3. Build the frontend: `cd web && npm run build`
 4. Verify FastAPI serves all pages: start server and check `/`, `/files`, `/cleanup`, `/export`, `/history`
 5. Test terminal: click "Terminal" button, verify shell spawns and accepts input
-6. If you touch a cleanup flow, go through `useCleanupRunner` (`web/src/hooks/useCleanupRunner.ts`) rather than calling `api.createTerminal` directly — it's the single place that credits savings only on a 0 exit code and serializes commands through the one visible PTY
+6. If you touch a cleanup flow, go through `useCleanupRunner` (`web/src/hooks/useCleanupRunner.ts`) rather than calling `api.createTerminal` directly — it's the single place that measures the savings a command actually produced and serializes commands through the one visible PTY
 
 ## Known Issues & Limitations
 
