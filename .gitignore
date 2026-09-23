@@ -60,3 +60,6 @@ desktop/dist/
 # `bundle.resources` no encaja con ningún fichero, así que hace de ancla.
 desktop/src-tauri/resources/engine/*
 !desktop/src-tauri/resources/engine/LEEME.md
+
+# Ajustes locales de Claude Code: son de cada máquina
+.claude/settings.local.json
