@@ -36,7 +36,7 @@ mod tests {
         let total = total_gb * gb;
         let available = libre_gb * gb;
         let used = total - available;
-        DiskUsage { total, used, available, percent: used as f64 / total as f64 * 100.0 }
+        DiskUsage { total, used, available, purgeable: 0, percent: used as f64 / total as f64 * 100.0 }
     }
 
     #[test]

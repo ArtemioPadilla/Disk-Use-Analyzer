@@ -119,6 +119,70 @@ ps -ax -o command | grep disk_analyzer.py | grep -v grep
 Si la ruta empieza por la `.app`, el empaquetado está bien. Si empieza por el
 repositorio, la `.app` no lleva motor y en otro Mac no funcionaría.
 
+## Arranque al iniciar sesión
+
+La primera vez que se abre la `.app`, se registra para arrancar al iniciar
+sesión, así que tras reiniciar el Mac vuelve a estar en la barra sin que hagas
+nada. Se hace una sola vez: si lo desactivas desde el menú (**Abrir al iniciar
+sesión**), se queda desactivado. La app recuerda que ya lo configuró con un
+fichero marca en `~/Library/Application Support/dev.diskanalyzer.app/`.
+
+El registro es un `LaunchAgent` en `~/Library/LaunchAgents/Disk Use
+Analyzer.plist`, que apunta a la `.app` instalada. Se vuelve a escribir en cada
+arranque, para que siga a la app si la mueves o la actualizas. macOS lo
+confirma con una notificación propia ("puede ejecutarse en segundo plano") y lo
+lista en Ajustes → General → Elementos de inicio.
+
+Solo se registra desde una `.app` empaquetada. Ejecutada con `cargo run`, la
+opción aparece desactivada: registrar un binario de `target/debug` dejaría un
+elemento de inicio apuntando a un artefacto de compilación.
+
+Para quitarlo del todo, además de desactivarlo en el menú:
+
+```bash
+rm ~/Library/LaunchAgents/"Disk Use Analyzer.plist"
+rm ~/Library/Application\ Support/dev.diskanalyzer.app/arranque-configurado
+```
+
+## Avisos de poco espacio
+
+La app manda una notificación **al cruzar** cada umbral, una sola vez por
+cruce: al bajar de **20 GB** libres y al bajar de **5 GB**. Al arrancar no avisa
+de "poco espacio", porque quien vive con 15 GB libres recibiría el aviso cada
+mañana y acabaría desactivando las notificaciones. Sí avisa si arranca ya por
+debajo de 5 GB, porque ahí macOS ya está fallando. Para volver a avisar del
+mismo umbral, el disco tiene que recuperarse al menos 2 GB por encima de él;
+así una oscilación de 19,9 a 20,1 GB no dispara una tormenta de avisos.
+
+El número que cuenta es el espacio **estrictamente libre**, el mismo que usa el
+motor Python. El espacio **purgable** —el que macOS puede recuperar por su
+cuenta— se muestra aparte en el menú ("+5,7 GB purgables") y nunca se cuenta
+como libre, porque macOS lo devuelve cuando decide, no cuando tú lo necesitas.
+
+La primera vez que arranca, macOS pide permiso para mostrar notificaciones. Si
+lo niegas, se cambia en Ajustes → Notificaciones → Disk Use Analyzer.
+
+Las notificaciones usan `UNUserNotificationCenter`. `tauri-plugin-notification`
+no sirve: publica con `NSUserNotification`, obsoleta desde macOS 11, y en macOS
+27 sus avisos no llegaban ni daban error.
+
+## Cuando el disco se llena por el swap
+
+El menú muestra una línea **Swap**. Si pasa de 4 GB, nombra la app que lo
+retiene: *"Swap: 12.2 GB · lo retiene Visual Studio Code"*. Los avisos lo
+repiten.
+
+El swap vive en ficheros del propio disco. Si una app acumula mucha memoria,
+macOS crea ficheros de swap que pueden ocupar decenas de GB y casi nunca los
+devuelve hasta reiniciar. Ninguna limpieza lo arregla: hay que cerrar o
+reiniciar la app que lo retiene.
+
+La app se averigua subiendo por el árbol de procesos hasta el primer `.app`,
+porque `top` corta los nombres a 16 caracteres y un servidor de lenguaje
+aparece como `java` a secas. En la máquina de desarrollo el swap llegó a 23 GB
+por las extensiones de VS Code (SonarLint ejecuta un servidor Java en cada
+ventana) y dejó el disco con 205 MB libres.
+
 ## Firma
 
 ### Por qué hay que firmar aunque no se distribuya
@@ -229,7 +293,7 @@ tccutil reset SystemPolicyAllFiles dev.diskanalyzer.app
 
 ```bash
 # 1. Parar la app
-pkill -f "Disk Use Analyzer" ; pkill -x desktop
+pkill -f "Disk Use Analyzer.app"
 
 # 2. Comprobar que no queda ningún análisis vivo
 ps aux | grep -i disk_analyzer | grep -v grep
@@ -261,7 +325,7 @@ ls ~/Library/LaunchAgents | grep -i diskanalyzer   # debe salir vacío
 
 ## Volver atrás
 
-1. Cierra la app (`pkill -x desktop`) y comprueba que no queda ningún análisis
+1. Cierra la app (`pkill -f "Disk Use Analyzer.app"`) y comprueba que no queda ningún análisis
    vivo (`ps aux | grep disk_analyzer`).
 2. Vuelve al commit anterior y recompila:
 

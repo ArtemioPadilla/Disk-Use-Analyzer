@@ -26,5 +26,6 @@
     "resources": [
       "resources/engine/**/*"
     ]
-  }
+  },
+  "mainBinaryName": "Disk Use Analyzer"
 }
