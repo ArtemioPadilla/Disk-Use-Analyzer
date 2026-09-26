@@ -17,9 +17,16 @@ use crate::estado::Estado;
 pub struct Trozo {
     pub fraccion: f64,
     pub color: Rgb,
+    /// Opacity. Everything is opaque except the part of the disk that could
+    /// not be broken down (no Full Disk Access), drawn translucent so it
+    /// does not pass for a measured "system and the rest".
+    pub alfa: u8,
 }
 
 pub const TAM: u32 = 36;
+
+/// Opacity of the used space that could not be broken down into categories.
+pub const ALFA_SIN_DESGLOSAR: u8 = 110;
 
 /// The ring for a disk reading: the used slices in the palette's category
 /// colours, then the free gap in the colour of the warning state, so the
@@ -34,6 +41,11 @@ pub fn trozos(uso: &DiskUsage, reparto: &Reparto, estado: Estado, c: &Colores) -
         .into_iter()
         .map(|p| Trozo {
             fraccion: redondear(p.fraccion),
+            alfa: if p.categoria == Categoria::Resto && reparto.tuyo.is_none() {
+                ALFA_SIN_DESGLOSAR
+            } else {
+                255
+            },
             color: match p.categoria {
                 Categoria::Docker => c.docker,
                 Categoria::Caches => c.caches,
@@ -45,6 +57,7 @@ pub fn trozos(uso: &DiskUsage, reparto: &Reparto, estado: Estado, c: &Colores) -
     let usado: f64 = out.iter().map(|t| t.fraccion).sum();
     out.push(Trozo {
         fraccion: (1.0 - usado).max(0.0),
+        alfa: 255,
         color: match estado {
             Estado::Ok => c.libre,
             Estado::Aviso => c.aviso,
@@ -103,7 +116,7 @@ pub fn png(trozos: &[Trozo]) -> Option<Vec<u8>> {
     let mut pista = PathBuilder::new();
     pista.push_circle(c, c, r);
     let mut gris = Paint::default();
-    gris.set_color_rgba8(128, 128, 128, 70);
+    gris.set_color_rgba8(128, 128, 128, 35);
     gris.anti_alias = true;
     if let Some(p) = pista.finish() {
         lienzo.stroke_path(&p, &gris, &trazo, Transform::identity(), None);
@@ -129,7 +142,7 @@ pub fn png(trozos: &[Trozo]) -> Option<Vec<u8>> {
         if let Some(camino) = pb.finish() {
             let mut pintura = Paint::default();
             let [rr, gg, bb] = t.color;
-            pintura.set_color_rgba8(rr, gg, bb, 255);
+            pintura.set_color_rgba8(rr, gg, bb, t.alfa);
             pintura.anti_alias = true;
             lienzo.stroke_path(&camino, &pintura, &trazo, Transform::identity(), None);
         }
@@ -161,10 +174,12 @@ mod tests {
             Trozo {
                 fraccion: 0.5,
                 color: ROJO,
+                alfa: 255,
             },
             Trozo {
                 fraccion: 0.5,
                 color: AZUL,
+                alfa: 255,
             },
         ])
         .unwrap();
@@ -185,10 +200,12 @@ mod tests {
             Trozo {
                 fraccion: 0.25,
                 color: ROJO,
+                alfa: 255,
             },
             Trozo {
                 fraccion: 0.75,
                 color: AZUL,
+                alfa: 255,
             },
         ])
         .unwrap();
@@ -209,6 +226,7 @@ mod tests {
         let png = png(&[Trozo {
             fraccion: 1.0,
             color: ROJO,
+            alfa: 255,
         }])
         .unwrap();
         let img = Pixmap::decode_png(&png).unwrap();
@@ -223,10 +241,12 @@ mod tests {
             Trozo {
                 fraccion: 0.985,
                 color: AZUL,
+                alfa: 255,
             },
             Trozo {
                 fraccion: 0.015,
                 color: ROJO,
+                alfa: 255,
             },
         ])
         .unwrap();
@@ -267,5 +287,34 @@ mod tests {
         assert!((t[3].fraccion - 0.10).abs() < 0.006);
         assert_eq!(trozos(&uso, &reparto, Estado::Ok, &c)[3].color, c.libre);
         assert_eq!(trozos(&uso, &reparto, Estado::Aviso, &c)[3].color, c.aviso);
+    }
+
+    #[test]
+    fn lo_que_no_se_pudo_desglosar_se_ve_translucido() {
+        let gb = 1u64 << 30;
+        let uso = DiskUsage {
+            total: 100 * gb,
+            used: 90 * gb,
+            available: 10 * gb,
+            purgeable: 0,
+            percent: 90.0,
+        };
+        let c = PaletaId::Sistema.colores();
+        let alfa_resto = |tuyo| {
+            let r = Reparto {
+                docker: None,
+                caches: 10 * gb,
+                tuyo,
+            };
+            let t = trozos(&uso, &r, Estado::Ok, &c);
+            let resto = t.iter().find(|t| t.color == c.resto).unwrap();
+            assert!(t
+                .iter()
+                .filter(|x| x.color != c.resto)
+                .all(|x| x.alfa == 255));
+            resto.alfa
+        };
+        assert_eq!(alfa_resto(None), ALFA_SIN_DESGLOSAR);
+        assert_eq!(alfa_resto(Some(30 * gb)), 255);
     }
 }

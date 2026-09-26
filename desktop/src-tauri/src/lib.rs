@@ -255,6 +255,8 @@ pub fn run() {
                 None::<&str>,
             )?;
             let quit_item = MenuItem::with_id(app, "quit", "Salir", true, None::<&str>)?;
+            let reparto_item =
+                MenuItem::with_id(app, "reparto", "Midiendo categorías…", false, None::<&str>)?;
 
             let etiqueta_items = Etiqueta::TODAS
                 .iter()
@@ -298,6 +300,7 @@ pub fn run() {
                     &uso_item,
                     &libre_item,
                     &swap_item,
+                    &reparto_item,
                     &PredefinedMenuItem::separator(app)?,
                     &analizar_item,
                     &estado_analisis_item,
@@ -490,9 +493,13 @@ pub fn run() {
             // showing the free gap before that finishes.
             {
                 let pintor = Arc::clone(&pintor);
-                let acceso_total = analisis::hay_acceso_total_al_disco();
+                let reparto_item = reparto_item.clone();
                 std::thread::spawn(move || loop {
-                    let medido = categorias::medir(acceso_total);
+                    // Probed on every pass, not once: granting Full Disk
+                    // Access then shows up on the next measurement without
+                    // restarting the app.
+                    let medido = categorias::medir(analisis::hay_acceso_total_al_disco());
+                    let _ = reparto_item.set_text(categorias::texto_reparto(&medido));
                     *pintor.reparto.lock().unwrap() = medido;
                     if let Some(uso) = disk::read() {
                         pintor.pintar(&uso);

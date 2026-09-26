@@ -198,8 +198,13 @@ cuál de los tres PNG fijos se mostraba. A su lado va un texto.
   `~/Library/Containers`, y Documentos, Escritorio y Descargas también están
   protegidos: leerlos sin ese permiso haría que macOS pidiera acceso carpeta
   por carpeta. Lo que no se pudo medir cae en el gris de "el resto", en lugar
-  de inventarse. Así que un anillo casi todo gris suele significar que falta
-  ese permiso (ver [Acceso a disco completo](#acceso-a-disco-completo)).
+  de inventarse, y se dibuja **translúcido** para que no pase por "sistema"
+  medido. El menú lo dice en la línea del desglose ("Cachés 22 GB · sin
+  Acceso total al disco, el resto no se desglosa"). El permiso se vuelve a
+  comprobar en cada medición, así que al concederlo aparece solo en la
+  siguiente (como mucho 30 min), o al reabrir la app.
+  Recuerda que **cada rebuild invalida el permiso** (ver
+  [Acceso a disco completo](#acceso-a-disco-completo)).
 
 En el menú se elige el texto (**Mostrar junto al icono**: GB libres, que es lo
 que viene por defecto, porcentaje usado, o ambos) y la paleta (**Colores**:

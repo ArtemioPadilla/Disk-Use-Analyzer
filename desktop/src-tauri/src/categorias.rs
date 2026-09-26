@@ -197,6 +197,23 @@ pub fn medir(acceso_total: bool) -> Reparto {
     }
 }
 
+/// The menu line that says what the ring's colours are, in the ring's
+/// order. Without Full Disk Access it says so, so a mostly grey ring reads
+/// as "missing permission" rather than "your disk is all system".
+pub fn texto_reparto(r: &Reparto) -> String {
+    let gb = |b: u64| format!("{:.0} GB", b as f64 / (1u64 << 30) as f64);
+    let mut partes = Vec::new();
+    if let Some(d) = r.docker.filter(|d| *d > 0) {
+        partes.push(format!("Docker {}", gb(d)));
+    }
+    partes.push(format!("Cachés {}", gb(r.caches)));
+    match r.tuyo {
+        Some(t) => partes.push(format!("Tus archivos {}", gb(t))),
+        None => partes.push("sin Acceso total al disco, el resto no se desglosa".into()),
+    }
+    partes.join(" · ")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -290,5 +307,28 @@ mod tests {
         let p = plan(Path::new("/Users/u"), true);
         assert!(p.docker_carpeta.is_some());
         assert!(p.tuyo.iter().any(|r| r.ends_with("Downloads")));
+    }
+
+    #[test]
+    fn el_texto_del_reparto_sigue_el_orden_del_anillo_y_dice_si_falta_permiso() {
+        let g = 1u64 << 30;
+        let completo = Reparto {
+            docker: Some(20 * g),
+            caches: 21 * g,
+            tuyo: Some(180 * g),
+        };
+        assert_eq!(
+            texto_reparto(&completo),
+            "Docker 20 GB · Cachés 21 GB · Tus archivos 180 GB"
+        );
+        let sin_permiso = Reparto {
+            docker: None,
+            caches: 21 * g,
+            tuyo: None,
+        };
+        assert_eq!(
+            texto_reparto(&sin_permiso),
+            "Cachés 21 GB · sin Acceso total al disco, el resto no se desglosa"
+        );
     }
 }
