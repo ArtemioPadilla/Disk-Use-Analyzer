@@ -14,12 +14,20 @@ implementation plan (the planning documents are in Spanish).
 
 Current state: the improvement plan (phases 1–5), the menu-bar app's slice A and
 the cleanup hardening plan are all merged to `main`, and so is phase 0 (repo
-hygiene). Every cleanup flow in the web UI (`QuickActions`, `CleanupWizard`,
-`GuidedDeclutter`, `WhatIfSandbox`, `ReverseView`, `DockerPanel`) runs its
-commands through the single shared `useCleanupRunner` hook — it's the only thing
-that talks to `api.createTerminal`/tracks `terminal:exited` for cleanup, and it
-credits savings by measuring free disk space before and after, not by trusting
-the exit code — `rm -f` returns 0 whether it deleted everything or nothing. Auth
+hygiene). **Nothing in the web UI deletes on one click.** Every cleanup button
+(`ReverseView`, `QuickActions`, `DockerPanel`) only calls `pedirLimpieza()`
+(`web/src/lib/limpieza.ts`), which opens the review sheet `RevisarLimpieza`; the
+Cleanup page is that same component inline. It is the only component allowed to
+call `run()` on the `useCleanupRunner` hook (a test in
+`RevisarLimpieza.test.tsx` fails otherwise). The sheet groups actions by what the
+user loses — the backend's `consecuencia` per rule (`CONSECUENCIAS` in
+`disk_analyzer_core.py`): `regenera` / `redescarga` / `permanente`, plus
+`solo_lista` for rules that only show a list and are never offered as cleanup.
+Only `regenera` is pre-selected. A report without `efecto` (made before the
+deletion gate) offers nothing to run. The runner credits savings by measuring
+free disk space before and after — `rm -f` returns 0 whether it deleted
+everything or nothing — and every "freed" figure shows that measurement, never
+the estimate. Auth
 is on by default: the server prints a link with a one-time token
 (`http://localhost:8000/?token=...`) on startup, the frontend stores it in
 `sessionStorage` and strips it from the URL, and a new token is minted on every
@@ -115,8 +123,8 @@ This is a **macOS Disk Usage Analyzer** - a powerful standalone Python tool for 
 │   │   ├── layouts/        # MainLayout.astro, global CSS
 │   │   ├── pages/          # 5 pages: index, files, cleanup, export, history
 │   │   ├── components/     # React islands (StatsCards, FileTable, FloatingTerminal, etc.)
-│   │   ├── hooks/          # useCleanupRunner (all cleanup goes through this), useTerminal
-│   │   └── lib/            # api.ts, events.ts, format.ts, categories.ts, tiers.ts
+│   │   ├── hooks/          # useCleanupRunner (only RevisarLimpieza calls run), useTerminal
+│   │   └── lib/            # api.ts, events.ts, format.ts, categories.ts, limpieza.ts
 │   └── dist/               # Built static files (served by FastAPI)
 ├── desktop/                # macOS menu-bar app (Tauri 2 + Rust)
 │   └── src-tauri/src/      # disk.rs, estado.rs, analisis.rs, lib.rs
@@ -292,7 +300,7 @@ When modifying the web interface:
 3. Build the frontend: `cd web && npm run build`
 4. Verify FastAPI serves all pages: start server and check `/`, `/files`, `/cleanup`, `/export`, `/history`
 5. Test terminal: click "Terminal" button, verify shell spawns and accepts input
-6. If you touch a cleanup flow, go through `useCleanupRunner` (`web/src/hooks/useCleanupRunner.ts`) rather than calling `api.createTerminal` directly — it's the single place that measures the savings a command actually produced and serializes commands through the one visible PTY
+6. If you add a cleanup button, call `pedirLimpieza()` (`web/src/lib/limpieza.ts`) — never `useCleanupRunner().run` or `api.createTerminal` directly. The review sheet is the only thing that runs cleanup; the runner behind it measures the savings a command actually produced and serializes commands through the one visible PTY
 
 ## Known Issues & Limitations
 
@@ -338,7 +346,7 @@ When modifying the web interface:
 - **PTY Manager**: Backend module (`pty_manager.py`) that spawns pseudo-terminal sessions with safety limits (blocked dangerous commands, max 3 concurrent sessions, idle timeout, command logging)
 - **Background Task Execution**: Analysis runs in background with real-time progress via WebSocket. Cleanup commands execute in the floating terminal while users continue browsing.
 - **Virtual-Scroll File Browser**: File table using `@tanstack/react-virtual` for efficient rendering of 100k+ files with search, sort, and bulk delete
-- **Tiered Cleanup Wizard**: Recommendations grouped by risk level (Safe/Moderate/Aggressive/Deep Clean) with one-click execution in terminal
+- **Review before cleanup**: every cleanup opens one review sheet, grouped by consequence (comes back by itself / download again / gone for good), with measured results per item
 - **Session History**: Past analysis sessions persisted and reloadable
 - **Export Options**: Standalone HTML report, JSON, and CSV export from the web UI
 - **Dark Mode**: System-aware theme toggle with localStorage persistence

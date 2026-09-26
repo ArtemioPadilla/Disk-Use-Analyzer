@@ -9,6 +9,7 @@ import NotificationManager from '../components/NotificationManager.tsx';
 import ToastNotification from '../components/ToastNotification.tsx';
 import AuthErrorBanner from '../components/AuthErrorBanner.tsx';
 import KeyboardShortcuts from '../components/KeyboardShortcuts.tsx';
+import RevisarLimpieza from '../components/RevisarLimpieza.tsx';
 import '../layouts/global.css';
 
 const { title, currentPath } = Astro.props;
@@ -66,5 +67,6 @@ const { title, currentPath } = Astro.props;
     <ToastNotification client:load />
     <AuthErrorBanner client:load />
     <KeyboardShortcuts client:load />
+    <RevisarLimpieza client:load />
   </body>
 </html>

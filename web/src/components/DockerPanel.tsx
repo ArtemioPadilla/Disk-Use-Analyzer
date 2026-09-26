@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { on } from '../lib/events';
 import { type SessionResults } from '../lib/api';
 import { formatBytes } from '../lib/format';
-import { useCleanupRunner } from '../hooks/useCleanupRunner';
+import { pedirLimpieza, planDe, type Accion } from '../lib/limpieza';
 
 interface DockerStats {
   images: { count: number; size: number };
@@ -13,11 +13,14 @@ interface DockerStats {
   reclaimable?: number;
 }
 
-const PRUNE_COMMAND = 'docker system prune -af --volumes';
+// Never `--volumes`: volumes hold containers' data (databases…), which do
+// not come back by re-downloading anything. This is the same command the
+// analysis recommends; the panel used to run a stronger one of its own.
+const PRUNE_COMMAND = 'docker system prune -a -f';
 
 export default function DockerPanel() {
   const [docker, setDocker] = useState<DockerStats | null>(null);
-  const { run, running, completed } = useCleanupRunner();
+  const [accion, setAccion] = useState<Accion | null>(null);
 
   useEffect(() => {
     const off = on('analysis:completed', (data: SessionResults) => {
@@ -25,15 +28,22 @@ export default function DockerPanel() {
       if (dockerData && Object.keys(dockerData).length > 0) {
         setDocker(dockerData as DockerStats);
       }
+      const plan = planDe((data.results || []).flatMap(r => r.report?.recommendations || []));
+      setAccion(plan.acciones.find(a => a.clave === 'docker') ?? null);
     });
     return off;
   }, []);
 
-  const pruning = running.has(PRUNE_COMMAND);
-  const pruned = completed.has(PRUNE_COMMAND);
-
   const pruneDocker = () => {
-    run({ command: PRUNE_COMMAND, space: docker?.reclaimable || 0, label: 'Docker prune' });
+    const a: Accion = accion ?? {
+      clave: 'docker',
+      titulo: 'Docker',
+      detalle: 'Unused images, stopped containers, networks and build cache. Volumes (your containers’ data) are kept.',
+      consecuencia: 'redescarga',
+      estimado: docker?.reclaimable || 0,
+      command: PRUNE_COMMAND,
+    };
+    pedirLimpieza({ acciones: [a], marcadas: [a.clave] });
   };
 
   if (!docker) return null;
@@ -61,14 +71,10 @@ export default function DockerPanel() {
           <span style={{ fontWeight: 600 }}>Docker</span>
           <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>{formatBytes(totalSpace)}</span>
         </div>
-        {!pruned ? (
-          <button className="btn btn-primary" onClick={pruneDocker} disabled={pruning}
-            style={{ fontSize: '0.75rem', padding: '0.35rem 0.75rem' }}>
-            {pruning ? 'Pruning...' : 'Prune Unused'}
-          </button>
-        ) : (
-          <span style={{ color: 'var(--success)', fontSize: '0.8rem', fontWeight: 600 }}>✓ Pruned</span>
-        )}
+        <button className="btn btn-primary" onClick={pruneDocker}
+          style={{ fontSize: '0.75rem', padding: '0.35rem 0.75rem' }}>
+          Prune unused…
+        </button>
       </div>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(140px, 1fr))', gap: '0.5rem' }}>
         {items.filter(i => i.size > 0 || i.count > 0).map((item, idx) => (

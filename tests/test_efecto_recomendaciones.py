@@ -177,3 +177,26 @@ def test_snapshots_time_machine_no_inventa_espacio():
         f"{tipo}: 'space' no puede ser una estimación inventada, "
         f"encontré {recs[tipo]['space']!r}"
     )
+
+
+CONSECUENCIAS_VALIDAS = {'regenera', 'redescarga', 'permanente', 'solo_lista'}
+
+
+def test_toda_recomendacion_declara_lo_que_se_pierde():
+    """La web agrupa y preselecciona por esta consecuencia: solo lo que
+    'regenera' viene marcado. Una regla sin ella rompe esa promesa."""
+    for r in _recomendaciones():
+        assert r.get('consecuencia') in CONSECUENCIAS_VALIDAS, (
+            f"{r['id']}: consecuencia {r.get('consecuencia')!r}"
+        )
+
+
+def test_consecuencia_y_efecto_coinciden_en_lo_que_solo_lista():
+    for r in _recomendaciones():
+        assert (r['consecuencia'] == 'solo_lista') == (r['efecto'] == 'solo_lista'), r['id']
+
+
+def test_la_papelera_y_docker_no_se_venden_como_regenerables():
+    from disk_analyzer_core import CONSECUENCIAS
+    assert CONSECUENCIAS['papelera'] == 'permanente'
+    assert CONSECUENCIAS['docker'] == 'redescarga'

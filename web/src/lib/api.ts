@@ -84,6 +84,8 @@ export interface Recommendation {
   efecto?: 'borra' | 'irreversible' | 'solo_lista';
   /** Identificador estable, ver Task 6. Opcional por la misma razón. */
   id?: string;
+  /** Qué se pierde al ejecutarla. Ver CONSECUENCIAS en disk_analyzer_core.py. */
+  consecuencia?: 'regenera' | 'redescarga' | 'permanente' | 'solo_lista';
 }
 
 export interface AnalysisReport {

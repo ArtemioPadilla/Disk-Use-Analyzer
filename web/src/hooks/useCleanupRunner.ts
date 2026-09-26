@@ -170,7 +170,9 @@ async function startJob(job: CleanupJob): Promise<void> {
   } catch (e: any) {
     const nextRunning = new Set(state.running);
     nextRunning.delete(job.command);
-    setState({ running: nextRunning, error: e?.message ?? 'Could not start the cleanup command' });
+    const motivo = e?.message ?? 'Could not start the cleanup command';
+    setState({ running: nextRunning, error: motivo });
+    emit('cleanup:failed', { command: job.command, motivo });
     processing = false;
     scheduleNext();
   }
@@ -187,6 +189,7 @@ function giveUpOn(ptyId: string): void {
   const nextRunning = new Set(state.running);
   nextRunning.delete(job.command);
   setState({ running: nextRunning, error: `${job.label ?? job.command}: no response from the terminal` });
+  emit('cleanup:failed', { command: job.command, motivo: 'No response from the terminal' });
   processing = false;
   scheduleNext();
 }
@@ -230,6 +233,7 @@ async function finishActiveJob(ptyId: string, code: number | null): Promise<void
     emit('cleanup:completed', { command: job.command, space: liberado, estimado: job.space });
   } else {
     setState({ running: nextRunning, error: `${job.label ?? job.command} exited with code ${code}` });
+    emit('cleanup:failed', { command: job.command, motivo: `Exited with code ${code}` });
   }
 
   processing = false;
