@@ -210,7 +210,11 @@ The project has three interfaces: CLI, GUI, and Web.
 
 - **`desktop/src-tauri/src/`** — a macOS status-bar app showing live disk usage:
   `disk.rs` (reads usage), `estado.rs` (classifies into ok/aviso/critico),
-  `analisis.rs` (runs the Python engine as a child process), `lib.rs` (tray, menu, poller)
+  `analisis.rs` (runs the Python engine as a child process), `lib.rs` (tray, menu, poller),
+  `anillo.rs` (draws the live tray ring), `categorias.rs` (splits used space into
+  categories without triggering TCC prompts), `ajustes.rs` (label and palette
+  prefs), `avisos.rs` + `notificar.rs` (low-disk notifications), `memoria.rs`
+  (swap and the app holding it)
 - **Build:** `cd desktop && npm run tauri build -- --bundles app`
 - **Tests:** `cargo test --manifest-path desktop/src-tauri/Cargo.toml` (also run by `make test`)
 - **Bundled engine:** the `.app` ships its own trimmed CPython

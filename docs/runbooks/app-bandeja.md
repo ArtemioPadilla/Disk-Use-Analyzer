@@ -183,6 +183,40 @@ aparece como `java` a secas. En la máquina de desarrollo el swap llegó a 23 GB
 por las extensiones de VS Code (SonarLint ejecuta un servidor Java en cada
 ventana) y dejó el disco con 205 MB libres.
 
+## El anillo de la barra
+
+El icono de la barra es un anillo que se dibuja en vivo (`anillo.rs`, con
+tiny-skia) a partir de lo que mide la app: un trozo por categoría y el hueco
+libre, que es verde, naranja o rojo según el mismo estado que antes decidía
+cuál de los tres PNG fijos se mostraba. A su lado va un texto.
+
+- **El hueco libre** se actualiza en cada lectura (cada 5 s).
+- **Las categorías** se miden en segundo plano al arrancar y cada 30 min, con
+  `du` a prioridad baja: Docker, cachés, tus archivos y "sistema y el resto".
+- **Sin Acceso total al disco** solo se miden las cachés (y Docker si su
+  daemon está arrancado, a través de su CLI). Docker guarda los datos en
+  `~/Library/Containers`, y Documentos, Escritorio y Descargas también están
+  protegidos: leerlos sin ese permiso haría que macOS pidiera acceso carpeta
+  por carpeta. Lo que no se pudo medir cae en el gris de "el resto", en lugar
+  de inventarse. Así que un anillo casi todo gris suele significar que falta
+  ese permiso (ver [Acceso a disco completo](#acceso-a-disco-completo)).
+
+En el menú se elige el texto (**Mostrar junto al icono**: GB libres, que es lo
+que viene por defecto, porcentaje usado, o ambos) y la paleta (**Colores**:
+Sistema por defecto, Pastel, Accesible —Okabe-Ito, pensada para el
+daltonismo— y Monocromo). Se guarda en
+`~/Library/Application Support/dev.diskanalyzer.app/ajustes.json`. Si ese
+fichero está dañado, la app arranca con los valores por defecto.
+
+En un Mac con notch y la barra llena, "ambos" es lo bastante ancho para que
+macOS, o un gestor como Ice o Bartender, esconda el ítem entero. Si deja de
+verse, vuelve a "GB libres".
+
+El icono de la app (Dock, Finder, notificaciones) es el mismo anillo, estático
+y con el porcentaje en el centro. Se regenera con
+`./desktop/tools/gen_icono_app.sh` (necesita Chrome y node); los ficheros de
+`desktop/src-tauri/icons/` son su salida versionada.
+
 ## Firma
 
 ### Por qué hay que firmar aunque no se distribuya

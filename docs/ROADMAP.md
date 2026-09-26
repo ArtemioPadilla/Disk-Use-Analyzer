@@ -148,7 +148,9 @@ Runbook: [app-bandeja](runbooks/app-bandeja.md)
 | ❓ | **E4.3** Rebanada C: ventana del panel | Pendiente de E4.3a | — |
 | ❓ | **E4.3a** ¿Ventana nativa con gráficas propias, o ventana sobre la web que ya lleva dentro? | Decisión tuya. Elegiste nativa; dos revisiones adversariales lo desaconsejaron por duplicar la visualización | — |
 | ❓ | **E4.4** ¿El servidor que lanza la bandeja lleva la terminal desactivada? | Decisión pendiente desde el spec. Hoy va **activada** (atada a loopback) | — |
-| ⬜ | **E4.5** Arranque al iniciar sesión | La app vuelve tras reiniciar el Mac | — |
+| ✅ | **E4.5** Arranque al iniciar sesión | La app vuelve tras reiniciar el Mac | v0.3.0 |
+| ✅ | Avisos de poco espacio y del swap | Notificación al cruzar 20 y 5 GB libres; el menú nombra la app que retiene el swap | v0.3.0 |
+| ✅ | Anillo en vivo por categorías | El icono de la barra reparte lo usado por categorías; texto y paleta elegibles desde el menú | v0.3.0 |
 | ⬜ | **E4.6** La configuración de qué es "seguro" | Casillas por categoría en el diálogo de confirmación; nada de pantalla de ajustes (los otros tres ejes se descartaron) | — |
 
 Deuda conocida del servidor que lanza la bandeja: los shells del PTY hacen

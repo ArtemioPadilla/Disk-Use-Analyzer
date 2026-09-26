@@ -1,23 +1,27 @@
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use tauri::image::Image;
-use tauri::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem};
-use tauri::tray::TrayIconBuilder;
+use tauri::menu::{CheckMenuItem, IsMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu};
+use tauri::tray::{TrayIcon, TrayIconBuilder};
 use tauri::Manager;
 use tauri_plugin_autostart::{MacosLauncher, ManagerExt};
 
+pub mod ajustes;
 pub mod analisis;
+pub mod anillo;
 pub mod avisos;
+pub mod categorias;
 pub mod disk;
 pub mod estado;
 pub mod memoria;
 pub mod notificar;
 pub mod servidor;
 
+use ajustes::{Ajustes, Etiqueta, PaletaId};
 use analisis::AnalisisManager;
+use categorias::Reparto;
 use disk::DiskUsage;
-use estado::Estado;
 use servidor::Servidor;
 
 /// Disk usage costs 0.7 µs to read (measured) -- 5s is plenty responsive
@@ -28,6 +32,12 @@ const POLL_INTERVAL: Duration = Duration::from_secs(5);
 /// runs `top`, which samples for about a second, so it is not done on every
 /// 5-second tick — once a minute is plenty for something that changes slowly.
 const TICKS_POR_CULPABLE: u32 = 12;
+
+/// How often the category split is re-measured. It runs `du` over the cache
+/// folders (and, with Full Disk Access, the user's folders), which takes
+/// seconds and spins the disk; the split changes slowly, the free gap is the
+/// part that has to be live, and that one is redrawn on every tick anyway.
+const INTERVALO_CATEGORIAS: Duration = Duration::from_secs(30 * 60);
 
 /// Whether this process is running from a packaged `.app` bundle.
 ///
@@ -97,17 +107,66 @@ fn texto_libre(u: &DiskUsage) -> String {
     }
 }
 
-/// Icons are embedded at compile time (`include_bytes!`) rather than read
-/// from disk at runtime: that way the tray works the same in dev mode and
-/// in a future bundled `.app`, independent of the process's working
-/// directory.
-fn icono_para(estado: Estado) -> tauri::Result<Image<'static>> {
-    let bytes: &[u8] = match estado {
-        Estado::Ok => include_bytes!("../assets/tray/ok.png"),
-        Estado::Aviso => include_bytes!("../assets/tray/aviso.png"),
-        Estado::Critico => include_bytes!("../assets/tray/critico.png"),
-    };
-    Image::from_bytes(bytes)
+fn icono_anillo(uso: &DiskUsage, reparto: &Reparto, ajustes: &Ajustes) -> Option<Image<'static>> {
+    let t = anillo::trozos(
+        uso,
+        reparto,
+        estado::classify(*uso),
+        &ajustes.paleta.colores(),
+    );
+    Image::from_bytes(&anillo::png(&t)?).ok()
+}
+
+/// Draws the tray: the ring and the text beside it. Shared by the poller,
+/// the category measurer and the menu, so a change of palette or label shows
+/// at once instead of on the next tick.
+struct Pintor {
+    tray: TrayIcon,
+    ajustes: Arc<Mutex<Ajustes>>,
+    reparto: Arc<Mutex<Reparto>>,
+    /// What is on screen now. Redrawing only on change: swapping the tray
+    /// image every 5 s makes it flicker on some macOS versions.
+    ultimo: Mutex<(Vec<anillo::Trozo>, String)>,
+}
+
+impl Pintor {
+    fn pintar(&self, uso: &DiskUsage) {
+        let ajustes = *self.ajustes.lock().unwrap();
+        let reparto = *self.reparto.lock().unwrap();
+        let trozos = anillo::trozos(
+            uso,
+            &reparto,
+            estado::classify(*uso),
+            &ajustes.paleta.colores(),
+        );
+        let titulo = ajustes.texto(gb(uso.available), uso.percent);
+        let mut ultimo = self.ultimo.lock().unwrap();
+        if ultimo.0 != trozos {
+            if let Some(img) = anillo::png(&trozos).and_then(|b| Image::from_bytes(&b).ok()) {
+                let _ = self.tray.set_icon(Some(img));
+            }
+            ultimo.0 = trozos;
+        }
+        if ultimo.1 != titulo {
+            let _ = self.tray.set_title(Some(&titulo));
+            ultimo.1 = titulo;
+        }
+    }
+}
+
+fn como_menu(items: &[CheckMenuItem<tauri::Wry>]) -> Vec<&dyn IsMenuItem<tauri::Wry>> {
+    items
+        .iter()
+        .map(|i| i as &dyn IsMenuItem<tauri::Wry>)
+        .collect()
+}
+
+/// Makes a group of check items behave like radio buttons: macOS toggles the
+/// clicked one on its own, so every item is set explicitly.
+fn marcar_uno(items: &[CheckMenuItem<tauri::Wry>], elegido: usize) {
+    for (i, item) in items.iter().enumerate() {
+        let _ = item.set_checked(i == elegido);
+    }
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -127,7 +186,13 @@ pub fn run() {
             // first frame already shows the real disk state instead of a
             // placeholder that only gets corrected 5s later by the poller.
             let lectura_inicial = disk::read();
-            let estado_inicial = lectura_inicial.map(estado::classify);
+            let dir_ajustes = app.path().app_config_dir().ok();
+            let ajustes_iniciales = dir_ajustes
+                .as_deref()
+                .map(Ajustes::cargar)
+                .unwrap_or_default();
+            let ajustes = Arc::new(Mutex::new(ajustes_iniciales));
+            let reparto = Arc::new(Mutex::new(Reparto::default()));
 
             let uso_item = MenuItem::with_id(
                 app,
@@ -191,6 +256,42 @@ pub fn run() {
             )?;
             let quit_item = MenuItem::with_id(app, "quit", "Salir", true, None::<&str>)?;
 
+            let etiqueta_items = Etiqueta::TODAS
+                .iter()
+                .enumerate()
+                .map(|(i, e)| {
+                    CheckMenuItem::with_id(
+                        app,
+                        format!("etiqueta:{i}"),
+                        e.nombre(),
+                        true,
+                        *e == ajustes_iniciales.etiqueta,
+                        None::<&str>,
+                    )
+                })
+                .collect::<tauri::Result<Vec<_>>>()?;
+            let paleta_items = PaletaId::TODAS
+                .iter()
+                .enumerate()
+                .map(|(i, p)| {
+                    CheckMenuItem::with_id(
+                        app,
+                        format!("paleta:{i}"),
+                        p.nombre(),
+                        true,
+                        *p == ajustes_iniciales.paleta,
+                        None::<&str>,
+                    )
+                })
+                .collect::<tauri::Result<Vec<_>>>()?;
+            let etiqueta_menu = Submenu::with_items(
+                app,
+                "Mostrar junto al icono",
+                true,
+                &como_menu(&etiqueta_items),
+            )?;
+            let paleta_menu = Submenu::with_items(app, "Colores", true, &como_menu(&paleta_items))?;
+
             let menu = Menu::with_items(
                 app,
                 &[
@@ -203,6 +304,8 @@ pub fn run() {
                     &PredefinedMenuItem::separator(app)?,
                     &abrir_item,
                     &PredefinedMenuItem::separator(app)?,
+                    &etiqueta_menu,
+                    &paleta_menu,
                     &arranque_item,
                     &quit_item,
                 ],
@@ -244,8 +347,11 @@ pub fn run() {
             let mut tray_builder = TrayIconBuilder::new()
                 .menu(&menu)
                 .show_menu_on_left_click(true);
-            match estado_inicial.map(icono_para) {
-                Some(Ok(icon)) => tray_builder = tray_builder.icon(icon),
+            let icono_inicial = lectura_inicial
+                .as_ref()
+                .and_then(|u| icono_anillo(u, &Reparto::default(), &ajustes_iniciales));
+            match icono_inicial {
+                Some(icon) => tray_builder = tray_builder.icon(icon),
                 _ => {
                     // Disk read (or icon decode) failed at startup: fall
                     // back to the bundle icon rather than showing nothing.
@@ -263,8 +369,38 @@ pub fn run() {
                 let arranque_item = arranque_item.clone();
                 let analizar_item = analizar_item.clone();
                 let estado_analisis_item = estado_analisis_item.clone();
+                let ajustes = Arc::clone(&ajustes);
+                let dir_ajustes = dir_ajustes.clone();
                 tray_builder
                     .on_menu_event(move |app, event| {
+                        let id = event.id().as_ref();
+                        let eleccion = |prefijo: &str| {
+                            id.strip_prefix(prefijo)
+                                .and_then(|n| n.parse::<usize>().ok())
+                        };
+                        if let Some(i) =
+                            eleccion("etiqueta:").filter(|i| *i < Etiqueta::TODAS.len())
+                        {
+                            marcar_uno(&etiqueta_items, i);
+                            ajustes.lock().unwrap().etiqueta = Etiqueta::TODAS[i];
+                        } else if let Some(i) =
+                            eleccion("paleta:").filter(|i| *i < PaletaId::TODAS.len())
+                        {
+                            marcar_uno(&paleta_items, i);
+                            ajustes.lock().unwrap().paleta = PaletaId::TODAS[i];
+                        }
+                        if id.starts_with("etiqueta:") || id.starts_with("paleta:") {
+                            let actuales = *ajustes.lock().unwrap();
+                            if let Some(dir) = dir_ajustes.as_deref() {
+                                let _ = actuales.guardar(dir);
+                            }
+                            if let (Some(uso), Some(pintor)) =
+                                (disk::read(), app.try_state::<Arc<Pintor>>())
+                            {
+                                pintor.pintar(&uso);
+                            }
+                            return;
+                        }
                         if event.id() == "arranque" {
                             // macOS already flipped the tick; apply whatever
                             // it now shows, then re-read the real state so the
@@ -338,16 +474,40 @@ pub fn run() {
                     .build(app)?
             };
 
-            // Background poller: refresh the usage text every tick, but
-            // only touch the icon when the classified state actually
-            // changes -- swapping it on every poll causes flicker on some
-            // macOS versions.
+            let pintor = Arc::new(Pintor {
+                tray,
+                ajustes: Arc::clone(&ajustes),
+                reparto: Arc::clone(&reparto),
+                ultimo: Mutex::new((Vec::new(), String::new())),
+            });
+            app.manage(Arc::clone(&pintor));
+            if let Some(uso) = lectura_inicial.as_ref() {
+                pintor.pintar(uso);
+            }
+
+            // The category split, measured off the main thread: the first
+            // pass runs `du` for a few seconds, and the tray must be up and
+            // showing the free gap before that finishes.
             {
-                let tray = tray.clone();
+                let pintor = Arc::clone(&pintor);
+                let acceso_total = analisis::hay_acceso_total_al_disco();
+                std::thread::spawn(move || loop {
+                    let medido = categorias::medir(acceso_total);
+                    *pintor.reparto.lock().unwrap() = medido;
+                    if let Some(uso) = disk::read() {
+                        pintor.pintar(&uso);
+                    }
+                    std::thread::sleep(INTERVALO_CATEGORIAS);
+                });
+            }
+
+            // Background poller: refresh the texts and the ring every tick;
+            // `Pintor` only touches the tray when something visible changed.
+            {
+                let pintor = Arc::clone(&pintor);
                 let uso_item = uso_item.clone();
                 let libre_item = libre_item.clone();
                 let swap_item = swap_item.clone();
-                let mut ultimo_estado = estado_inicial;
                 let libre_inicial = lectura_inicial.map(|u| gb(u.available)).unwrap_or(f64::MAX);
                 let (mut vigia, aviso_inicial) = avisos::Vigia::al_arrancar(libre_inicial);
                 let mut culpable: Option<String> = None;
@@ -386,13 +546,7 @@ pub fn run() {
                                 if let Some(aviso) = vigia.observar(gb(usage.available)) {
                                     notificar(&aviso, &culpable);
                                 }
-                                let nuevo_estado = estado::classify(usage);
-                                if ultimo_estado != Some(nuevo_estado) {
-                                    if let Ok(icon) = icono_para(nuevo_estado) {
-                                        let _ = tray.set_icon(Some(icon));
-                                    }
-                                    ultimo_estado = Some(nuevo_estado);
-                                }
+                                pintor.pintar(&usage);
                             }
                             None => {
                                 let _ = uso_item.set_text("Uso: no disponible");
@@ -442,8 +596,15 @@ mod tests {
             percent: 97.0,
         };
         assert_eq!(texto_libre(&u(0)), "Libre: 14.0 GB");
-        assert_eq!(texto_libre(&u(g / 2)), "Libre: 14.0 GB", "menos de 1 GB no merece ruido");
-        assert_eq!(texto_libre(&u(5 * g + g / 2)), "Libre: 14.0 GB (+5.5 GB purgables)");
+        assert_eq!(
+            texto_libre(&u(g / 2)),
+            "Libre: 14.0 GB",
+            "menos de 1 GB no merece ruido"
+        );
+        assert_eq!(
+            texto_libre(&u(5 * g + g / 2)),
+            "Libre: 14.0 GB (+5.5 GB purgables)"
+        );
     }
 
     #[test]
