@@ -200,9 +200,9 @@ cuál de los tres PNG fijos se mostraba. A su lado va un texto.
   por carpeta. Lo que no se pudo medir cae en el gris de "el resto", en lugar
   de inventarse, y se dibuja **translúcido** para que no pase por "sistema"
   medido. El menú lo dice en la línea del desglose ("Cachés 22 GB · sin
-  Acceso total al disco, el resto no se desglosa"). El permiso se vuelve a
-  comprobar en cada medición, así que al concederlo aparece solo en la
-  siguiente (como mucho 30 min), o al reabrir la app.
+  Acceso total al disco, el resto no se desglosa"). Tras conceder el permiso,
+  **cierra y vuelve a abrir la app**: macOS no lo reevalúa en un proceso que
+  ya está en marcha.
   Recuerda que **cada rebuild invalida el permiso** (ver
   [Acceso a disco completo](#acceso-a-disco-completo)).
 
@@ -291,7 +291,9 @@ el permiso de un proceso ya en marcha.
 Sin este permiso el análisis **no falla**: el motor se salta los directorios
 protegidos y termina con éxito, con un informe incompleto. La app lo detecta
 sondeando directamente si puede listar
-`~/Library/Application Support/com.apple.TCC`, y lo dice en el menú **al
+`/Library/Application Support/com.apple.TCC` (la de todo el sistema; la de
+usuario, `~/Library/…`, desapareció en macOS 27 y hacía creer a la app que
+nunca tenía el permiso), y lo dice en el menú **al
 arrancar**, sin hacerte esperar a un escaneo que tarda minutos.
 
 **No confundas esto con los directorios que piden `sudo`.** Un escaneo del disco
