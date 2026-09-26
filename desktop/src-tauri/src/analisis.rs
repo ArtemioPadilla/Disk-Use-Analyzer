@@ -64,10 +64,27 @@ pub enum Resultado {
     Fallo(String),
 }
 
+/// Carpetas que solo se pueden listar con el Acceso total al disco, y que
+/// listarlas no hace que macOS pregunte nada.
+///
+/// La primera es la de todo el sistema, que existe en cualquier Mac. La de
+/// usuario era la única sonda hasta macOS 27, que la eliminó: `read_dir` de
+/// una carpeta inexistente falla igual que una denegada, así que la app
+/// decía "falta el permiso" aunque estuviera concedido. Se conserva para los
+/// macOS anteriores.
+const SONDAS_ACCESO_TOTAL: [&str; 2] = [
+    "/Library/Application Support/com.apple.TCC",
+    "~/Library/Application Support/com.apple.TCC",
+];
+
+fn alguna_legible(rutas: &[std::path::PathBuf]) -> bool {
+    rutas.iter().any(|r| std::fs::read_dir(r).is_ok())
+}
+
 /// Si esta app tiene concedido el Acceso total al disco.
 ///
-/// Sonda directa en vez de deducirlo de los errores del informe: esa carpeta
-/// solo se puede listar con el permiso concedido. Deducirlo era el error
+/// Sonda directa en vez de deducirlo de los errores del informe: esas
+/// carpetas solo se pueden listar con el permiso concedido. Deducirlo era el error
 /// original — un escaneo del disco entero **siempre** topa con unas pocas
 /// carpetas de `root` (`/usr/sbin/authserver`, cachés de Apple, algún
 /// antivirus), así que tomar cualquier error de permisos como "falta el
@@ -75,10 +92,15 @@ pub enum Resultado {
 /// máquina de desarrollo, con el permiso ya concedido: 10 errores, ninguno
 /// de ellos de una ruta protegida por TCC.
 pub fn hay_acceso_total_al_disco() -> bool {
-    let Some(home) = std::env::var_os("HOME") else {
-        return false;
-    };
-    std::fs::read_dir(Path::new(&home).join("Library/Application Support/com.apple.TCC")).is_ok()
+    let home = std::env::var_os("HOME").unwrap_or_default();
+    let rutas: Vec<_> = SONDAS_ACCESO_TOTAL
+        .iter()
+        .map(|s| match s.strip_prefix("~/") {
+            Some(resto) => Path::new(&home).join(resto),
+            None => Path::new(s).to_path_buf(),
+        })
+        .collect();
+    alguna_legible(&rutas)
 }
 
 impl Motor {
@@ -509,6 +531,24 @@ fn leer_stderr_o_codigo(stderr_path: &Path, status: ExitStatus) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn la_sonda_de_sistema_existe_aunque_no_se_pueda_leer() {
+        // Si macOS la mueve también, `read_dir` fallará siempre y la app
+        // volverá a decir que falta el permiso teniéndolo. `metadata` no
+        // necesita el permiso, así que esto detecta el cambio en cualquier
+        // máquina.
+        #[cfg(target_os = "macos")]
+        assert!(Path::new(SONDAS_ACCESO_TOTAL[0]).metadata().is_ok());
+    }
+
+    #[test]
+    fn basta_una_sonda_legible_y_una_inexistente_no_cuenta() {
+        let legible = std::env::temp_dir();
+        let inexistente = legible.join("no-existe-sonda-acceso-total");
+        assert!(alguna_legible(&[inexistente.clone(), legible]));
+        assert!(!alguna_legible(&[inexistente]));
+    }
+
     use super::*;
     use std::sync::mpsc;
 

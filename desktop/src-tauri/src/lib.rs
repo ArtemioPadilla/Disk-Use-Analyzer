@@ -495,9 +495,10 @@ pub fn run() {
                 let pintor = Arc::clone(&pintor);
                 let reparto_item = reparto_item.clone();
                 std::thread::spawn(move || loop {
-                    // Probed on every pass, not once: granting Full Disk
-                    // Access then shows up on the next measurement without
-                    // restarting the app.
+                    // Probed on every pass, not once: cheap, and it also
+                    // notices the permission being revoked. Granting it
+                    // still needs a relaunch; macOS does not re-evaluate a
+                    // running process.
                     let medido = categorias::medir(analisis::hay_acceso_total_al_disco());
                     let _ = reparto_item.set_text(categorias::texto_reparto(&medido));
                     *pintor.reparto.lock().unwrap() = medido;
