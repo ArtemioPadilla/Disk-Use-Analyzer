@@ -1,24 +1,79 @@
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use tauri::image::Image;
-use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
-use tauri::tray::TrayIconBuilder;
+use tauri::menu::{CheckMenuItem, IsMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu};
+use tauri::tray::{TrayIcon, TrayIconBuilder};
 use tauri::Manager;
+use tauri_plugin_autostart::{MacosLauncher, ManagerExt};
 
+pub mod ajustes;
 pub mod analisis;
+pub mod anillo;
+pub mod avisos;
+pub mod categorias;
 pub mod disk;
 pub mod estado;
+pub mod memoria;
+pub mod notificar;
 pub mod servidor;
 
+use ajustes::{Ajustes, Etiqueta, PaletaId};
 use analisis::AnalisisManager;
-use servidor::Servidor;
+use categorias::Reparto;
 use disk::DiskUsage;
-use estado::Estado;
+use servidor::Servidor;
 
 /// Disk usage costs 0.7 µs to read (measured) -- 5s is plenty responsive
 /// without needing any justification for the cost.
 const POLL_INTERVAL: Duration = Duration::from_secs(5);
+
+/// How often, in poller ticks, the swap culprit is re-measured. Finding it
+/// runs `top`, which samples for about a second, so it is not done on every
+/// 5-second tick — once a minute is plenty for something that changes slowly.
+const TICKS_POR_CULPABLE: u32 = 12;
+
+/// How often the category split is re-measured. It runs `du` over the cache
+/// folders (and, with Full Disk Access, the user's folders), which takes
+/// seconds and spins the disk; the split changes slowly, the free gap is the
+/// part that has to be live, and that one is redrawn on every tick anyway.
+const INTERVALO_CATEGORIAS: Duration = Duration::from_secs(30 * 60);
+
+/// Whether this process is running from a packaged `.app` bundle.
+///
+/// Launch-at-login registers the path of the running executable. From
+/// `cargo run` or a test, that path is a `target/debug` binary, and
+/// registering it would leave a login item pointing at a build artefact.
+fn es_app_empaquetada(ejecutable: &std::path::Path) -> bool {
+    ejecutable
+        .to_string_lossy()
+        .contains(".app/Contents/MacOS/")
+}
+
+/// Turns launch-at-login on the first time the packaged app runs, and from
+/// then on respects whatever the user chose in the menu. Returns whether it is
+/// on.
+///
+/// The user asked for the app to start with the computer: it didn't after a
+/// reboot, so they never saw the disk filling up. On by default for that
+/// reason — but only once, via a marker file, so switching it off sticks.
+fn configurar_arranque(app: &tauri::App) -> bool {
+    let auto = app.autolaunch();
+    let Some(dir) = app.path().app_config_dir().ok() else {
+        return auto.is_enabled().unwrap_or(false);
+    };
+    let marcador = dir.join("arranque-configurado");
+    if !marcador.exists() {
+        let _ = auto.enable();
+        let _ = std::fs::create_dir_all(&dir);
+        let _ = std::fs::write(&marcador, "");
+    } else if auto.is_enabled().unwrap_or(false) {
+        // Re-register every launch so the login item follows the app if it
+        // was moved or replaced by an update.
+        let _ = auto.enable();
+    }
+    auto.is_enabled().unwrap_or(false)
+}
 
 fn gb(bytes: u64) -> f64 {
     bytes as f64 / (1024.0 * 1024.0 * 1024.0)
@@ -38,26 +93,90 @@ fn texto_uso(u: &DiskUsage) -> String {
 /// thresholds (25 GB / 75 GB), so it's the one that explains *why* the icon
 /// is the color it is.
 fn texto_libre(u: &DiskUsage) -> String {
-    format!("Libre: {:.1} GB", gb(u.available))
+    // Purgeable space is shown apart, never added to the free figure: like
+    // swap, it is disk the user can neither see in Finder nor delete, and
+    // macOS gives it back only when it decides to.
+    if gb(u.purgeable) >= 1.0 {
+        format!(
+            "Libre: {:.1} GB (+{:.1} GB purgables)",
+            gb(u.available),
+            gb(u.purgeable)
+        )
+    } else {
+        format!("Libre: {:.1} GB", gb(u.available))
+    }
 }
 
-/// Icons are embedded at compile time (`include_bytes!`) rather than read
-/// from disk at runtime: that way the tray works the same in dev mode and
-/// in a future bundled `.app`, independent of the process's working
-/// directory.
-fn icono_para(estado: Estado) -> tauri::Result<Image<'static>> {
-    let bytes: &[u8] = match estado {
-        Estado::Ok => include_bytes!("../assets/tray/ok.png"),
-        Estado::Aviso => include_bytes!("../assets/tray/aviso.png"),
-        Estado::Critico => include_bytes!("../assets/tray/critico.png"),
-    };
-    Image::from_bytes(bytes)
+fn icono_anillo(uso: &DiskUsage, reparto: &Reparto, ajustes: &Ajustes) -> Option<Image<'static>> {
+    let t = anillo::trozos(
+        uso,
+        reparto,
+        estado::classify(*uso),
+        &ajustes.paleta.colores(),
+    );
+    Image::from_bytes(&anillo::png(&t)?).ok()
+}
+
+/// Draws the tray: the ring and the text beside it. Shared by the poller,
+/// the category measurer and the menu, so a change of palette or label shows
+/// at once instead of on the next tick.
+struct Pintor {
+    tray: TrayIcon,
+    ajustes: Arc<Mutex<Ajustes>>,
+    reparto: Arc<Mutex<Reparto>>,
+    /// What is on screen now. Redrawing only on change: swapping the tray
+    /// image every 5 s makes it flicker on some macOS versions.
+    ultimo: Mutex<(Vec<anillo::Trozo>, String)>,
+}
+
+impl Pintor {
+    fn pintar(&self, uso: &DiskUsage) {
+        let ajustes = *self.ajustes.lock().unwrap();
+        let reparto = *self.reparto.lock().unwrap();
+        let trozos = anillo::trozos(
+            uso,
+            &reparto,
+            estado::classify(*uso),
+            &ajustes.paleta.colores(),
+        );
+        let titulo = ajustes.texto(gb(uso.available), uso.percent);
+        let mut ultimo = self.ultimo.lock().unwrap();
+        if ultimo.0 != trozos {
+            if let Some(img) = anillo::png(&trozos).and_then(|b| Image::from_bytes(&b).ok()) {
+                let _ = self.tray.set_icon(Some(img));
+            }
+            ultimo.0 = trozos;
+        }
+        if ultimo.1 != titulo {
+            let _ = self.tray.set_title(Some(&titulo));
+            ultimo.1 = titulo;
+        }
+    }
+}
+
+fn como_menu(items: &[CheckMenuItem<tauri::Wry>]) -> Vec<&dyn IsMenuItem<tauri::Wry>> {
+    items
+        .iter()
+        .map(|i| i as &dyn IsMenuItem<tauri::Wry>)
+        .collect()
+}
+
+/// Makes a group of check items behave like radio buttons: macOS toggles the
+/// clicked one on its own, so every item is set explicitly.
+fn marcar_uno(items: &[CheckMenuItem<tauri::Wry>], elegido: usize) {
+    for (i, item) in items.iter().enumerate() {
+        let _ = item.set_checked(i == elegido);
+    }
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_autostart::init(
+            MacosLauncher::LaunchAgent,
+            None,
+        ))
         .setup(|app| {
             // A menu bar app must not appear in the Dock or Cmd+Tab.
             #[cfg(target_os = "macos")]
@@ -67,7 +186,13 @@ pub fn run() {
             // first frame already shows the real disk state instead of a
             // placeholder that only gets corrected 5s later by the poller.
             let lectura_inicial = disk::read();
-            let estado_inicial = lectura_inicial.map(estado::classify);
+            let dir_ajustes = app.path().app_config_dir().ok();
+            let ajustes_iniciales = dir_ajustes
+                .as_deref()
+                .map(Ajustes::cargar)
+                .unwrap_or_default();
+            let ajustes = Arc::new(Mutex::new(ajustes_iniciales));
+            let reparto = Arc::new(Mutex::new(Reparto::default()));
 
             let uso_item = MenuItem::with_id(
                 app,
@@ -105,19 +230,86 @@ pub fn run() {
                 true,
                 None::<&str>,
             )?;
+            let empaquetada = std::env::current_exe()
+                .map(|e| es_app_empaquetada(&e))
+                .unwrap_or(false);
+            let arranque_activo = empaquetada && configurar_arranque(app);
+            // Ask now, at startup, rather than on the first low-disk warning:
+            // the system prompt would otherwise appear exactly when the user
+            // is busiest, and the warning itself would be lost behind it.
+            notificar::pedir_permiso(empaquetada);
+            let arranque_item = CheckMenuItem::with_id(
+                app,
+                "arranque",
+                "Abrir al iniciar sesión",
+                empaquetada,
+                arranque_activo,
+                None::<&str>,
+            )?;
+            let swap_inicial = memoria::swap_usado().map(gb).unwrap_or(0.0);
+            let swap_item = MenuItem::with_id(
+                app,
+                "swap",
+                memoria::texto_swap(swap_inicial, None),
+                false,
+                None::<&str>,
+            )?;
             let quit_item = MenuItem::with_id(app, "quit", "Salir", true, None::<&str>)?;
+            let reparto_item =
+                MenuItem::with_id(app, "reparto", "Midiendo categorías…", false, None::<&str>)?;
+
+            let etiqueta_items = Etiqueta::TODAS
+                .iter()
+                .enumerate()
+                .map(|(i, e)| {
+                    CheckMenuItem::with_id(
+                        app,
+                        format!("etiqueta:{i}"),
+                        e.nombre(),
+                        true,
+                        *e == ajustes_iniciales.etiqueta,
+                        None::<&str>,
+                    )
+                })
+                .collect::<tauri::Result<Vec<_>>>()?;
+            let paleta_items = PaletaId::TODAS
+                .iter()
+                .enumerate()
+                .map(|(i, p)| {
+                    CheckMenuItem::with_id(
+                        app,
+                        format!("paleta:{i}"),
+                        p.nombre(),
+                        true,
+                        *p == ajustes_iniciales.paleta,
+                        None::<&str>,
+                    )
+                })
+                .collect::<tauri::Result<Vec<_>>>()?;
+            let etiqueta_menu = Submenu::with_items(
+                app,
+                "Mostrar junto al icono",
+                true,
+                &como_menu(&etiqueta_items),
+            )?;
+            let paleta_menu = Submenu::with_items(app, "Colores", true, &como_menu(&paleta_items))?;
 
             let menu = Menu::with_items(
                 app,
                 &[
                     &uso_item,
                     &libre_item,
+                    &swap_item,
+                    &reparto_item,
                     &PredefinedMenuItem::separator(app)?,
                     &analizar_item,
                     &estado_analisis_item,
                     &PredefinedMenuItem::separator(app)?,
                     &abrir_item,
                     &PredefinedMenuItem::separator(app)?,
+                    &etiqueta_menu,
+                    &paleta_menu,
+                    &arranque_item,
                     &quit_item,
                 ],
             )?;
@@ -151,14 +343,18 @@ pub fn run() {
                 // completo tarda un par de minutos, y hacer esperar todo eso
                 // para anunciar un permiso que falta desde el principio es
                 // gratuito.
-                let _ = estado_analisis_item.set_text(
-                    "Sin acceso total al disco: el análisis saldrá incompleto",
-                );
+                let _ = estado_analisis_item
+                    .set_text("Sin acceso total al disco: el análisis saldrá incompleto");
             }
 
-            let mut tray_builder = TrayIconBuilder::new().menu(&menu).show_menu_on_left_click(true);
-            match estado_inicial.map(icono_para) {
-                Some(Ok(icon)) => tray_builder = tray_builder.icon(icon),
+            let mut tray_builder = TrayIconBuilder::new()
+                .menu(&menu)
+                .show_menu_on_left_click(true);
+            let icono_inicial = lectura_inicial
+                .as_ref()
+                .and_then(|u| icono_anillo(u, &Reparto::default(), &ajustes_iniciales));
+            match icono_inicial {
+                Some(icon) => tray_builder = tray_builder.icon(icon),
                 _ => {
                     // Disk read (or icon decode) failed at startup: fall
                     // back to the bundle icon rather than showing nothing.
@@ -173,11 +369,54 @@ pub fn run() {
                 let servidor = Arc::clone(&servidor);
                 let motor_web = motor.clone();
                 let abrir_item = abrir_item.clone();
+                let arranque_item = arranque_item.clone();
                 let analizar_item = analizar_item.clone();
                 let estado_analisis_item = estado_analisis_item.clone();
+                let ajustes = Arc::clone(&ajustes);
+                let dir_ajustes = dir_ajustes.clone();
                 tray_builder
                     .on_menu_event(move |app, event| {
-                        if event.id() == "quit" {
+                        let id = event.id().as_ref();
+                        let eleccion = |prefijo: &str| {
+                            id.strip_prefix(prefijo)
+                                .and_then(|n| n.parse::<usize>().ok())
+                        };
+                        if let Some(i) =
+                            eleccion("etiqueta:").filter(|i| *i < Etiqueta::TODAS.len())
+                        {
+                            marcar_uno(&etiqueta_items, i);
+                            ajustes.lock().unwrap().etiqueta = Etiqueta::TODAS[i];
+                        } else if let Some(i) =
+                            eleccion("paleta:").filter(|i| *i < PaletaId::TODAS.len())
+                        {
+                            marcar_uno(&paleta_items, i);
+                            ajustes.lock().unwrap().paleta = PaletaId::TODAS[i];
+                        }
+                        if id.starts_with("etiqueta:") || id.starts_with("paleta:") {
+                            let actuales = *ajustes.lock().unwrap();
+                            if let Some(dir) = dir_ajustes.as_deref() {
+                                let _ = actuales.guardar(dir);
+                            }
+                            if let (Some(uso), Some(pintor)) =
+                                (disk::read(), app.try_state::<Arc<Pintor>>())
+                            {
+                                pintor.pintar(&uso);
+                            }
+                            return;
+                        }
+                        if event.id() == "arranque" {
+                            // macOS already flipped the tick; apply whatever
+                            // it now shows, then re-read the real state so the
+                            // tick never lies if the change failed.
+                            let auto = app.autolaunch();
+                            let quiere = arranque_item.is_checked().unwrap_or(false);
+                            let _ = if quiere {
+                                auto.enable()
+                            } else {
+                                auto.disable()
+                            };
+                            let _ = arranque_item.set_checked(auto.is_enabled().unwrap_or(false));
+                        } else if event.id() == "quit" {
                             // El servidor web también: lo arrancamos nosotros,
                             // así que no debe sobrevivirnos ocupando su puerto.
                             servidor.kill_blocking();
@@ -238,32 +477,88 @@ pub fn run() {
                     .build(app)?
             };
 
-            // Background poller: refresh the usage text every tick, but
-            // only touch the icon when the classified state actually
-            // changes -- swapping it on every poll causes flicker on some
-            // macOS versions.
+            let pintor = Arc::new(Pintor {
+                tray,
+                ajustes: Arc::clone(&ajustes),
+                reparto: Arc::clone(&reparto),
+                ultimo: Mutex::new((Vec::new(), String::new())),
+            });
+            app.manage(Arc::clone(&pintor));
+            if let Some(uso) = lectura_inicial.as_ref() {
+                pintor.pintar(uso);
+            }
+
+            // The category split, measured off the main thread: the first
+            // pass runs `du` for a few seconds, and the tray must be up and
+            // showing the free gap before that finishes.
             {
-                let tray = tray.clone();
+                let pintor = Arc::clone(&pintor);
+                let reparto_item = reparto_item.clone();
+                std::thread::spawn(move || loop {
+                    // Probed on every pass, not once: granting Full Disk
+                    // Access then shows up on the next measurement without
+                    // restarting the app.
+                    let medido = categorias::medir(analisis::hay_acceso_total_al_disco());
+                    let _ = reparto_item.set_text(categorias::texto_reparto(&medido));
+                    *pintor.reparto.lock().unwrap() = medido;
+                    if let Some(uso) = disk::read() {
+                        pintor.pintar(&uso);
+                    }
+                    std::thread::sleep(INTERVALO_CATEGORIAS);
+                });
+            }
+
+            // Background poller: refresh the texts and the ring every tick;
+            // `Pintor` only touches the tray when something visible changed.
+            {
+                let pintor = Arc::clone(&pintor);
                 let uso_item = uso_item.clone();
                 let libre_item = libre_item.clone();
-                let mut ultimo_estado = estado_inicial;
-                std::thread::spawn(move || loop {
-                    std::thread::sleep(POLL_INTERVAL);
-                    match disk::read() {
-                        Some(usage) => {
-                            let _ = uso_item.set_text(texto_uso(&usage));
-                            let _ = libre_item.set_text(texto_libre(&usage));
-                            let nuevo_estado = estado::classify(usage);
-                            if ultimo_estado != Some(nuevo_estado) {
-                                if let Ok(icon) = icono_para(nuevo_estado) {
-                                    let _ = tray.set_icon(Some(icon));
-                                }
-                                ultimo_estado = Some(nuevo_estado);
+                let swap_item = swap_item.clone();
+                let libre_inicial = lectura_inicial.map(|u| gb(u.available)).unwrap_or(f64::MAX);
+                let (mut vigia, aviso_inicial) = avisos::Vigia::al_arrancar(libre_inicial);
+                let mut culpable: Option<String> = None;
+                let mut tick: u32 = 0;
+                std::thread::spawn(move || {
+                    let notificar = |aviso: &avisos::Aviso, culpable: &Option<String>| {
+                        let swap_gb = memoria::swap_usado().map(gb).unwrap_or(0.0);
+                        let swap = culpable
+                            .as_deref()
+                            .filter(|_| swap_gb >= memoria::UMBRAL_SWAP_GB)
+                            .map(|app| (swap_gb, app));
+                        let (titulo, cuerpo) = avisos::texto(aviso, swap);
+                        notificar::enviar(empaquetada, &titulo, &cuerpo);
+                    };
+                    if let Some(aviso) = aviso_inicial {
+                        culpable = memoria::medir_culpable().map(|(app, _)| app);
+                        notificar(&aviso, &culpable);
+                    }
+                    loop {
+                        std::thread::sleep(POLL_INTERVAL);
+                        tick = tick.wrapping_add(1);
+                        let swap_gb = memoria::swap_usado().map(gb).unwrap_or(0.0);
+                        if swap_gb >= memoria::UMBRAL_SWAP_GB {
+                            if culpable.is_none() || tick.is_multiple_of(TICKS_POR_CULPABLE) {
+                                culpable = memoria::medir_culpable().map(|(app, _)| app);
                             }
+                        } else {
+                            culpable = None;
                         }
-                        None => {
-                            let _ = uso_item.set_text("Uso: no disponible");
-                            let _ = libre_item.set_text("Libre: no disponible");
+                        let _ =
+                            swap_item.set_text(memoria::texto_swap(swap_gb, culpable.as_deref()));
+                        match disk::read() {
+                            Some(usage) => {
+                                let _ = uso_item.set_text(texto_uso(&usage));
+                                let _ = libre_item.set_text(texto_libre(&usage));
+                                if let Some(aviso) = vigia.observar(gb(usage.available)) {
+                                    notificar(&aviso, &culpable);
+                                }
+                                pintor.pintar(&usage);
+                            }
+                            None => {
+                                let _ = uso_item.set_text("Uso: no disponible");
+                                let _ = libre_item.set_text("Libre: no disponible");
+                            }
                         }
                     }
                 });
@@ -289,4 +584,43 @@ pub fn run() {
                 }
             }
         });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::es_app_empaquetada;
+    use std::path::Path;
+
+    #[test]
+    fn lo_purgable_se_muestra_aparte_y_nunca_suma_como_libre() {
+        use super::{texto_libre, DiskUsage};
+        let g = 1024 * 1024 * 1024;
+        let u = |purgeable| DiskUsage {
+            total: 460 * g,
+            used: 446 * g,
+            available: 14 * g,
+            purgeable,
+            percent: 97.0,
+        };
+        assert_eq!(texto_libre(&u(0)), "Libre: 14.0 GB");
+        assert_eq!(
+            texto_libre(&u(g / 2)),
+            "Libre: 14.0 GB",
+            "menos de 1 GB no merece ruido"
+        );
+        assert_eq!(
+            texto_libre(&u(5 * g + g / 2)),
+            "Libre: 14.0 GB (+5.5 GB purgables)"
+        );
+    }
+
+    #[test]
+    fn solo_la_app_empaquetada_se_registra_para_arrancar() {
+        assert!(es_app_empaquetada(Path::new(
+            "/Applications/Disk Use Analyzer.app/Contents/MacOS/Disk Use Analyzer"
+        )));
+        assert!(!es_app_empaquetada(Path::new(
+            "/Users/u/repo/desktop/src-tauri/target/debug/desktop"
+        )));
+    }
 }

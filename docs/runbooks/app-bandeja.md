@@ -119,6 +119,109 @@ ps -ax -o command | grep disk_analyzer.py | grep -v grep
 Si la ruta empieza por la `.app`, el empaquetado está bien. Si empieza por el
 repositorio, la `.app` no lleva motor y en otro Mac no funcionaría.
 
+## Arranque al iniciar sesión
+
+La primera vez que se abre la `.app`, se registra para arrancar al iniciar
+sesión, así que tras reiniciar el Mac vuelve a estar en la barra sin que hagas
+nada. Se hace una sola vez: si lo desactivas desde el menú (**Abrir al iniciar
+sesión**), se queda desactivado. La app recuerda que ya lo configuró con un
+fichero marca en `~/Library/Application Support/dev.diskanalyzer.app/`.
+
+El registro es un `LaunchAgent` en `~/Library/LaunchAgents/Disk Use
+Analyzer.plist`, que apunta a la `.app` instalada. Se vuelve a escribir en cada
+arranque, para que siga a la app si la mueves o la actualizas. macOS lo
+confirma con una notificación propia ("puede ejecutarse en segundo plano") y lo
+lista en Ajustes → General → Elementos de inicio.
+
+Solo se registra desde una `.app` empaquetada. Ejecutada con `cargo run`, la
+opción aparece desactivada: registrar un binario de `target/debug` dejaría un
+elemento de inicio apuntando a un artefacto de compilación.
+
+Para quitarlo del todo, además de desactivarlo en el menú:
+
+```bash
+rm ~/Library/LaunchAgents/"Disk Use Analyzer.plist"
+rm ~/Library/Application\ Support/dev.diskanalyzer.app/arranque-configurado
+```
+
+## Avisos de poco espacio
+
+La app manda una notificación **al cruzar** cada umbral, una sola vez por
+cruce: al bajar de **20 GB** libres y al bajar de **5 GB**. Al arrancar no avisa
+de "poco espacio", porque quien vive con 15 GB libres recibiría el aviso cada
+mañana y acabaría desactivando las notificaciones. Sí avisa si arranca ya por
+debajo de 5 GB, porque ahí macOS ya está fallando. Para volver a avisar del
+mismo umbral, el disco tiene que recuperarse al menos 2 GB por encima de él;
+así una oscilación de 19,9 a 20,1 GB no dispara una tormenta de avisos.
+
+El número que cuenta es el espacio **estrictamente libre**, el mismo que usa el
+motor Python. El espacio **purgable** —el que macOS puede recuperar por su
+cuenta— se muestra aparte en el menú ("+5,7 GB purgables") y nunca se cuenta
+como libre, porque macOS lo devuelve cuando decide, no cuando tú lo necesitas.
+
+La primera vez que arranca, macOS pide permiso para mostrar notificaciones. Si
+lo niegas, se cambia en Ajustes → Notificaciones → Disk Use Analyzer.
+
+Las notificaciones usan `UNUserNotificationCenter`. `tauri-plugin-notification`
+no sirve: publica con `NSUserNotification`, obsoleta desde macOS 11, y en macOS
+27 sus avisos no llegaban ni daban error.
+
+## Cuando el disco se llena por el swap
+
+El menú muestra una línea **Swap**. Si pasa de 4 GB, nombra la app que lo
+retiene: *"Swap: 12.2 GB · lo retiene Visual Studio Code"*. Los avisos lo
+repiten.
+
+El swap vive en ficheros del propio disco. Si una app acumula mucha memoria,
+macOS crea ficheros de swap que pueden ocupar decenas de GB y casi nunca los
+devuelve hasta reiniciar. Ninguna limpieza lo arregla: hay que cerrar o
+reiniciar la app que lo retiene.
+
+La app se averigua subiendo por el árbol de procesos hasta el primer `.app`,
+porque `top` corta los nombres a 16 caracteres y un servidor de lenguaje
+aparece como `java` a secas. En la máquina de desarrollo el swap llegó a 23 GB
+por las extensiones de VS Code (SonarLint ejecuta un servidor Java en cada
+ventana) y dejó el disco con 205 MB libres.
+
+## El anillo de la barra
+
+El icono de la barra es un anillo que se dibuja en vivo (`anillo.rs`, con
+tiny-skia) a partir de lo que mide la app: un trozo por categoría y el hueco
+libre, que es verde, naranja o rojo según el mismo estado que antes decidía
+cuál de los tres PNG fijos se mostraba. A su lado va un texto.
+
+- **El hueco libre** se actualiza en cada lectura (cada 5 s).
+- **Las categorías** se miden en segundo plano al arrancar y cada 30 min, con
+  `du` a prioridad baja: Docker, cachés, tus archivos y "sistema y el resto".
+- **Sin Acceso total al disco** solo se miden las cachés (y Docker si su
+  daemon está arrancado, a través de su CLI). Docker guarda los datos en
+  `~/Library/Containers`, y Documentos, Escritorio y Descargas también están
+  protegidos: leerlos sin ese permiso haría que macOS pidiera acceso carpeta
+  por carpeta. Lo que no se pudo medir cae en el gris de "el resto", en lugar
+  de inventarse, y se dibuja **translúcido** para que no pase por "sistema"
+  medido. El menú lo dice en la línea del desglose ("Cachés 22 GB · sin
+  Acceso total al disco, el resto no se desglosa"). El permiso se vuelve a
+  comprobar en cada medición, así que al concederlo aparece solo en la
+  siguiente (como mucho 30 min), o al reabrir la app.
+  Recuerda que **cada rebuild invalida el permiso** (ver
+  [Acceso a disco completo](#acceso-a-disco-completo)).
+
+En el menú se elige el texto (**Mostrar junto al icono**: GB libres, que es lo
+que viene por defecto, porcentaje usado, o ambos) y la paleta (**Colores**:
+Sistema por defecto, Pastel, Accesible —Okabe-Ito, pensada para el
+daltonismo— y Monocromo). Se guarda en
+`~/Library/Application Support/dev.diskanalyzer.app/ajustes.json`. Si ese
+fichero está dañado, la app arranca con los valores por defecto.
+
+En un Mac con notch y la barra llena, "ambos" es lo bastante ancho para que
+macOS, o un gestor como Ice o Bartender, esconda el ítem entero. Si deja de
+verse, vuelve a "GB libres".
+
+El icono de la app (Dock, Finder, notificaciones) es el mismo anillo, estático
+y con el porcentaje en el centro. Se regenera con
+`./desktop/tools/gen_icono_app.sh` (necesita Chrome y node); los ficheros de
+`desktop/src-tauri/icons/` son su salida versionada.
+
 ## Firma
 
 ### Por qué hay que firmar aunque no se distribuya
@@ -229,7 +332,7 @@ tccutil reset SystemPolicyAllFiles dev.diskanalyzer.app
 
 ```bash
 # 1. Parar la app
-pkill -f "Disk Use Analyzer" ; pkill -x desktop
+pkill -f "Disk Use Analyzer.app"
 
 # 2. Comprobar que no queda ningún análisis vivo
 ps aux | grep -i disk_analyzer | grep -v grep
@@ -261,7 +364,7 @@ ls ~/Library/LaunchAgents | grep -i diskanalyzer   # debe salir vacío
 
 ## Volver atrás
 
-1. Cierra la app (`pkill -x desktop`) y comprueba que no queda ningún análisis
+1. Cierra la app (`pkill -f "Disk Use Analyzer.app"`) y comprueba que no queda ningún análisis
    vivo (`ps aux | grep disk_analyzer`).
 2. Vuelve al commit anterior y recompila:
 
