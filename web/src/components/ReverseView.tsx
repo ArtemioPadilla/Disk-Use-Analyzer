@@ -1,62 +1,30 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect } from 'react';
 import { on } from '../lib/events';
-import { api, type SessionResults, type Recommendation } from '../lib/api';
+import { api, type SessionResults } from '../lib/api';
 import { formatBytes } from '../lib/format';
-import { useCleanupRunner } from '../hooks/useCleanupRunner';
-import { getTierBucket } from '../lib/tiers';
+import { useLiberadoMedido } from '../hooks/useLiberadoMedido';
+import { CONSECUENCIAS, TEXTO_CONSECUENCIA, pedirLimpieza, planDe, totalEstimado, type Plan } from '../lib/limpieza';
 
-interface Tier {
-  level: 'safe' | 'review' | 'careful';
-  label: string;
-  icon: string;
-  color: string;
-  bgColor: string;
-  description: string;
-  items: Recommendation[];
-  totalSpace: number;
-}
-
+/**
+ * Dashboard summary of what can be freed. It only summarises and opens the
+ * review sheet: it never runs anything itself.
+ */
 export default function ReverseView() {
-  const [tiers, setTiers] = useState<Tier[]>([]);
+  const [plan, setPlan] = useState<Plan | null>(null);
   const [diskUsed, setDiskUsed] = useState(0);
   const [diskTotal, setDiskTotal] = useState(0);
-  const [expandedTier, setExpandedTier] = useState<string | null>(null);
-  const { run, running, completed } = useCleanupRunner();
+  const liberado = useLiberadoMedido();
 
   useEffect(() => {
     const offs = [
       on('analysis:completed', (data: SessionResults) => {
         const report = data.results?.[0]?.report;
         if (!report) return;
-
         const disk = report.summary?.disk_usage;
         if (disk) { setDiskUsed(disk.used); setDiskTotal(disk.total); }
-
-        const recs = report.recommendations || [];
-        const isRunnable = (r: Recommendation) => Boolean(r.command) && !r.command.startsWith('#');
-        const safeItems = recs.filter(r => getTierBucket(r.tier || 9) === 'safe' && isRunnable(r));
-        const reviewItems = recs.filter(r => getTierBucket(r.tier || 9) === 'review' && isRunnable(r));
-        const carefulItems = recs.filter(r => getTierBucket(r.tier || 9) === 'careful' && isRunnable(r));
-
-        const newTiers: Tier[] = [
-          {
-            level: 'safe', label: 'SAFE', icon: '🟢', color: '#10b981', bgColor: '#10b98115',
-            description: 'Caches, logs, trash. Rebuilds automatically.',
-            items: safeItems, totalSpace: safeItems.reduce((s, r) => s + (r.space || 0), 0),
-          },
-          {
-            level: 'review', label: 'REVIEW', icon: '🟡', color: '#f59e0b', bgColor: '#f59e0b15',
-            description: 'Old project deps, unused Docker images. Probably safe.',
-            items: reviewItems, totalSpace: reviewItems.reduce((s, r) => s + (r.space || 0), 0),
-          },
-          {
-            level: 'careful', label: 'CAREFUL', icon: '🔴', color: '#ef4444', bgColor: '#ef444415',
-            description: 'Review individually before deleting.',
-            items: carefulItems, totalSpace: carefulItems.reduce((s, r) => s + (r.space || 0), 0),
-          },
-        ];
-        setTiers(newTiers.filter(t => t.items.length > 0));
+        setPlan(planDe((data.results || []).flatMap(r => r.report?.recommendations || [])));
       }),
+      // The bar shows the real disk after a cleanup, not an estimate of it.
       on('cleanup:completed', () => {
         api.getSystemInfo().then(info => {
           setDiskUsed(info.disk_usage.used);
@@ -67,125 +35,60 @@ export default function ReverseView() {
     return () => offs.forEach(off => off());
   }, []);
 
-  const totalRecoverable = tiers.reduce((s, t) => s + t.totalSpace, 0);
-
-  // Total actually freed so far: sum of the space for every unique command,
-  // across all tiers, that the runner has confirmed exited with code 0.
-  const freedSpace = useMemo(() => {
-    const seen = new Set<string>();
-    let total = 0;
-    for (const tier of tiers) {
-      for (const item of tier.items) {
-        if (item.command && completed.has(item.command) && !seen.has(item.command)) {
-          seen.add(item.command);
-          total += item.space || 0;
-        }
-      }
-    }
-    return total;
-  }, [tiers, completed]);
-
-  const projectedUsed = diskUsed - freedSpace;
-  const currentPct = diskTotal > 0 ? (diskUsed / diskTotal) * 100 : 0;
-  const projectedPct = diskTotal > 0 ? (projectedUsed / diskTotal) * 100 : 0;
-
-  const isTierCleaned = (tier: Tier) => tier.items.length > 0 && tier.items.every(i => i.command && completed.has(i.command));
-  const isTierCleaning = (tier: Tier) => tier.items.some(i => i.command && running.has(i.command));
-
-  const cleanTier = (tier: Tier) => {
-    for (const item of tier.items) {
-      if (item.command && !item.command.startsWith('#')) {
-        run({ command: item.command, space: item.space, label: item.description });
-      }
-    }
-  };
-
-  if (tiers.length === 0 || totalRecoverable === 0) return null;
+  if (!plan) return null;
+  const total = totalEstimado(plan.acciones);
+  if (total === 0 && !plan.informeAntiguo) return null;
+  const pct = diskTotal > 0 ? (diskUsed / diskTotal) * 100 : 0;
 
   return (
-    <div className="card" style={{ marginBottom: '1rem', overflow: 'hidden' }}>
-      {/* Header with projected bar */}
-      <div style={{ padding: '1rem 1rem 0.75rem' }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: '0.5rem' }}>
-          <div style={{ fontWeight: 700, fontSize: '1.1rem' }}>
-            You can free {formatBytes(totalRecoverable)}
-          </div>
-          <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
-            {currentPct.toFixed(0)}% → {projectedPct.toFixed(0)}%
-          </div>
+    <div className="card" style={{ marginBottom: '1rem' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: '1rem', flexWrap: 'wrap' }}>
+        <div style={{ fontWeight: 700, fontSize: '1.1rem' }}>
+          {plan.informeAntiguo && total === 0 ? 'Run a new analysis to clean up' : `You can free about ${formatBytes(total)}`}
         </div>
-        <div style={{ height: 12, background: 'var(--border)', borderRadius: 6, overflow: 'hidden', position: 'relative' }}>
-          {/* Current usage (faded) */}
-          <div style={{
-            position: 'absolute', height: '100%', borderRadius: 6,
-            width: `${currentPct}%`, background: 'var(--primary)', opacity: 0.3,
-          }} />
-          {/* Projected usage */}
-          <div style={{
-            position: 'absolute', height: '100%', borderRadius: 6,
-            width: `${projectedPct}%`,
-            background: projectedPct > 90 ? 'var(--danger)' : projectedPct > 75 ? 'var(--warning)' : 'var(--success)',
-            transition: 'width 0.5s ease, background 0.3s',
-          }} />
-        </div>
+        <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>Disk {pct.toFixed(0)}% full</div>
+      </div>
+      <div style={{ height: 10, background: 'var(--border)', borderRadius: 5, overflow: 'hidden', margin: '0.5rem 0 0.75rem' }}>
+        <div style={{
+          height: '100%', width: `${pct}%`, borderRadius: 5, transition: 'width 0.5s ease',
+          background: pct > 90 ? 'var(--danger)' : pct > 75 ? 'var(--warning)' : 'var(--success)',
+        }} />
       </div>
 
-      {/* Tiers */}
-      {tiers.map(tier => {
-        const isCleaned = isTierCleaned(tier);
-        const isCleaning = isTierCleaning(tier);
-        const isExpanded = expandedTier === tier.level;
+      {plan.informeAntiguo && (
+        <div style={{ fontSize: '0.82rem', color: 'var(--text-muted)', marginBottom: '0.6rem' }}>
+          ⚠️ This report comes from an older version whose commands were not checked for safety, so they won't run.
+        </div>
+      )}
 
+      {CONSECUENCIAS.map(c => {
+        const grupo = plan.acciones.filter(a => a.consecuencia === c);
+        if (grupo.length === 0) return null;
+        const t = TEXTO_CONSECUENCIA[c];
         return (
-          <div key={tier.level} style={{ borderTop: '1px solid var(--border)' }}>
-            <div style={{
-              display: 'flex', alignItems: 'center', padding: '0.75rem 1rem',
-              background: isCleaned ? '#10b98108' : tier.bgColor,
-              cursor: 'pointer',
-            }} onClick={() => setExpandedTier(isExpanded ? null : tier.level)}>
-              <span style={{ marginRight: '0.5rem' }}>{tier.icon}</span>
-              <div style={{ flex: 1 }}>
-                <span style={{ fontWeight: 600, fontSize: '0.85rem' }}>{tier.label}</span>
-                <span style={{ color: 'var(--text-muted)', fontSize: '0.8rem', marginLeft: '0.5rem' }}>
-                  — {tier.description}
-                </span>
-              </div>
-              <span style={{ fontWeight: 700, color: isCleaned ? 'var(--success)' : tier.color, marginRight: '0.75rem' }}>
-                {isCleaned ? '✓ Cleaned' : formatBytes(tier.totalSpace)}
-              </span>
-              {!isCleaned && (
-                <button className="btn btn-primary" onClick={(e) => { e.stopPropagation(); cleanTier(tier); }}
-                  disabled={isCleaning}
-                  style={{ fontSize: '0.75rem', padding: '0.3rem 0.75rem', background: tier.color, whiteSpace: 'nowrap' }}>
-                  {isCleaning ? 'Cleaning...' : `Free ${formatBytes(tier.totalSpace)}`}
-                </button>
-              )}
-            </div>
-            {isExpanded && (
-              <div style={{ padding: '0.25rem 1rem 0.75rem 2.5rem' }}>
-                {tier.items.map((item, i) => (
-                  <div key={i} style={{ display: 'flex', justifyContent: 'space-between', padding: '0.3rem 0', fontSize: '0.8rem', color: 'var(--text-muted)' }}>
-                    <span>{item.description}</span>
-                    {item.space > 0 && <span>{formatBytes(item.space)}</span>}
-                  </div>
-                ))}
-              </div>
-            )}
+          <div key={c} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', padding: '0.35rem 0', fontSize: '0.85rem' }}>
+            <span style={{ width: 10, height: 10, borderRadius: '50%', background: t.color, display: 'inline-block', flexShrink: 0 }} />
+            <span style={{ fontWeight: 600 }}>{t.titulo}</span>
+            <span style={{ color: 'var(--text-muted)', fontSize: '0.78rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {grupo.map(a => a.titulo).join(', ')}
+            </span>
+            <span style={{ marginLeft: 'auto', fontWeight: 600, whiteSpace: 'nowrap' }}>~{formatBytes(totalEstimado(grupo))}</span>
           </div>
         );
       })}
 
-      {/* Freed total */}
-      {freedSpace > 0 && (
-        <div style={{
-          padding: '0.75rem 1rem', borderTop: '1px solid var(--border)',
-          textAlign: 'center', color: 'var(--success)', fontWeight: 600,
-          animation: 'fadeSlideUp 0.5s ease',
-        }}>
-          {formatBytes(freedSpace)} freed so far!
-        </div>
-      )}
-      <style>{`@keyframes fadeSlideUp { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }`}</style>
+      <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginTop: '0.75rem', flexWrap: 'wrap' }}>
+        {plan.acciones.length > 0 && (
+          <button className="btn btn-primary" onClick={() => pedirLimpieza({ acciones: plan.acciones })}>
+            Review &amp; free space…
+          </button>
+        )}
+        <span style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>
+          {liberado > 0
+            ? <span style={{ color: 'var(--success)', fontWeight: 600 }}>{formatBytes(liberado)} freed this session (measured)</span>
+            : 'Nothing is deleted until you confirm.'}
+        </span>
+      </div>
     </div>
   );
 }

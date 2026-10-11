@@ -53,6 +53,36 @@ def descartar_recomendaciones_sin_comando(recomendaciones: List[Dict]) -> List[D
     return [r for r in recomendaciones if (r.get('command') or '').strip()]
 
 
+# What the user loses by running each rule, the question a cleanup screen has
+# to answer before anything is deleted. `efecto` says what the command does
+# (deletes files, calls a tool, only lists); this says what it costs:
+#
+# - 'regenera': comes back by itself (caches, logs, build products); at most
+#   the next launch or build is slower.
+# - 'redescarga': has to be downloaded again when needed (Docker images).
+# - 'permanente': gone for good (the Trash).
+# - 'solo_lista': deletes nothing; shows a list for the user to review.
+#
+# Keyed by rule id, not by type or description, so a reworded rule cannot
+# silently change what the UI promises. A rule missing here fails loudly.
+CONSECUENCIAS: Dict[str, str] = {
+    'logs': 'regenera',
+    'homebrew': 'regenera',
+    'vscode': 'regenera',
+    'npm': 'regenera',
+    'papelera': 'permanente',
+    'simuladores': 'regenera',
+    'descargas_antiguas': 'solo_lista',
+    'docker': 'redescarga',
+    'caches_de_apps': 'regenera',
+    'cache_general': 'solo_lista',
+    'xcode_deriveddata': 'regenera',
+    'runtimes_simuladores': 'solo_lista',
+    'archivos_gigantes': 'solo_lista',
+    'maquinas_virtuales': 'solo_lista',
+}
+
+
 class DiskAnalyzerCore:
     """Core disk analysis functionality with progress callback support"""
     
@@ -799,6 +829,8 @@ class DiskAnalyzerCore:
                 'efecto': 'solo_lista'})
 
         recommendations = descartar_recomendaciones_sin_comando(recommendations)
+        for r in recommendations:
+            r['consecuencia'] = CONSECUENCIAS[r['id']]
         return sorted(recommendations, key=lambda x: (x['tier'], -x['space']))
 
     def _get_cleanup_command_for_downloads(self) -> str:
