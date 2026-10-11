@@ -251,6 +251,37 @@ Necesita tu contraseña del llavero, así que hazlo tú desde la interfaz:
 security find-identity -v -p codesigning
 ```
 
+También se puede crear sin la interfaz. El certificado solo sirve para firmar
+código y caduca en 10 años; la clave privada no sale del llavero, y solo
+`codesign` puede usarla:
+
+```bash
+cat > /tmp/firma.cnf <<'CNF'
+[req]
+distinguished_name = dn
+x509_extensions = ext
+prompt = no
+[dn]
+CN = Disk Analyzer Dev
+[ext]
+basicConstraints = critical, CA:false
+keyUsage = critical, digitalSignature
+extendedKeyUsage = critical, codeSigning
+CNF
+cd "$(mktemp -d)"
+openssl req -x509 -newkey rsa:2048 -nodes -keyout k.pem -out c.pem -days 3650 -config /tmp/firma.cnf
+P=$(openssl rand -hex 16)
+openssl pkcs12 -export -legacy -inkey k.pem -in c.pem -name "Disk Analyzer Dev" -out id.p12 -passout pass:$P
+security import id.p12 -k ~/Library/Keychains/login.keychain-db -P "$P" -T /usr/bin/codesign
+rm -f k.pem id.p12
+```
+
+`security find-identity -p codesigning` lo lista como `CSSMERR_TP_NOT_TRUSTED`:
+es lo esperado en un autofirmado, y no impide firmar.
+
+`empaquetar-release.sh` lo usa solo si está en el llavero; si no, firma ad hoc
+y avisa de que el permiso se perderá en cada build.
+
 ### Firmar la app
 
 ```bash

@@ -37,17 +37,29 @@ echo "▸ 2/4 Compilando la .app"
 # De dentro hacia fuera, no con `--deep`: `--deep` firma lo anidado con las
 # mismas opciones que el contenedor, que casi nunca es lo que quieres, y Apple
 # lo desaconseja para firmar (solo para verificar).
-echo "▸ 3/4 Firmando ad hoc, de dentro hacia fuera"
+#
+# Con el certificado "Disk Analyzer Dev" en el llavero se firma con él: da una
+# identidad estable, y macOS deja de retirar el Acceso total al disco en cada
+# build (lo ata a la firma, y la ad hoc cambia con cada compilación). Sin él,
+# ad hoc como antes. Ver docs/runbooks/app-bandeja.md, "Firma".
+IDENTIDAD="${FIRMA_IDENTIDAD:-Disk Analyzer Dev}"
+if security find-certificate -c "$IDENTIDAD" >/dev/null 2>&1; then
+  FIRMA="$IDENTIDAD"
+  echo "▸ 3/4 Firmando con \"$IDENTIDAD\", de dentro hacia fuera"
+else
+  FIRMA="-"
+  echo "▸ 3/4 Firmando ad hoc, de dentro hacia fuera (sin \"$IDENTIDAD\": el permiso de disco se perderá en cada build)"
+fi
 find "$APP/Contents/Resources" -type f \
   \( -name "*.so" -o -name "*.dylib" -o -perm -u+x \) 2>/dev/null \
   | while read -r f; do
       if file -b "$f" | grep -q "Mach-O"; then
-        codesign --force --timestamp=none -s - "$f" 2>/dev/null || true
+        codesign --force --timestamp=none -s "$FIRMA" "$f" 2>/dev/null || true
       fi
     done
-codesign --force --timestamp=none -s - "$APP"
+codesign --force --timestamp=none -s "$FIRMA" "$APP"
 codesign --verify --deep --strict "$APP"
-echo "  ✓ firma ad hoc válida"
+echo "  ✓ firma válida ($FIRMA)"
 
 echo "▸ 4/4 Comprimiendo"
 mkdir -p "$DESTINO"
