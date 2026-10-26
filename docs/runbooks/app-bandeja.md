@@ -206,6 +206,11 @@ cuál de los tres PNG fijos se mostraba. A su lado va un texto.
   Recuerda que **cada rebuild invalida el permiso** (ver
   [Acceso a disco completo](#acceso-a-disco-completo)).
 
+**Mientras analiza o libera espacio**, una estela blanca recorre el anillo en
+sentido horario (12 fotogramas, uno cada 120 ms), para que se vea que está
+trabajando sin abrir el menú. Al terminar, cancelar o fallar vuelve el anillo
+quieto.
+
 En el menú se elige el texto (**Mostrar junto al icono**: GB libres, que es lo
 que viene por defecto, porcentaje usado, o ambos) y la paleta (**Colores**:
 Sistema por defecto, Pastel, Accesible —Okabe-Ito, pensada para el
@@ -221,6 +226,32 @@ El icono de la app (Dock, Finder, notificaciones) es el mismo anillo, estático
 y con el porcentaje en el centro. Se regenera con
 `./desktop/tools/gen_icono_app.sh` (necesita Chrome y node); los ficheros de
 `desktop/src-tauri/icons/` son su salida versionada.
+
+## Liberar espacio desde el menú
+
+El submenú **Liberar espacio** ofrece, con su tamaño, lo que se puede borrar sin
+abrir el analizador:
+
+- **Vuelve solo, sin perder nada tuyo**: cachés de apps, logs, caché de VS Code,
+  de npm, DerivedData de Xcode… Con más de una, **Liberar todo lo anterior**.
+- **No se puede deshacer**: la papelera, aparte, y nunca dentro de "liberar todo".
+- **Revisar todo en el analizador completo…**: Docker y lo demás, que necesitan
+  ver qué se pierde, se quedan allí.
+
+La lista sale del motor (`disk_analyzer.py --limpieza-rapida`), que mide solo las
+cachés conocidas (unos 10 s) y devuelve las reglas con consecuencia `regenera` o
+`permanente`; la app vuelve a filtrar por si acaso. Los comandos los construye
+`analyzer/comandos.py` y pasan la verja `puede_borrarse`: la app no arma ningún
+borrado. Se remide al arrancar, cada 30 min, tras cada análisis y tras cada
+limpieza.
+
+Cada clic abre un diálogo nativo con lo que se borra y cuánto. El botón por
+defecto es el de borrar (el plugin de diálogos no deja cambiarlo); Esc o
+**Cancelar** no hacen nada. Al terminar, una notificación da el espacio
+**medido** con el disco antes y después, no la estimación, y nombra lo que
+falló. Los comandos se ejecutan con `/opt/homebrew/bin` y `/usr/local/bin` en el
+`PATH`: una app abierta desde Finder no hereda el del shell, y sin eso `npm` no
+se encuentra. Si npm está instalado con nvm, esa línea fallará y lo dirá.
 
 ## Firma
 

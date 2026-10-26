@@ -1,3 +1,4 @@
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -14,6 +15,7 @@ pub mod avisos;
 pub mod categorias;
 pub mod disk;
 pub mod estado;
+pub mod liberar;
 pub mod memoria;
 pub mod notificar;
 pub mod servidor;
@@ -22,6 +24,7 @@ use ajustes::{Ajustes, Etiqueta, PaletaId};
 use analisis::AnalisisManager;
 use categorias::Reparto;
 use disk::DiskUsage;
+use liberar::Liberador;
 use servidor::Servidor;
 
 /// Disk usage costs 0.7 µs to read (measured) -- 5s is plenty responsive
@@ -38,6 +41,9 @@ const TICKS_POR_CULPABLE: u32 = 12;
 /// seconds and spins the disk; the split changes slowly, the free gap is the
 /// part that has to be live, and that one is redrawn on every tick anyway.
 const INTERVALO_CATEGORIAS: Duration = Duration::from_secs(30 * 60);
+
+/// Time between frames of the "working" sweep: a turn every ~1.4 s.
+const FOTOGRAMA: Duration = Duration::from_millis(120);
 
 /// Whether this process is running from a packaged `.app` bundle.
 ///
@@ -127,6 +133,11 @@ struct Pintor {
     /// What is on screen now. Redrawing only on change: swapping the tray
     /// image every 5 s makes it flicker on some macOS versions.
     ultimo: Mutex<(Vec<anillo::Trozo>, String)>,
+    /// How many things (a scan, a cleanup) want the sweep running now.
+    animando: AtomicUsize,
+    /// Whether the thread that draws the sweep is alive, so a quick
+    /// stop-start never ends up with two of them.
+    hilo_animacion: AtomicBool,
 }
 
 impl Pintor {
@@ -142,8 +153,10 @@ impl Pintor {
         let titulo = ajustes.texto(gb(uso.available), uso.percent);
         let mut ultimo = self.ultimo.lock().unwrap();
         if ultimo.0 != trozos {
-            if let Some(img) = anillo::png(&trozos).and_then(|b| Image::from_bytes(&b).ok()) {
-                let _ = self.tray.set_icon(Some(img));
+            // While the sweep runs it draws every frame from `ultimo`, so it
+            // picks this change up on its own.
+            if self.animando.load(Ordering::SeqCst) == 0 {
+                self.poner_icono(anillo::png(&trozos));
             }
             ultimo.0 = trozos;
         }
@@ -151,6 +164,48 @@ impl Pintor {
             let _ = self.tray.set_title(Some(&titulo));
             ultimo.1 = titulo;
         }
+    }
+}
+
+impl Pintor {
+    fn poner_icono(&self, png: Option<Vec<u8>>) {
+        if let Some(img) = png.and_then(|b| Image::from_bytes(&b).ok()) {
+            let _ = self.tray.set_icon(Some(img));
+        }
+    }
+
+    /// Starts the sweep over the ring. Every call needs one `parar`.
+    fn animar(self: &Arc<Self>) {
+        self.animando.fetch_add(1, Ordering::SeqCst);
+        if self.hilo_animacion.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        let yo = Arc::clone(self);
+        std::thread::spawn(move || loop {
+            let mut n = 0;
+            while yo.animando.load(Ordering::SeqCst) > 0 {
+                let trozos = yo.ultimo.lock().unwrap().0.clone();
+                yo.poner_icono(anillo::png_barrido(&trozos, n));
+                n = (n + 1) % anillo::FOTOGRAMAS;
+                std::thread::sleep(FOTOGRAMA);
+            }
+            let trozos = yo.ultimo.lock().unwrap().0.clone();
+            yo.poner_icono(anillo::png(&trozos));
+            yo.hilo_animacion.store(false, Ordering::SeqCst);
+            // Someone may have started it again between the loop seeing zero
+            // and the flag going down; if so, keep going in this thread.
+            if yo.animando.load(Ordering::SeqCst) == 0
+                || yo.hilo_animacion.swap(true, Ordering::SeqCst)
+            {
+                break;
+            }
+        });
+    }
+
+    fn parar(&self) {
+        let _ = self
+            .animando
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1));
     }
 }
 
@@ -173,6 +228,7 @@ fn marcar_uno(items: &[CheckMenuItem<tauri::Wry>], elegido: usize) {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_autostart::init(
             MacosLauncher::LaunchAgent,
             None,
@@ -293,6 +349,7 @@ pub fn run() {
                 &como_menu(&etiqueta_items),
             )?;
             let paleta_menu = Submenu::with_items(app, "Colores", true, &como_menu(&paleta_items))?;
+            let liberar_menu = Submenu::new(app, "Liberar espacio", true)?;
 
             let menu = Menu::with_items(
                 app,
@@ -305,6 +362,7 @@ pub fn run() {
                     &analizar_item,
                     &estado_analisis_item,
                     &PredefinedMenuItem::separator(app)?,
+                    &liberar_menu,
                     &abrir_item,
                     &PredefinedMenuItem::separator(app)?,
                     &etiqueta_menu,
@@ -330,6 +388,7 @@ pub fn run() {
             // just the "quit" menu item.
             app.manage(Arc::clone(&manager));
             app.manage(Arc::clone(&servidor));
+            let liberador = Liberador::new(app.handle().clone(), liberar_menu, motor.clone());
 
             // Decirlo desde el arranque, no solo al pulsar: sin motor, el
             // indicador de disco sigue siendo perfectamente útil, así que la
@@ -374,6 +433,7 @@ pub fn run() {
                 let estado_analisis_item = estado_analisis_item.clone();
                 let ajustes = Arc::clone(&ajustes);
                 let dir_ajustes = dir_ajustes.clone();
+                let liberador = Arc::clone(&liberador);
                 tray_builder
                     .on_menu_event(move |app, event| {
                         let id = event.id().as_ref();
@@ -427,7 +487,30 @@ pub fn run() {
                             // whether RunEvent::ExitRequested also fires.
                             manager.kill_blocking();
                             app.exit(0);
-                        } else if event.id() == "abrir" {
+                        } else if let Some(que) = id
+                            .strip_prefix(liberar::PREFIJO)
+                            .filter(|q| *q != liberar::REVISAR)
+                        {
+                            let Some(pintor) = app.try_state::<Arc<Pintor>>() else {
+                                return;
+                            };
+                            let (al_empezar, al_terminar) =
+                                (Arc::clone(&pintor), Arc::clone(&pintor));
+                            liberador.pedir(
+                                que,
+                                move || al_empezar.animar(),
+                                move |hecho| {
+                                    al_terminar.parar();
+                                    let (titulo, cuerpo) = liberar::aviso_final(hecho);
+                                    notificar::enviar(empaquetada, &titulo, &cuerpo);
+                                    if let Some(uso) = disk::read() {
+                                        al_terminar.pintar(&uso);
+                                    }
+                                },
+                            );
+                        } else if event.id() == "abrir"
+                            || id == format!("{}{}", liberar::PREFIJO, liberar::REVISAR)
+                        {
                             // Arrancar FastAPI lleva varios segundos, así que
                             // el ítem lo dice en vez de parecer que el clic no
                             // hizo nada.
@@ -455,10 +538,23 @@ pub fn run() {
                             } else {
                                 let analizar_item_fin = analizar_item.clone();
                                 let estado_analisis_item_fin = estado_analisis_item.clone();
+                                let pintor = app.try_state::<Arc<Pintor>>().map(|p| Arc::clone(&p));
+                                let pintor_fin = pintor.clone();
+                                let liberador_fin = Arc::clone(&liberador);
+                                // Before `start`, not after: a scan that ends
+                                // at once would otherwise stop the sweep before
+                                // it began, and leave it spinning for good.
+                                if let Some(p) = pintor.as_ref() {
+                                    p.animar();
+                                }
                                 let inicio = manager.start(move |resultado| {
                                     let _ = analizar_item_fin.set_text("Analizar ahora");
                                     let _ = analizar_item_fin.set_enabled(true);
                                     let _ = estado_analisis_item_fin.set_text(resultado.resumen());
+                                    if let Some(p) = pintor_fin {
+                                        p.parar();
+                                    }
+                                    liberador_fin.refrescar();
                                 });
                                 match inicio {
                                     Ok(()) => {
@@ -467,6 +563,9 @@ pub fn run() {
                                             .set_text("Analizando disco completo…");
                                     }
                                     Err(e) => {
+                                        if let Some(p) = pintor.as_ref() {
+                                            p.parar();
+                                        }
                                         let _ = estado_analisis_item
                                             .set_text(format!("No se pudo iniciar: {e}"));
                                     }
@@ -482,6 +581,8 @@ pub fn run() {
                 ajustes: Arc::clone(&ajustes),
                 reparto: Arc::clone(&reparto),
                 ultimo: Mutex::new((Vec::new(), String::new())),
+                animando: AtomicUsize::new(0),
+                hilo_animacion: AtomicBool::new(false),
             });
             app.manage(Arc::clone(&pintor));
             if let Some(uso) = lectura_inicial.as_ref() {
@@ -494,6 +595,7 @@ pub fn run() {
             {
                 let pintor = Arc::clone(&pintor);
                 let reparto_item = reparto_item.clone();
+                let liberador = Arc::clone(&liberador);
                 std::thread::spawn(move || loop {
                     // Probed on every pass, not once: cheap, and it also
                     // notices the permission being revoked. Granting it
@@ -505,6 +607,9 @@ pub fn run() {
                     if let Some(uso) = disk::read() {
                         pintor.pintar(&uso);
                     }
+                    // After the split, not before: both run `du`, and the
+                    // ring is what the user sees first.
+                    liberador.refrescar();
                     std::thread::sleep(INTERVALO_CATEGORIAS);
                 });
             }

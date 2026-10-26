@@ -107,6 +107,9 @@ impl Motor {
     pub fn python(&self) -> &Path {
         &self.python
     }
+    pub fn script(&self) -> &Path {
+        &self.script
+    }
     /// Directorio desde el que se lanza el motor. Es también donde viven sus
     /// módulos y sus dependencias, así que Python los encuentra solo.
     pub fn cwd(&self) -> &Path {

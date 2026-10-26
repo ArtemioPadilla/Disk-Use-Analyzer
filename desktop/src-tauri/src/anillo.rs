@@ -101,7 +101,46 @@ fn arco(pb: &mut PathBuilder, cx: f32, cy: f32, r: f32, desde: f32, barrido: f32
 
 /// The ring as a PNG, ready for `tauri::image::Image::from_bytes`.
 pub fn png(trozos: &[Trozo]) -> Option<Vec<u8>> {
-    let mut lienzo = Pixmap::new(TAM, TAM)?;
+    lienzo(trozos)?.encode_png().ok()
+}
+
+/// How many frames make one turn of the "working" sweep.
+pub const FOTOGRAMAS: u32 = 12;
+
+/// Length of the sweep's tail, as a share of the circle.
+const ESTELA: f32 = 0.22;
+/// Pieces the tail is drawn in, each fainter than the one ahead of it.
+const PIEZAS_ESTELA: u32 = 6;
+
+/// The ring with a white sweep running over it, frame `n` of `FOTOGRAMAS`:
+/// what the icon shows while a scan or a cleanup is running, so the menu bar
+/// says "working" without opening the menu. The colours stay visible under
+/// it; the head is at `n / FOTOGRAMAS` of a turn and the tail fades behind
+/// it, so successive frames read as clockwise motion.
+pub fn png_barrido(trozos: &[Trozo], n: u32) -> Option<Vec<u8>> {
+    let mut lienzo = lienzo(trozos)?;
+    let (c, r, trazo) = geometria();
+    let vuelta = std::f32::consts::TAU;
+    let cabeza = (n % FOTOGRAMAS) as f32 / FOTOGRAMAS as f32;
+    let pieza = ESTELA / PIEZAS_ESTELA as f32;
+    for i in 0..PIEZAS_ESTELA {
+        // i = 0 is the piece right behind the head, the brightest.
+        let desde = cabeza - pieza * (i + 1) as f32;
+        let mut pb = PathBuilder::new();
+        arco(&mut pb, c, c, r, desde * vuelta, pieza * vuelta);
+        if let Some(camino) = pb.finish() {
+            let mut blanco = Paint::default();
+            let alfa = 230 - (i * 190 / PIEZAS_ESTELA) as u8;
+            blanco.set_color_rgba8(255, 255, 255, alfa);
+            blanco.anti_alias = true;
+            lienzo.stroke_path(&camino, &blanco, &trazo, Transform::identity(), None);
+        }
+    }
+    lienzo.encode_png().ok()
+}
+
+/// Centre, radius and stroke shared by the ring and the sweep.
+fn geometria() -> (f32, f32, Stroke) {
     let c = TAM as f32 / 2.0;
     let grosor = 7.0;
     let r = c - grosor / 2.0 - 1.0;
@@ -110,6 +149,12 @@ pub fn png(trozos: &[Trozo]) -> Option<Vec<u8>> {
         line_cap: LineCap::Butt,
         ..Stroke::default()
     };
+    (c, r, trazo)
+}
+
+fn lienzo(trozos: &[Trozo]) -> Option<Pixmap> {
+    let mut lienzo = Pixmap::new(TAM, TAM)?;
+    let (c, r, trazo) = geometria();
 
     // A faint full track underneath, so any rounding remainder reads as
     // "ring" rather than as a hole.
@@ -148,7 +193,7 @@ pub fn png(trozos: &[Trozo]) -> Option<Vec<u8>> {
         }
         inicio += f;
     }
-    lienzo.encode_png().ok()
+    Some(lienzo)
 }
 
 #[cfg(test)]
@@ -166,6 +211,51 @@ mod tests {
         let img = Pixmap::decode_png(png).unwrap();
         let p = img.pixel(x, y).unwrap().demultiply();
         [p.red(), p.green(), p.blue(), p.alpha()]
+    }
+
+    fn todo_rojo() -> [Trozo; 1] {
+        [Trozo {
+            fraccion: 1.0,
+            color: ROJO,
+            alfa: 255,
+        }]
+    }
+
+    #[test]
+    fn el_barrido_aclara_justo_detras_de_la_cabeza_y_deja_el_resto_en_su_color() {
+        // Head at 4/12 of a turn (four o'clock); three o'clock is 1/12 behind
+        // it, inside the tail. Nine o'clock is far from it.
+        let png = png_barrido(&todo_rojo(), 4).unwrap();
+        let tres = pixel(&png, 31, 18);
+        assert!(
+            tres[1] > 120 && tres[2] > 120,
+            "sin estela a las tres: {tres:?}"
+        );
+        let nueve = pixel(&png, 4, 18);
+        assert!(
+            nueve[0] > 200 && nueve[1] < 40,
+            "la estela tapa el anillo: {nueve:?}"
+        );
+        // Ahead of the head (six o'clock) the ring is untouched: the sweep
+        // trails behind, so successive frames read as clockwise.
+        let seis = pixel(&png, 18, 31);
+        assert!(
+            seis[1] < 40,
+            "la estela va por delante de la cabeza: {seis:?}"
+        );
+    }
+
+    #[test]
+    fn el_barrido_avanza_con_el_fotograma_y_da_la_vuelta() {
+        let lejos = pixel(&png_barrido(&todo_rojo(), 10).unwrap(), 31, 18);
+        assert!(
+            lejos[1] < 40,
+            "fotograma 10 no debería tocar las tres: {lejos:?}"
+        );
+        assert_eq!(
+            png_barrido(&todo_rojo(), 4),
+            png_barrido(&todo_rojo(), 4 + FOTOGRAMAS)
+        );
     }
 
     #[test]
