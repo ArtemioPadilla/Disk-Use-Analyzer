@@ -18,6 +18,7 @@ pub mod estado;
 pub mod liberar;
 pub mod memoria;
 pub mod notificar;
+pub mod progreso;
 pub mod servidor;
 
 use ajustes::{Ajustes, Etiqueta, PaletaId};
@@ -114,11 +115,7 @@ fn texto_libre(u: &DiskUsage) -> String {
 }
 
 fn icono_anillo(uso: &DiskUsage, reparto: &Reparto, ajustes: &Ajustes) -> Option<Image<'static>> {
-    let t = anillo::trozos(
-        uso,
-        reparto,
-        &ajustes.paleta.colores(),
-    );
+    let t = anillo::trozos(uso, reparto, &ajustes.paleta.colores());
     Image::from_bytes(&anillo::png(&t)?).ok()
 }
 
@@ -143,11 +140,7 @@ impl Pintor {
     fn pintar(&self, uso: &DiskUsage) {
         let ajustes = *self.ajustes.lock().unwrap();
         let reparto = *self.reparto.lock().unwrap();
-        let trozos = anillo::trozos(
-            uso,
-            &reparto,
-            &ajustes.paleta.colores(),
-        );
+        let trozos = anillo::trozos(uso, &reparto, &ajustes.paleta.colores());
         let titulo = ajustes.texto(gb(uso.available), uso.percent);
         let mut ultimo = self.ultimo.lock().unwrap();
         if ultimo.0 != trozos {
@@ -539,6 +532,12 @@ pub fn run() {
                                 let pintor = app.try_state::<Arc<Pintor>>().map(|p| Arc::clone(&p));
                                 let pintor_fin = pintor.clone();
                                 let liberador_fin = Arc::clone(&liberador);
+                                // Held while writing the status line, and set
+                                // once the scan is over: the progress thread
+                                // and the start below must never overwrite
+                                // the final summary.
+                                let terminado = Arc::new(Mutex::new(false));
+                                let terminado_fin = Arc::clone(&terminado);
                                 // Before `start`, not after: a scan that ends
                                 // at once would otherwise stop the sweep before
                                 // it began, and leave it spinning for good.
@@ -548,7 +547,10 @@ pub fn run() {
                                 let inicio = manager.start(move |resultado| {
                                     let _ = analizar_item_fin.set_text("Analizar ahora");
                                     let _ = analizar_item_fin.set_enabled(true);
+                                    let mut fin = terminado_fin.lock().unwrap();
+                                    *fin = true;
                                     let _ = estado_analisis_item_fin.set_text(resultado.resumen());
+                                    drop(fin);
                                     if let Some(p) = pintor_fin {
                                         p.parar();
                                     }
@@ -557,8 +559,28 @@ pub fn run() {
                                 match inicio {
                                     Ok(()) => {
                                         let _ = analizar_item.set_text("Cancelar análisis");
-                                        let _ = estado_analisis_item
-                                            .set_text("Analizando disco completo…");
+                                        let item = estado_analisis_item.clone();
+                                        let manager = Arc::clone(&manager);
+                                        let poner = move |texto: &str| {
+                                            let fin = terminado.lock().unwrap();
+                                            if !*fin {
+                                                let _ = item.set_text(texto);
+                                            }
+                                            !*fin
+                                        };
+                                        poner("Analizando disco completo…");
+                                        std::thread::spawn(move || loop {
+                                            std::thread::sleep(Duration::from_secs(1));
+                                            let Some(p) = manager.progreso() else {
+                                                if manager.is_running() {
+                                                    continue;
+                                                }
+                                                break;
+                                            };
+                                            if !poner(&p.texto()) {
+                                                break;
+                                            }
+                                        });
                                     }
                                     Err(e) => {
                                         if let Some(p) = pintor.as_ref() {

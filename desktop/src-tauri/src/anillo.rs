@@ -410,8 +410,15 @@ mod tests {
         let t = trozos(&disco(30), &reparto_ejemplo(), &c);
         let colores: Vec<Rgb> = t.iter().map(|t| t.color).collect();
         assert_eq!(colores, vec![c.docker, c.caches, c.resto, BLANCO]);
-        assert!((suma(&t) - 1.0).abs() < 1e-9, "los trozos suman {}", suma(&t));
-        assert!((t[3].fraccion - 0.30).abs() < 0.006, "lo libre no es proporcional");
+        assert!(
+            (suma(&t) - 1.0).abs() < 1e-9,
+            "los trozos suman {}",
+            suma(&t)
+        );
+        assert!(
+            (t[3].fraccion - 0.30).abs() < 0.006,
+            "lo libre no es proporcional"
+        );
     }
 
     #[test]
@@ -427,8 +434,15 @@ mod tests {
         let c = PaletaId::Sistema.colores();
         let t = trozos(&disco(2), &reparto_ejemplo(), &c);
         let libre = t.last().unwrap().fraccion;
-        assert!((LIBRE_MINIMO..LIBRE_MINIMO + 0.02).contains(&libre), "libre: {libre}");
-        assert!((suma(&t) - 1.0).abs() < 1e-9, "los trozos suman {}", suma(&t));
+        assert!(
+            (LIBRE_MINIMO..LIBRE_MINIMO + 0.02).contains(&libre),
+            "libre: {libre}"
+        );
+        assert!(
+            (suma(&t) - 1.0).abs() < 1e-9,
+            "los trozos suman {}",
+            suma(&t)
+        );
         // Lo usado se encoge en proporción: docker sigue siendo el doble que cachés.
         assert!((t[0].fraccion / t[1].fraccion - 2.0).abs() < 0.1);
     }

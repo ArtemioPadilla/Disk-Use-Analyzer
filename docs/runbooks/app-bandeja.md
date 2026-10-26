@@ -221,6 +221,18 @@ sentido horario (12 fotogramas, uno cada 120 ms), para que se vea que está
 trabajando sin abrir el menú. Al terminar, cancelar o fallar vuelve el anillo
 quieto.
 
+Durante el análisis, la línea de estado del menú dice cuánto lleva:
+"Analizando… 23 % · 71 de 313 GB · 506 mil archivos · faltan ~1 min". El motor
+escribe su progreso en un temporal cada segundo (`disk_analyzer.py --progreso`)
+y la app lo lee. El total es una estimación: un escaneo de `/` nunca cuenta todo
+lo que `df` da por usado (el volumen sellado del sistema, carpetas ilegibles),
+así que se toma lo usado hoy por la proporción que contó el último escaneo
+(un 69 % estable en la máquina de desarrollo). Sin escaneo anterior no hay
+porcentaje ni tiempo, solo GB y archivos contados. El porcentaje se queda en 99 %
+si el escaneo encuentra más de lo estimado, el tiempo no se estima en los
+primeros 20 s, y tras el recorrido la línea nombra la fase (duplicados, cachés,
+Docker, informe).
+
 En el menú se elige el texto (**Mostrar junto al icono**: GB libres, que es lo
 que viene por defecto, porcentaje usado, o ambos) y la paleta (**Colores**:
 Sistema por defecto, Pastel, Accesible —Okabe-Ito, pensada para el

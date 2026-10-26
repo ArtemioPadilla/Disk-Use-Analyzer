@@ -42,6 +42,12 @@ class DiskAnalyzer:
         self.duplicates = []
         self.docker_stats = None
         self.disk_usage = None
+        # Progress for the menu-bar app (--progreso). None: write nothing.
+        self._progreso_ruta: Optional[str] = None
+        self._progreso_objetivo: Optional[int] = None
+        self._bytes_vistos = 0
+        self._ultimo_progreso = 0.0
+        self._inicio = time.time()
         self.system = SYSTEM
         self.is_windows = IS_WINDOWS
         self.is_macos = IS_MACOS
@@ -166,6 +172,9 @@ class DiskAnalyzer:
                         size = item_stat.st_blocks * 512 if hasattr(item_stat, 'st_blocks') else item_stat.st_size
                         total_size += size
                         self.total_scanned += 1
+                        self._bytes_vistos += size
+                        if self._progreso_ruta and self.total_scanned % 500 == 0:
+                            self._informar('escaneo')
 
                         # Registrar archivos grandes
                         if size >= self.min_size:
@@ -514,15 +523,60 @@ class DiskAnalyzer:
             pass
         return total
 
+    def _objetivo_estimado(self) -> Optional[int]:
+        """How many bytes this scan will count, from the last scan of the same path.
+
+        A whole-disk scan never counts everything `df` calls used (the sealed
+        system volume, firmlink mirrors, unreadable folders): on the
+        development Mac it was a steady 69 %. So the target is today's used
+        space times that same ratio from the previous scan. With no previous
+        scan there is no honest estimate, and None says so.
+        """
+        usado = (self.disk_usage or {}).get('used', 0)
+        for entrada in reversed(self._load_history()):
+            if entrada.get('path') != str(self.start_path):
+                continue
+            total, antes = entrada.get('total_size', 0), entrada.get('disk_used', 0)
+            if total > 0 and antes > 0 and usado > 0:
+                return int(usado * total / antes)
+            return None
+        return None
+
+    def _informar(self, fase: str, forzar: bool = False):
+        """Write progress for the menu-bar app, at most once a second.
+
+        Written to a temp file and renamed, so the reader never sees half a
+        JSON document.
+        """
+        if not self._progreso_ruta:
+            return
+        ahora = time.time()
+        if not forzar and ahora - self._ultimo_progreso < 1.0:
+            return
+        self._ultimo_progreso = ahora
+        datos = {'fase': fase, 'archivos': self.total_scanned,
+                 'bytes': self._bytes_vistos, 'objetivo': self._progreso_objetivo,
+                 'segundos': round(ahora - self._inicio, 1)}
+        tmp = f"{self._progreso_ruta}.tmp"
+        try:
+            with open(tmp, 'w') as f:
+                json.dump(datos, f)
+            os.replace(tmp, self._progreso_ruta)
+        except OSError:
+            pass
+
     def analyze(self):
         """Ejecuta el análisis completo"""
         print(f"🔍 Iniciando análisis de: {self.start_path}")
         print("⏳ Este proceso puede tomar varios minutos...\n")
         
         start_time = time.time()
+        self._inicio = start_time
         
         # Obtener uso del disco
         self.disk_usage = self.get_disk_usage()
+        self._progreso_objetivo = self._objetivo_estimado()
+        self._informar('escaneo', forzar=True)
 
         # Estimación rápida: contar directorios a depth 2 para progress
         self._estimated_dirs = 0
@@ -556,6 +610,7 @@ class DiskAnalyzer:
         self.directory_sizes[str(self.start_path)] = total_size
 
         # Detectar archivos duplicados
+        self._informar('duplicados', forzar=True)
         print("🔍 Buscando archivos duplicados (>1 MB)...")
         self.duplicates = self.find_duplicates()
         if self.duplicates:
@@ -566,9 +621,11 @@ class DiskAnalyzer:
 
         # Buscar ubicaciones de cache
         print("🔍 Buscando archivos de cache y temporales...")
+        self._informar('caches', forzar=True)
         self.find_cache_locations()
         
         # Analizar Docker
+        self._informar('docker', forzar=True)
         self.analyze_docker()
 
         # Estimar tamaño de volúmenes APFS excluidos
@@ -582,6 +639,7 @@ class DiskAnalyzer:
                 pass
 
         elapsed_time = time.time() - start_time
+        self._informar('informe', forzar=True)
 
         return {
             'total_size': total_size,
@@ -4561,6 +4619,8 @@ Ejemplos de uso:
     parser.add_argument('--quick', action='store_true',
                         help='Solo generar reporte sin análisis completo')
     
+    parser.add_argument('--progreso', metavar='FICHERO',
+                        help='Escribir el progreso del análisis en FICHERO (JSON, cada segundo)')
     parser.add_argument('--limpieza-rapida', action='store_true',
                         help='Medir solo las cachés conocidas e imprimir en JSON lo que se '
                              'puede liberar sin revisión (lo usa la app de la barra)')
@@ -4587,6 +4647,7 @@ Ejemplos de uso:
     
     # Crear analizador
     analyzer = DiskAnalyzer(args.path, args.min_size)
+    analyzer._progreso_ruta = args.progreso
     
     # Si no es modo quick, ejecutar análisis
     if not args.quick:
