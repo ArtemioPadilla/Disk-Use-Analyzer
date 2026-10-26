@@ -72,6 +72,70 @@ def test_borrar_contenido_borra_de_verdad():
         assert os.path.isdir(objetivo), "borró el directorio, no su contenido"
 
 
+def test_borrar_contenido_incluye_los_ocultos():
+    """E2.2: `rm -rf dir/*` no expande a `.env` ni `.DS_Store`.
+
+    En la papelera es donde más se nota: un `.env` tirado allí sobrevivía a
+    "vaciar la papelera".
+    """
+    with _sandbox() as box:
+        objetivo = os.path.join(box, "papelera")
+        os.makedirs(os.path.join(objetivo, ".carpeta_oculta"))
+        open(os.path.join(objetivo, ".env"), "w").write("x")
+        open(os.path.join(objetivo, "visible"), "w").write("x")
+
+        _ejecutar(borrar_contenido([objetivo]), cwd=box)
+
+        assert os.listdir(objetivo) == [], "sobrevivieron los ocultos"
+
+
+@contextlib.contextmanager
+def _subcarpeta_imborrable(dentro: str):
+    """Una carpeta cuyo contenido el usuario no puede borrar, como las de
+    sistema que hay dentro de ~/Library/Caches."""
+    cerrada = os.path.join(dentro, "de_sistema")
+    os.makedirs(cerrada)
+    open(os.path.join(cerrada, "f"), "w").write("x")
+    os.chmod(cerrada, 0o500)
+    try:
+        yield
+    finally:
+        os.chmod(cerrada, 0o700)
+
+
+def test_una_subcarpeta_sin_permiso_no_frena_el_resto():
+    """E2.1: con `&&`, el primer fallo dejaba las siguientes rutas intactas,
+    y el comando salía con 1 tras borrar ~21 GB, así que la interfaz lo
+    mostraba como fallo. Lo borrable se borra y el comando sale con 0; el
+    ahorro lo dice la medición del disco, no el código de salida."""
+    with _sandbox() as box:
+        primera = os.path.join(box, "uno")
+        segunda = os.path.join(box, "dos")
+        for d in (primera, segunda):
+            os.makedirs(d)
+            open(os.path.join(d, "borrable"), "w").write("x")
+
+        with _subcarpeta_imborrable(primera):
+            codigo = _ejecutar(borrar_contenido([primera, segunda]), cwd=box)
+            assert os.listdir(primera) == ["de_sistema"], "no borró lo que sí podía"
+            assert os.listdir(segunda) == [], "el fallo de la primera ruta frenó la segunda"
+            assert codigo == 0
+
+
+def test_borrar_contenido_no_sigue_un_enlace_a_otra_carpeta():
+    """Si la ruta misma es un enlace simbólico, no se vacía el destino."""
+    with _sandbox() as box:
+        destino = os.path.join(box, "ajena")
+        os.makedirs(destino)
+        open(os.path.join(destino, "valioso"), "w").write("x")
+        enlace = os.path.join(box, "enlace")
+        os.symlink(destino, enlace)
+
+        _ejecutar(borrar_contenido([enlace]), cwd=box)
+
+        assert os.listdir(destino) == ["valioso"]
+
+
 def test_borrar_rutas_borra_el_directorio_entero():
     with _sandbox() as box:
         objetivo = os.path.join(box, "basura")

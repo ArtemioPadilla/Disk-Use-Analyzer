@@ -4561,8 +4561,17 @@ Ejemplos de uso:
     parser.add_argument('--quick', action='store_true',
                         help='Solo generar reporte sin análisis completo')
     
+    parser.add_argument('--limpieza-rapida', action='store_true',
+                        help='Medir solo las cachés conocidas e imprimir en JSON lo que se '
+                             'puede liberar sin revisión (lo usa la app de la barra)')
+
     args = parser.parse_args()
-    
+
+    if args.limpieza_rapida:
+        from disk_analyzer_core import DiskAnalyzerCore
+        print(json.dumps(DiskAnalyzerCore(str(Path.home())).limpieza_rapida()))
+        return
+
     # Si se solicita analizar todas las unidades en Windows
     if args.all_drives:
         if not IS_WINDOWS:

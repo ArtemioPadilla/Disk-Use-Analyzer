@@ -52,13 +52,24 @@ def _utiles(paths: List[str]) -> List[str]:
 def borrar_contenido(paths: List[str]) -> str:
     """Borra lo que hay DENTRO de cada ruta, dejando el directorio en pie.
 
-    El glob va fuera de las comillas a propósito: dentro, el shell lo trata como
-    un nombre de fichero literal y el comando no borra nada.
+    `find -mindepth 1 -maxdepth 1` en vez del glob `ruta/*`, por tres motivos:
+    el glob no expande los ocultos (`.env` sobrevivía a vaciar la papelera); si
+    la ruta es un enlace simbólico, `enlace/*` vacía el destino y `find` sin
+    `-L` no lo sigue; y no hay glob que se pueda quedar dentro de las comillas
+    y no borrar nada.
+
+    Las rutas se encadenan con `;` y el comando acaba en `true`: dentro de
+    `~/Library/Caches` siempre hay carpetas de sistema que el usuario no puede
+    vaciar, y con `&&` la primera abortaba el resto y el comando salía con 1
+    tras haber liberado gigas. Quien ejecuta esto acredita el espacio midiendo
+    el disco antes y después, nunca por el código de salida.
     """
     limpias = _utiles(paths)
     if not limpias:
         return ""
-    return " && ".join(f"rm -rf {escapar(p)}/*" for p in limpias)
+    pasos = [f"find {escapar(p)} -mindepth 1 -maxdepth 1 -exec rm -rf {{}} +"
+             for p in limpias]
+    return " ; ".join(pasos + ["true"])
 
 
 def borrar_rutas(paths: List[str]) -> str:
