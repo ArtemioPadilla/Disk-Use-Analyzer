@@ -21,23 +21,22 @@ pub enum Etiqueta {
 pub enum PaletaId {
     Sistema,
     Pastel,
-    /// Okabe-Ito: distinguishable with colour blindness. Matters here because
-    /// the warning states are otherwise the classic green/orange/red.
+    /// Okabe-Ito: distinguishable with colour blindness, categories and the
+    /// orange/vermilion warning tints alike.
     Accesible,
     Monocromo,
 }
 
 pub type Rgb = [u8; 3];
 
-/// Colours for one palette: one per category, one for free space in each
-/// warning state.
+/// Colours for one palette: one per category, and the tint of the used part
+/// in each warning state. Free space is always white (`anillo::BLANCO`).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Colores {
     pub docker: Rgb,
     pub caches: Rgb,
     pub tuyo: Rgb,
     pub resto: Rgb,
-    pub libre: Rgb,
     pub aviso: Rgb,
     pub critico: Rgb,
 }
@@ -78,7 +77,6 @@ impl PaletaId {
                 caches: [0xff, 0x9f, 0x0a],
                 tuyo: [0xbf, 0x5a, 0xf2],
                 resto: [0x8e, 0x8e, 0x93],
-                libre: [0x30, 0xd1, 0x58],
                 aviso: [0xff, 0x9f, 0x0a],
                 critico: [0xff, 0x45, 0x3a],
             },
@@ -87,7 +85,6 @@ impl PaletaId {
                 caches: [0xfb, 0xc6, 0x87],
                 tuyo: [0xd7, 0xae, 0xfb],
                 resto: [0xb4, 0xb7, 0xc0],
-                libre: [0x9f, 0xe3, 0xb4],
                 aviso: [0xfb, 0xc6, 0x87],
                 critico: [0xff, 0x8a, 0x80],
             },
@@ -96,7 +93,6 @@ impl PaletaId {
                 caches: [0xe6, 0x9f, 0x00],
                 tuyo: [0xcc, 0x79, 0xa7],
                 resto: [0x99, 0x99, 0x99],
-                libre: [0x56, 0xb4, 0xe9],
                 aviso: [0xe6, 0x9f, 0x00],
                 critico: [0xd5, 0x5e, 0x00],
             },
@@ -105,7 +101,6 @@ impl PaletaId {
                 caches: [0x7c, 0x83, 0x91],
                 tuyo: [0x9a, 0xa1, 0xae],
                 resto: [0xb8, 0xbe, 0xcb],
-                libre: [0x30, 0xd1, 0x58],
                 aviso: [0xff, 0x9f, 0x0a],
                 critico: [0xff, 0x45, 0x3a],
             },
@@ -208,16 +203,5 @@ mod tests {
         assert_eq!(a.texto(13.2, 97.1), "97 %");
         a.etiqueta = Etiqueta::Ambos;
         assert_eq!(a.texto(13.2, 97.1), "13 GB · 97 %");
-    }
-
-    #[test]
-    fn la_paleta_accesible_no_usa_verde_y_rojo_como_estados() {
-        // Okabe-Ito: libre en azul, aviso en naranja, crítico en bermellón.
-        let c = PaletaId::Accesible.colores();
-        let verdoso = |[r, g, b]: Rgb| g > r && g > b;
-        assert!(
-            !verdoso(c.libre),
-            "lo libre no puede ser verde para un daltónico"
-        );
     }
 }

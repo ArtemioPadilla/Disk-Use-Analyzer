@@ -187,8 +187,18 @@ ventana) y dejó el disco con 205 MB libres.
 
 El icono de la barra es un anillo que se dibuja en vivo (`anillo.rs`, con
 tiny-skia) a partir de lo que mide la app: un trozo por categoría y el hueco
-libre, que es verde, naranja o rojo según el mismo estado que antes decidía
-cuál de los tres PNG fijos se mostraba. A su lado va un texto.
+libre en blanco, como lo que queda en el icono de la batería. A su lado va un
+texto.
+
+- **Con espacio de sobra** cada categoría lleva su color y lo libre es
+  proporcional.
+- **Por debajo de 20 GB (aviso) o de 5 GB (crítico)** todo lo usado se tiñe de
+  naranja o de rojo, como la batería cuando se agota: el estado tiene que leerse
+  de un vistazo, y el desglose sigue en el menú.
+- **Lo libre nunca se dibuja por debajo del 8 % del círculo** (unos 30°), y lo
+  usado se encoge en proporción. Proporcional, 9 GB de 460 eran una raya de 7°
+  que no se veía justo cuando más importa; la cifra exacta ya va en el texto.
+  Solo un disco lleno del todo (0 bytes libres) se dibuja sin hueco.
 
 - **El hueco libre** se actualiza en cada lectura (cada 5 s).
 - **Las categorías** se miden en segundo plano al arrancar y cada 30 min, con
