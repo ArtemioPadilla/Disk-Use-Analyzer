@@ -10,7 +10,6 @@ use tiny_skia::{LineCap, Paint, PathBuilder, Pixmap, Stroke, Transform};
 use crate::ajustes::{Colores, Rgb};
 use crate::categorias::{self, Categoria, Reparto};
 use crate::disk::DiskUsage;
-use crate::estado::Estado;
 
 /// One arc: its share of the full circle and its colour.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -40,22 +39,16 @@ pub const LIBRE_MINIMO: f64 = 0.08;
 
 /// The ring for a disk reading: the used slices, then the free gap in white.
 ///
-/// With room to spare each category keeps its palette colour. Once the disk
-/// enters the warning or critical state, every used slice takes the colour
-/// of that state, the way the battery icon turns red as a whole: the state
-/// has to read at a glance, and the breakdown is still in the menu.
+/// Each category keeps its palette colour whatever the state: the split is
+/// what the ring is for. The state reads from the white gap shrinking, the
+/// number beside the icon and the notifications.
 ///
 /// Used fractions are rounded down to half a percent: the ring is 36 px, a
 /// finer change is invisible, and rounding lets the caller skip redrawing
 /// when nothing visible changed. Down, so the free gap that takes up the
 /// remainder can never come out under its minimum.
-pub fn trozos(uso: &DiskUsage, reparto: &Reparto, estado: Estado, c: &Colores) -> Vec<Trozo> {
+pub fn trozos(uso: &DiskUsage, reparto: &Reparto, c: &Colores) -> Vec<Trozo> {
     let redondear = |f: f64| (f * 200.0 + 1e-9).floor() / 200.0;
-    let tinte = match estado {
-        Estado::Ok => None,
-        Estado::Aviso => Some(c.aviso),
-        Estado::Critico => Some(c.critico),
-    };
     let porciones = categorias::porciones(uso, reparto);
     let usado: f64 = porciones.iter().map(|p| p.fraccion).sum();
     let libre = (1.0 - usado).max(0.0);
@@ -80,12 +73,12 @@ pub fn trozos(uso: &DiskUsage, reparto: &Reparto, estado: Estado, c: &Colores) -
             } else {
                 255
             },
-            color: tinte.unwrap_or(match p.categoria {
+            color: match p.categoria {
                 Categoria::Docker => c.docker,
                 Categoria::Caches => c.caches,
                 Categoria::Tuyo => c.tuyo,
                 Categoria::Resto => c.resto,
-            }),
+            },
         })
         .collect();
     let usado: f64 = out.iter().map(|t| t.fraccion).sum();
@@ -414,7 +407,7 @@ mod tests {
     #[test]
     fn con_espacio_de_sobra_cada_categoria_lleva_su_color_y_lo_libre_va_en_blanco() {
         let c = PaletaId::Sistema.colores();
-        let t = trozos(&disco(30), &reparto_ejemplo(), Estado::Ok, &c);
+        let t = trozos(&disco(30), &reparto_ejemplo(), &c);
         let colores: Vec<Rgb> = t.iter().map(|t| t.color).collect();
         assert_eq!(colores, vec![c.docker, c.caches, c.resto, BLANCO]);
         assert!((suma(&t) - 1.0).abs() < 1e-9, "los trozos suman {}", suma(&t));
@@ -422,22 +415,17 @@ mod tests {
     }
 
     #[test]
-    fn con_poco_espacio_lo_usado_se_tine_del_estado_como_la_bateria() {
+    fn con_poco_espacio_cada_categoria_conserva_su_color() {
         let c = PaletaId::Sistema.colores();
-        for (estado, color) in [(Estado::Aviso, c.aviso), (Estado::Critico, c.critico)] {
-            let t = trozos(&disco(30), &reparto_ejemplo(), estado, &c);
-            let (usado, libre) = t.split_at(t.len() - 1);
-            assert!(usado.iter().all(|t| t.color == color), "{estado:?}: {usado:?}");
-            assert_eq!(libre[0].color, BLANCO);
-            // Lo que no se pudo desglosar sigue translúcido aunque se tiña.
-            assert_eq!(usado.last().unwrap().alfa, ALFA_SIN_DESGLOSAR);
-        }
+        let t = trozos(&disco(2), &reparto_ejemplo(), &c);
+        let colores: Vec<Rgb> = t.iter().map(|t| t.color).collect();
+        assert_eq!(colores, vec![c.docker, c.caches, c.resto, BLANCO]);
     }
 
     #[test]
     fn lo_libre_nunca_baja_de_un_minimo_visible_y_el_circulo_sigue_cerrando() {
         let c = PaletaId::Sistema.colores();
-        let t = trozos(&disco(2), &reparto_ejemplo(), Estado::Critico, &c);
+        let t = trozos(&disco(2), &reparto_ejemplo(), &c);
         let libre = t.last().unwrap().fraccion;
         assert!((LIBRE_MINIMO..LIBRE_MINIMO + 0.02).contains(&libre), "libre: {libre}");
         assert!((suma(&t) - 1.0).abs() < 1e-9, "los trozos suman {}", suma(&t));
@@ -448,7 +436,7 @@ mod tests {
     #[test]
     fn un_disco_lleno_del_todo_no_inventa_hueco_libre() {
         let c = PaletaId::Sistema.colores();
-        let t = trozos(&disco(0), &reparto_ejemplo(), Estado::Critico, &c);
+        let t = trozos(&disco(0), &reparto_ejemplo(), &c);
         assert_eq!(t.last().unwrap().fraccion, 0.0);
     }
 
@@ -469,7 +457,7 @@ mod tests {
                 caches: 10 * gb,
                 tuyo,
             };
-            let t = trozos(&uso, &r, Estado::Ok, &c);
+            let t = trozos(&uso, &r, &c);
             let resto = t.iter().find(|t| t.color == c.resto).unwrap();
             assert!(t
                 .iter()

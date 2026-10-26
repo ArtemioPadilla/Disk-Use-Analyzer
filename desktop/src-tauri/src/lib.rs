@@ -117,7 +117,6 @@ fn icono_anillo(uso: &DiskUsage, reparto: &Reparto, ajustes: &Ajustes) -> Option
     let t = anillo::trozos(
         uso,
         reparto,
-        estado::classify(*uso),
         &ajustes.paleta.colores(),
     );
     Image::from_bytes(&anillo::png(&t)?).ok()
@@ -147,7 +146,6 @@ impl Pintor {
         let trozos = anillo::trozos(
             uso,
             &reparto,
-            estado::classify(*uso),
             &ajustes.paleta.colores(),
         );
         let titulo = ajustes.texto(gb(uso.available), uso.percent);

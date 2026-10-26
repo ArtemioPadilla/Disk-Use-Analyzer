@@ -21,24 +21,21 @@ pub enum Etiqueta {
 pub enum PaletaId {
     Sistema,
     Pastel,
-    /// Okabe-Ito: distinguishable with colour blindness, categories and the
-    /// orange/vermilion warning tints alike.
+    /// Okabe-Ito: categories stay distinguishable with colour blindness.
     Accesible,
     Monocromo,
 }
 
 pub type Rgb = [u8; 3];
 
-/// Colours for one palette: one per category, and the tint of the used part
-/// in each warning state. Free space is always white (`anillo::BLANCO`).
+/// Colours for one palette, one per category. Free space is always white
+/// (`anillo::BLANCO`).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Colores {
     pub docker: Rgb,
     pub caches: Rgb,
     pub tuyo: Rgb,
     pub resto: Rgb,
-    pub aviso: Rgb,
-    pub critico: Rgb,
 }
 
 impl Etiqueta {
@@ -77,32 +74,24 @@ impl PaletaId {
                 caches: [0xff, 0x9f, 0x0a],
                 tuyo: [0xbf, 0x5a, 0xf2],
                 resto: [0x8e, 0x8e, 0x93],
-                aviso: [0xff, 0x9f, 0x0a],
-                critico: [0xff, 0x45, 0x3a],
             },
             PaletaId::Pastel => Colores {
                 docker: [0x8a, 0xb4, 0xf8],
                 caches: [0xfb, 0xc6, 0x87],
                 tuyo: [0xd7, 0xae, 0xfb],
                 resto: [0xb4, 0xb7, 0xc0],
-                aviso: [0xfb, 0xc6, 0x87],
-                critico: [0xff, 0x8a, 0x80],
             },
             PaletaId::Accesible => Colores {
                 docker: [0x00, 0x72, 0xb2],
                 caches: [0xe6, 0x9f, 0x00],
                 tuyo: [0xcc, 0x79, 0xa7],
                 resto: [0x99, 0x99, 0x99],
-                aviso: [0xe6, 0x9f, 0x00],
-                critico: [0xd5, 0x5e, 0x00],
             },
             PaletaId::Monocromo => Colores {
                 docker: [0x5e, 0x65, 0x72],
                 caches: [0x7c, 0x83, 0x91],
                 tuyo: [0x9a, 0xa1, 0xae],
                 resto: [0xb8, 0xbe, 0xcb],
-                aviso: [0xff, 0x9f, 0x0a],
-                critico: [0xff, 0x45, 0x3a],
             },
         }
     }

@@ -190,11 +190,11 @@ tiny-skia) a partir de lo que mide la app: un trozo por categoría y el hueco
 libre en blanco, como lo que queda en el icono de la batería. A su lado va un
 texto.
 
-- **Con espacio de sobra** cada categoría lleva su color y lo libre es
-  proporcional.
-- **Por debajo de 20 GB (aviso) o de 5 GB (crítico)** todo lo usado se tiñe de
-  naranja o de rojo, como la batería cuando se agota: el estado tiene que leerse
-  de un vistazo, y el desglose sigue en el menú.
+- **Cada categoría lleva siempre su color**, quede lo que quede: el desglose es
+  para lo que está el anillo. Se probó a teñirlo todo de naranja o rojo al
+  avisar, como la batería, y se descartó porque se perdía el reparto. El
+  estado se lee en el hueco blanco que mengua, la cifra de al lado y las
+  notificaciones.
 - **Lo libre nunca se dibuja por debajo del 8 % del círculo** (unos 30°), y lo
   usado se encoge en proporción. Proporcional, 9 GB de 460 eran una raya de 7°
   que no se veía justo cuando más importa; la cifra exacta ya va en el texto.
