@@ -222,7 +222,11 @@ The project has three interfaces: CLI, GUI, and Web.
   `anillo.rs` (draws the live tray ring), `categorias.rs` (splits used space into
   categories without triggering TCC prompts), `ajustes.rs` (label and palette
   prefs), `avisos.rs` + `notificar.rs` (low-disk notifications), `memoria.rs`
-  (swap and the app holding it)
+  (swap and the app holding it), `liberar.rs` (the "Liberar espacio" submenu:
+  lists what `disk_analyzer.py --limpieza-rapida` offers, confirms with a native
+  dialog, runs it, notifies the measured savings — it never builds a deletion
+  command itself), `progreso.rs` (the status line during a scan, from the
+  engine's `--progreso` file)
 - **Build:** `cd desktop && npm run tauri build -- --bundles app`
 - **Tests:** `cargo test --manifest-path desktop/src-tauri/Cargo.toml` (also run by `make test`)
 - **Bundled engine:** the `.app` ships its own trimmed CPython

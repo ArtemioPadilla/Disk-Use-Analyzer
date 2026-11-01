@@ -80,8 +80,8 @@ diga que liberó espacio sea verdad.
 | ✅ | Existe una verja de lo que se puede borrar, y la consultan todos los caminos | `comandos.py`, `clean_cache` y `_perform_cleanup_deletes` llaman a `puede_borrarse` | Saneamiento T2, T7 y ola final |
 | ✅ | El clasificador no ve el nombre de usuario | Un usuario `logan` no tiene sus Descargas clasificadas como logs | Ola final |
 | ✅ | Ninguna regla filtra solo por tipo de caché | Toda regla que filtra por `type` acota además por ruta | Ola final |
-| ⬜ | **E2.1** Una subcarpeta sin permiso no convierte una limpieza en "fallo" | `caches_de_apps` sale con 0 en un Mac real; `borrar_contenido` no aborta el resto tras la primera ruta fallida | — |
-| ⬜ | **E2.2** "Vaciar el contenido" incluye los ficheros ocultos | `rm -rf dir/*` deja hoy `.env` y similares; la papelera es donde más se nota | — |
+| ✅ | **E2.1** Una subcarpeta sin permiso no convierte una limpieza en "fallo" | `caches_de_apps` sale con 0 en un Mac real; `borrar_contenido` no aborta el resto tras la primera ruta fallida | `find -mindepth 1` encadenado con `;` y `true` (v0.4.0) |
+| ✅ | **E2.2** "Vaciar el contenido" incluye los ficheros ocultos | `rm -rf dir/*` deja hoy `.env` y similares; la papelera es donde más se nota | v0.4.0; de paso, ya no vacía el destino si la ruta es un enlace |
 | ⬜ | **E2.3** Los tests de seguridad fallan si se quita lo que protegen | Los nueve tests que la revisión final encontró vacuos o tautológicos fallan por mutación (lista abajo) | — |
 | ❓ | **E2.4** Papelera para los ficheros del propio usuario | Decisión tomada: no para cachés regenerables; sí cuando se borren ficheros tuyos (Descargas, carpetas propias) | — |
 
@@ -143,7 +143,8 @@ Runbook: [app-bandeja](runbooks/app-bandeja.md)
 | ✅ | La app no depende del repositorio | Lleva su CPython y su motor dentro | PR #12 |
 | ✅ | "Abrir analizador completo" arranca el servidor de verdad | Puerto efímero, atado a 127.0.0.1, reaping del hijo | PR #19, #21 |
 | ✅ | El aviso de permisos distingue "falta acceso total" de "pide sudo" | Sonda directa sobre `com.apple.TCC` | PR #18 |
-| ⬜ | **E4.1** "Liberar lo seguro" en el menú | Un clic muestra qué se borra y cuánto; ejecuta solo nivel 1 tras confirmar; el resultado es el espacio medido | — |
+| ✅ | **E4.1** "Liberar lo seguro" en el menú | Un clic muestra qué se borra y cuánto; ejecuta solo nivel 1 tras confirmar; el resultado es el espacio medido | Submenú "Liberar espacio": lo que `regenera` y, aparte, la papelera (v0.4.0) |
+| ✅ | El anillo se anima mientras trabaja | Una estela recorre el anillo durante un análisis o una limpieza | v0.4.0 |
 | ⬜ | **E4.2** Rebanada B: vigilancia de carpetas | Te avisa cuando una carpeta crece de golpe, sin que la abras | — |
 | ❓ | **E4.3** Rebanada C: ventana del panel | Pendiente de E4.3a | — |
 | ❓ | **E4.3a** ¿Ventana nativa con gráficas propias, o ventana sobre la web que ya lleva dentro? | Decisión tuya. Elegiste nativa; dos revisiones adversariales lo desaconsejaron por duplicar la visualización | — |

@@ -107,6 +107,9 @@ impl Motor {
     pub fn python(&self) -> &Path {
         &self.python
     }
+    pub fn script(&self) -> &Path {
+        &self.script
+    }
     /// Directorio desde el que se lanza el motor. Es también donde viven sus
     /// módulos y sus dependencias, así que Python los encuentra solo.
     pub fn cwd(&self) -> &Path {
@@ -211,6 +214,8 @@ pub struct AnalisisManager {
     pid: Mutex<Option<i32>>,
     cancelado: AtomicBool,
     motor: Option<Motor>,
+    /// Progress file of the scan in flight, if any.
+    progreso: Mutex<Option<PathBuf>>,
 }
 
 impl AnalisisManager {
@@ -219,6 +224,7 @@ impl AnalisisManager {
             pid: Mutex::new(None),
             cancelado: AtomicBool::new(false),
             motor,
+            progreso: Mutex::new(None),
         }
     }
 
@@ -231,6 +237,12 @@ impl AnalisisManager {
 
     pub fn is_running(&self) -> bool {
         self.pid.lock().unwrap().is_some()
+    }
+
+    /// How far the scan in flight has got, as the engine last reported it.
+    pub fn progreso(&self) -> Option<crate::progreso::Progreso> {
+        let ruta = self.progreso.lock().unwrap().clone()?;
+        crate::progreso::leer(&ruta)
     }
 
     /// Starts a scan. Returns `Err` without spawning anything if one is
@@ -285,10 +297,12 @@ impl AnalisisManager {
         // here -- the scan would die from our own SIGTERM but get reported
         // as a failure instead of as cancelled.
         self.cancelado.store(false, Ordering::SeqCst);
+        *self.progreso.lock().unwrap() = Some(comando.progreso_path.clone());
         drop(pid_guard);
 
         let export_path = comando.export_path;
         let stderr_path = comando.stderr_path;
+        let progreso_path = comando.progreso_path;
         let manager = Arc::clone(self);
         std::thread::spawn(move || {
             // Owns `child` exclusively: this blocking wait never holds
@@ -297,6 +311,7 @@ impl AnalisisManager {
             let status = child.wait();
 
             *manager.pid.lock().unwrap() = None;
+            *manager.progreso.lock().unwrap() = None;
             let cancelado = manager.cancelado.swap(false, Ordering::SeqCst);
 
             let resultado = if cancelado {
@@ -313,6 +328,8 @@ impl AnalisisManager {
 
             let _ = std::fs::remove_file(&export_path);
             let _ = std::fs::remove_file(&stderr_path);
+            let _ = std::fs::remove_file(&progreso_path);
+            let _ = std::fs::remove_file(progreso_path.with_extension("progreso.tmp"));
             on_finish(resultado);
         });
 
@@ -423,6 +440,8 @@ struct Comando {
     cmd: Command,
     export_path: PathBuf,
     stderr_path: PathBuf,
+    /// Where the engine writes its progress (`--progreso`).
+    progreso_path: PathBuf,
 }
 
 /// Serial number for the temp file names. Naming them after the app's pid
@@ -440,6 +459,8 @@ fn comando_analisis(motor: &Motor) -> Result<Comando, String> {
     );
     let export_path = std::env::temp_dir().join(format!("disk-analyzer-tray-{etiqueta}.json"));
     let stderr_path = std::env::temp_dir().join(format!("disk-analyzer-tray-{etiqueta}.stderr"));
+    let progreso_path =
+        std::env::temp_dir().join(format!("disk-analyzer-tray-{etiqueta}.progreso"));
     let stderr_file = std::fs::File::create(&stderr_path)
         .map_err(|e| format!("no se pudo preparar el registro de errores: {e}"))?;
 
@@ -451,6 +472,8 @@ fn comando_analisis(motor: &Motor) -> Result<Comando, String> {
         .arg(MIN_SIZE_MB)
         .arg("--export")
         .arg(&export_path)
+        .arg("--progreso")
+        .arg(&progreso_path)
         .stdin(Stdio::null())
         // stdout is high-volume progress text nobody reads from a tray
         // menu; piping it without ever draining it risks filling the OS
@@ -466,6 +489,7 @@ fn comando_analisis(motor: &Motor) -> Result<Comando, String> {
         cmd,
         export_path,
         stderr_path,
+        progreso_path,
     })
 }
 
@@ -610,6 +634,7 @@ mod tests {
             cmd,
             export_path: ruta_temporal("json"),
             stderr_path: ruta_temporal("stderr"),
+            progreso_path: ruta_temporal("progreso"),
         };
         (comando, marca)
     }

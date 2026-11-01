@@ -82,6 +82,39 @@ CONSECUENCIAS: Dict[str, str] = {
     'maquinas_virtuales': 'solo_lista',
 }
 
+# What the menu-bar app may offer from its own menu, still behind a native
+# confirmation. 'redescarga' stays out: Docker images are a decision for the
+# full analyzer, where the user sees which ones go.
+CONSECUENCIAS_RAPIDAS = ('regenera', 'permanente')
+
+# Cache dirs that only feed rules the menu never offers (lists, Docker), or
+# that are protected anyway. Skipping them is what makes the quick mode take
+# seconds: measuring Docker's disk image or ~/Downloads alone can take longer
+# than everything else together.
+_NO_RAPIDOS = ('Downloads', 'Archives', 'CoreSimulator', '/private/var/folders',
+               'docker', '~/.cache')
+
+
+def limpiezas_rapidas(recomendaciones: List[Dict]) -> List[Dict]:
+    """The recommendations the menu-bar app can run, in menu order.
+
+    Whatever comes back here reaches a menu item, so the filter is strict:
+    only 'regenera' and 'permanente', never a 'solo_lista' rule, and never a
+    command that is empty or a shell comment. What comes back by itself goes
+    first, largest first; the Trash goes last because it cannot be undone.
+    """
+    elegidas = [
+        r for r in recomendaciones
+        if r.get('consecuencia') in CONSECUENCIAS_RAPIDAS
+        and r.get('efecto') != 'solo_lista'
+        and (r.get('command') or '').strip()
+        and not r['command'].lstrip().startswith('#')
+    ]
+    elegidas.sort(key=lambda r: (CONSECUENCIAS_RAPIDAS.index(r['consecuencia']), -r['space']))
+    return [{'id': r['id'], 'titulo': r['type'], 'descripcion': r['description'],
+             'space': r['space'], 'consecuencia': r['consecuencia'],
+             'command': r['command']} for r in elegidas]
+
 
 class DiskAnalyzerCore:
     """Core disk analysis functionality with progress callback support"""
@@ -305,12 +338,23 @@ class DiskAnalyzerCore:
             
         return total_size
     
-    def find_cache_locations(self):
+    def limpieza_rapida(self) -> List[Dict]:
+        """Measure only the known caches and return what the menu can run.
+
+        No disk scan: the rules that need one (Homebrew downloads, simulator
+        files) simply don't fire, which is the safe direction to be wrong in.
+        """
+        rapidos = [d for d in CACHE_DIRS if not any(x in d for x in _NO_RAPIDOS)]
+        self.find_cache_locations(rapidos)
+        return limpiezas_rapidas(self.generate_recommendations())
+
+    def find_cache_locations(self, cache_dirs: Optional[List[str]] = None):
         """Busca ubicaciones de cache conocidas"""
         self._update_progress("Searching for cache locations...", 70, phase="cache_scan")
-        
-        total_cache_dirs = len(CACHE_DIRS)
-        for idx, cache_dir in enumerate(CACHE_DIRS):
+
+        cache_dirs = CACHE_DIRS if cache_dirs is None else cache_dirs
+        total_cache_dirs = len(cache_dirs)
+        for idx, cache_dir in enumerate(cache_dirs):
             if self._cancel_flag:
                 break
                 
