@@ -35,8 +35,14 @@ async def _raw_get(app, raw_path: str) -> tuple[int, bytes]:
         "root_path": "",
     }
     messages = []
+    pedido = [False]
 
     async def receive():
+        # Like a real server: the (empty) body once, then only a disconnect.
+        # Starlette 1.x calls receive() again to watch for it.
+        if pedido[0]:
+            return {"type": "http.disconnect"}
+        pedido[0] = True
         return {"type": "http.request", "body": b"", "more_body": False}
 
     async def send(message):
