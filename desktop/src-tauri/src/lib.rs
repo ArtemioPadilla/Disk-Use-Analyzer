@@ -194,18 +194,9 @@ impl Pintor {
     }
 
     fn parar(&self) {
-        // Decrement, never below zero. A plain loop rather than
-        // `fetch_update`, which newer toolchains deprecate.
-        let mut n = self.animando.load(Ordering::SeqCst);
-        while n > 0 {
-            match self
-                .animando
-                .compare_exchange(n, n - 1, Ordering::SeqCst, Ordering::SeqCst)
-            {
-                Ok(_) => break,
-                Err(actual) => n = actual,
-            }
-        }
+        let _ = self
+            .animando
+            .try_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1));
     }
 }
 
