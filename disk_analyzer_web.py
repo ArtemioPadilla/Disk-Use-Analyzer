@@ -1395,7 +1395,6 @@ async def serve_astro(path: str):
     paths fall through to the normal SPA-fallback (index.html), same as any
     other unknown route.
     """
-    astro_dist = Path(__file__).parent / "web" / "dist"
     if not astro_dist.exists():
         return FileResponse(str(Path(__file__).parent / "static" / "index.html"))
 
