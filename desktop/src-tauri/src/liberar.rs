@@ -13,7 +13,7 @@
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use serde::Deserialize;
 use tauri::menu::{IsMenuItem, MenuItem, PredefinedMenuItem, Submenu};
@@ -497,12 +497,11 @@ where
         let termino = AtomicBool::new(false);
         let r = std::thread::scope(|hilos| {
             hilos.spawn(|| {
-                let mut espera = Duration::ZERO;
+                let mut ultimo = Instant::now();
                 while !termino.load(Ordering::SeqCst) {
                     std::thread::sleep(Duration::from_millis(50));
-                    espera += Duration::from_millis(50);
-                    if espera >= INTERVALO_AVANCE {
-                        espera = Duration::ZERO;
+                    if ultimo.elapsed() >= INTERVALO_AVANCE {
+                        ultimo = Instant::now();
                         avisar();
                     }
                 }
@@ -910,7 +909,7 @@ mod tests {
     #[test]
     fn ejecutar_avisa_al_empezar_cada_paso_y_mientras_dura() {
         let mut lenta = l("lenta", REGENERA, GB);
-        lenta.command = "sleep 2.2".into();
+        lenta.command = "sleep 3.5".into();
         let mut rapida = l("rapida", REGENERA, GB);
         rapida.command = "true".into();
         let vistos = Mutex::new(Vec::new());
