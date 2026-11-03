@@ -1,4 +1,4 @@
-//! "Liberar espacio": quick cleanups straight from the menu.
+//! The cleanups in the menu: each category's submenu and "Liberar lo seguro".
 //!
 //! The list comes from the engine (`disk_analyzer.py --limpieza-rapida`), so
 //! every command was built by `analyzer/comandos.py` and passed the deletion
@@ -20,14 +20,24 @@ use tauri::{AppHandle, Wry};
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 
 use crate::analisis::Motor;
+use crate::categorias::{tamano, Categoria};
 use crate::disk;
+use crate::menu_nativo;
 
-/// Prefix of every menu id this module owns.
+/// Prefix of the menu ids that run a cleanup.
 pub const PREFIJO: &str = "liberar:";
-/// Menu id suffix of "free everything that comes back by itself".
+/// Prefix of the menu ids that open a page of the full analyzer.
+pub const PREFIJO_ANALIZADOR: &str = "ir:";
+/// Prefix of the menu ids that open something outside the app.
+pub const PREFIJO_EXTERNO: &str = "externo:";
+/// Menu id suffix of "everything safe", from any category.
 pub const TODO: &str = "todo";
-/// Menu id suffix of "review everything in the full analyzer".
-pub const REVISAR: &str = "revisar";
+/// Menu id suffix of "all the caches".
+const TODAS_CACHES: &str = "caches";
+
+const EXTERNO_CACHES: &str = "caches";
+const EXTERNO_DESCARGAS: &str = "descargas";
+const EXTERNO_ALMACENAMIENTO: &str = "almacenamiento";
 
 const REGENERA: &str = "regenera";
 const PERMANENTE: &str = "permanente";
@@ -40,12 +50,17 @@ pub struct Limpieza {
     pub descripcion: String,
     pub space: u64,
     pub consecuencia: String,
+    pub categoria: String,
     pub command: String,
 }
 
 impl Limpieza {
     fn es_permanente(&self) -> bool {
         self.consecuencia == PERMANENTE
+    }
+
+    fn esta_en(&self, c: Categoria) -> bool {
+        self.categoria == clave(c)
     }
 }
 
@@ -81,24 +96,22 @@ pub fn medir(motor: &Motor) -> Result<Vec<Limpieza>, String> {
     leer(&String::from_utf8_lossy(&salida.stdout))
 }
 
-fn gb(bytes: u64) -> f64 {
-    bytes as f64 / (1024.0 * 1024.0 * 1024.0)
-}
-
-fn tamano(bytes: u64) -> String {
-    if bytes >= 1024 * 1024 * 1024 {
-        format!("{:.1} GB", gb(bytes))
-    } else {
-        format!("{} MB", bytes / (1024 * 1024))
+/// How the engine names a category.
+fn clave(c: Categoria) -> &'static str {
+    match c {
+        Categoria::Docker => "docker",
+        Categoria::Caches => "caches",
+        Categoria::Tuyo => "tuyo",
+        Categoria::Resto => "resto",
     }
 }
 
-/// One row of the submenu.
+/// One row of a submenu.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Fila {
-    /// A greyed-out line: a section title or a state ("Midiendo…").
+    /// Not clickable: a section title or a note.
     Texto(String),
-    /// A clickable line; `id` goes after `PREFIJO`.
+    /// A clickable line; `id` is the whole menu id.
     Accion {
         id: String,
         texto: String,
@@ -106,54 +119,149 @@ pub enum Fila {
     Separador,
 }
 
-/// The submenu for a list: what comes back by itself first, then the Trash
-/// under its own heading, then the way out to the full review.
-pub fn filas(lista: &[Limpieza]) -> Vec<Fila> {
-    let mut out = Vec::new();
-    let (regenera, permanente): (Vec<&Limpieza>, Vec<&Limpieza>) =
-        lista.iter().partition(|l| !l.es_permanente());
-    let accion = |l: &Limpieza| Fila::Accion {
-        id: l.id.clone(),
-        texto: format!("{} — {}", l.titulo, tamano(l.space)),
-    };
-    if lista.is_empty() {
-        out.push(Fila::Texto("Nada que liberar ahora mismo".into()));
+fn accion(id: String, texto: impl Into<String>) -> Fila {
+    Fila::Accion {
+        id,
+        texto: texto.into(),
     }
-    if !regenera.is_empty() {
-        out.push(Fila::Texto("Vuelve solo, sin perder nada tuyo".into()));
-        out.extend(regenera.iter().map(|l| accion(l)));
-        if regenera.len() > 1 {
-            let total: u64 = regenera.iter().map(|l| l.space).sum();
-            out.push(Fila::Accion {
-                id: TODO.into(),
-                texto: format!("Liberar todo lo anterior — {}", tamano(total)),
-            });
+}
+
+fn limpieza(l: &Limpieza) -> Fila {
+    accion(
+        format!("{PREFIJO}{}", l.id),
+        format!("{}…\t{}", l.titulo, tamano(l.space)),
+    )
+}
+
+fn analizador(destino: &str, texto: &str) -> Fila {
+    accion(format!("{PREFIJO_ANALIZADOR}{destino}"), texto)
+}
+
+fn externo(destino: &str, texto: &str) -> Fila {
+    accion(format!("{PREFIJO_EXTERNO}{destino}"), texto)
+}
+
+/// A category's submenu. `aviso`, when there is one, takes the place of the
+/// cleanups (still measuring, or the measure failed); the ways out stay.
+pub fn filas(c: Categoria, lista: &[Limpieza], aviso: Option<&str>) -> Vec<Fila> {
+    let propias: Vec<&Limpieza> = lista.iter().filter(|l| l.esta_en(c)).collect();
+    let aviso = aviso.map(|a| Fila::Texto(a.to_string()));
+    let mut out = Vec::new();
+    match c {
+        Categoria::Docker => out.push(analizador("/", "Abrir analizador completo")),
+        Categoria::Caches => {
+            if let Some(a) = aviso {
+                out.push(a);
+            } else if propias.is_empty() {
+                out.push(Fila::Texto("Nada que limpiar ahora mismo".into()));
+            } else {
+                if propias.len() > 1 {
+                    let total: u64 = propias.iter().map(|l| l.space).sum();
+                    out.push(accion(
+                        format!("{PREFIJO}{TODAS_CACHES}"),
+                        format!("Limpiar todas…\t{}", tamano(total)),
+                    ));
+                    out.push(Fila::Separador);
+                }
+                out.extend(propias.iter().map(|l| limpieza(l)));
+            }
+            out.push(Fila::Separador);
+            out.push(externo(EXTERNO_CACHES, "Abrir en Finder"));
+        }
+        Categoria::Tuyo => {
+            out.push(Fila::Texto("No vuelve".into()));
+            if let Some(a) = aviso {
+                out.push(a);
+            } else if propias.is_empty() {
+                out.push(Fila::Texto("La papelera está casi vacía".into()));
+            } else {
+                out.extend(propias.iter().map(|l| limpieza(l)));
+            }
+            out.push(Fila::Separador);
+            out.push(Fila::Texto("Revisar antes de borrar".into()));
+            out.push(analizador("/files", "Archivos más grandes"));
+            out.push(analizador(
+                "/files?path=/Downloads/&orden=antiguedad",
+                "Descargas más antiguas",
+            ));
+            out.push(Fila::Texto("Se abren en el analizador".into()));
+            out.push(Fila::Separador);
+            out.push(externo(EXTERNO_DESCARGAS, "Abrir Descargas en Finder"));
+        }
+        Categoria::Resto => {
+            if let Some(a) = aviso {
+                out.push(a);
+            } else if propias.is_empty() {
+                out.push(Fila::Texto("Nada que limpiar desde aquí".into()));
+                out.push(Fila::Texto(
+                    "Es macOS, las apps y lo que no se pudo medir".into(),
+                ));
+            } else {
+                out.extend(propias.iter().map(|l| limpieza(l)));
+            }
+            out.push(Fila::Separador);
+            out.push(analizador("/", "Ver desglose en el analizador"));
+            out.push(externo(
+                EXTERNO_ALMACENAMIENTO,
+                "Abrir Almacenamiento de macOS",
+            ));
         }
     }
-    if !permanente.is_empty() {
-        out.push(Fila::Separador);
-        out.push(Fila::Texto("No se puede deshacer".into()));
-        out.extend(permanente.iter().map(|l| accion(l)));
-    }
-    out.push(Fila::Separador);
-    out.push(Fila::Accion {
-        id: REVISAR.into(),
-        texto: "Revisar todo en el analizador completo…".into(),
-    });
     out
 }
 
-/// What a click on `id` would run. "Free everything" never includes the
-/// Trash.
-pub fn elegir(lista: &[Limpieza], id: &str) -> Vec<Limpieza> {
-    if id == TODO {
-        lista
-            .iter()
-            .filter(|l| !l.es_permanente())
-            .cloned()
-            .collect()
+/// "Liberar lo seguro" and what it adds up to. It runs what comes back by
+/// itself, without a rebuild or a download behind it: never the Trash, never
+/// Docker.
+fn seguras(lista: &[Limpieza]) -> impl Iterator<Item = &Limpieza> {
+    lista
+        .iter()
+        .filter(|l| !l.es_permanente() && !l.esta_en(Categoria::Docker))
+}
+
+/// The text of the top-level "Liberar lo seguro" row, and whether it can be
+/// clicked.
+pub fn fila_seguro(lista: &[Limpieza]) -> (String, bool) {
+    let total: u64 = seguras(lista).map(|l| l.space).sum();
+    if total == 0 {
+        ("Nada que liberar ahora mismo".into(), false)
     } else {
-        lista.iter().filter(|l| l.id == id).cloned().collect()
+        (format!("Liberar lo seguro…\t{}", tamano(total)), true)
+    }
+}
+
+/// The analyzer's address for a page of it: `destino` replaces the path of the
+/// server's address, and keeps its token.
+pub fn url_en(url: &str, destino: &str) -> String {
+    let Some((base, token)) = url.split_once("/?") else {
+        return url.to_string();
+    };
+    let union = if destino.contains('?') { '&' } else { '?' };
+    format!("{base}{destino}{union}{token}")
+}
+
+/// What an external menu id opens. A fixed list: an id is never a path.
+pub fn externo_de(id: &str, home: &str) -> Option<String> {
+    match id {
+        EXTERNO_CACHES => Some(format!("{home}/Library/Caches")),
+        EXTERNO_DESCARGAS => Some(format!("{home}/Downloads")),
+        EXTERNO_ALMACENAMIENTO => {
+            Some("x-apple.systempreferences:com.apple.settings.Storage".to_string())
+        }
+        _ => None,
+    }
+}
+
+/// What a click on `id` would run. Neither "everything" includes the Trash.
+pub fn elegir(lista: &[Limpieza], id: &str) -> Vec<Limpieza> {
+    match id {
+        TODO => seguras(lista).cloned().collect(),
+        TODAS_CACHES => lista
+            .iter()
+            .filter(|l| l.esta_en(Categoria::Caches))
+            .cloned()
+            .collect(),
+        _ => lista.iter().filter(|l| l.id == id).cloned().collect(),
     }
 }
 
@@ -275,20 +383,27 @@ pub fn ejecutar(elegidas: &[Limpieza]) -> Hecho {
     Hecho { liberado, fallos }
 }
 
-/// The submenu and its current list.
+/// The cleanups' place in the menu and their current list.
 pub struct Liberador {
     app: AppHandle,
-    submenu: Submenu<Wry>,
+    categorias: Vec<(Categoria, Submenu<Wry>)>,
+    fila_seguro: MenuItem<Wry>,
     motor: Option<Motor>,
     lista: Mutex<Vec<Limpieza>>,
     ocupado: AtomicBool,
 }
 
 impl Liberador {
-    pub fn new(app: AppHandle, submenu: Submenu<Wry>, motor: Option<Motor>) -> Arc<Self> {
+    pub fn new(
+        app: AppHandle,
+        categorias: Vec<(Categoria, Submenu<Wry>)>,
+        fila_seguro: MenuItem<Wry>,
+        motor: Option<Motor>,
+    ) -> Arc<Self> {
         let l = Arc::new(Liberador {
             app,
-            submenu,
+            categorias,
+            fila_seguro,
             motor,
             lista: Mutex::new(Vec::new()),
             ocupado: AtomicBool::new(false),
@@ -298,36 +413,42 @@ impl Liberador {
         } else {
             "Motor de análisis no encontrado"
         };
-        l.poner(&[Fila::Texto(texto.into())]);
+        l.poner(&[], Some(texto));
         l
     }
 
-    fn poner(&self, filas: &[Fila]) {
-        if let Ok(viejos) = self.submenu.items() {
-            for v in viejos {
-                let _ = self.submenu.remove(&v as &dyn IsMenuItem<Wry>);
+    /// Rebuilds every submenu and the top-level row.
+    fn poner(&self, lista: &[Limpieza], aviso: Option<&str>) {
+        for (c, submenu) in &self.categorias {
+            if let Ok(viejos) = submenu.items() {
+                for v in viejos {
+                    let _ = submenu.remove(&v as &dyn IsMenuItem<Wry>);
+                }
+            }
+            for f in filas(*c, lista, aviso) {
+                let _ = match &f {
+                    Fila::Texto(t) => MenuItem::new(&self.app, t, false, None::<&str>)
+                        .and_then(|i| submenu.append(&i)),
+                    Fila::Accion { id, texto } => {
+                        MenuItem::with_id(&self.app, id, texto, true, None::<&str>)
+                            .and_then(|i| submenu.append(&i))
+                    }
+                    Fila::Separador => {
+                        PredefinedMenuItem::separator(&self.app).and_then(|i| submenu.append(&i))
+                    }
+                };
             }
         }
-        for f in filas {
-            let _ = match f {
-                Fila::Texto(t) => MenuItem::new(&self.app, t, false, None::<&str>)
-                    .and_then(|i| self.submenu.append(&i)),
-                Fila::Accion { id, texto } => MenuItem::with_id(
-                    &self.app,
-                    format!("{PREFIJO}{id}"),
-                    texto,
-                    true,
-                    None::<&str>,
-                )
-                .and_then(|i| self.submenu.append(&i)),
-                Fila::Separador => {
-                    PredefinedMenuItem::separator(&self.app).and_then(|i| self.submenu.append(&i))
-                }
-            };
-        }
+        let (texto, activa) = match aviso {
+            Some(a) => (a.to_string(), false),
+            None => fila_seguro(lista),
+        };
+        let _ = self.fila_seguro.set_text(texto);
+        let _ = self.fila_seguro.set_enabled(activa);
+        menu_nativo::aplicar(&self.app);
     }
 
-    /// Re-measures and rebuilds the submenu. Blocking: call it off the main
+    /// Re-measures and rebuilds the menu. Blocking: call it off the main
     /// thread.
     pub fn refrescar(&self) {
         let Some(motor) = self.motor.as_ref() else {
@@ -338,10 +459,10 @@ impl Liberador {
         }
         match medir(motor) {
             Ok(lista) => {
-                self.poner(&filas(&lista));
+                self.poner(&lista, None);
                 *self.lista.lock().unwrap() = lista;
             }
-            Err(e) => self.poner(&[Fila::Texto(format!("No se pudo medir: {e}"))]),
+            Err(e) => self.poner(&[], Some(&format!("No se pudo medir: {e}"))),
         }
     }
 
@@ -376,7 +497,7 @@ impl Liberador {
                 if !acepta || yo.ocupado.swap(true, Ordering::SeqCst) {
                     return;
                 }
-                yo.poner(&[Fila::Texto("Liberando espacio…".into())]);
+                yo.poner(&[], Some("Liberando espacio…"));
                 std::thread::spawn(move || {
                     al_empezar();
                     let hecho = ejecutar(&elegidas);
@@ -401,6 +522,11 @@ mod tests {
             descripcion: String::new(),
             space,
             consecuencia: consecuencia.into(),
+            categoria: if consecuencia == PERMANENTE {
+                "tuyo".into()
+            } else {
+                "caches".into()
+            },
             command: format!("echo {id}"),
         }
     }
@@ -408,53 +534,109 @@ mod tests {
     #[test]
     fn solo_entra_lo_que_vuelve_solo_y_la_papelera() {
         let json = r#"[
-            {"id":"logs","titulo":"Logs","descripcion":"","space":1,"consecuencia":"regenera","command":"x"},
-            {"id":"docker","titulo":"Docker","descripcion":"","space":1,"consecuencia":"redescarga","command":"docker system prune -a -f"},
-            {"id":"lista","titulo":"L","descripcion":"","space":1,"consecuencia":"solo_lista","command":"du"},
-            {"id":"vacio","titulo":"V","descripcion":"","space":1,"consecuencia":"regenera","command":"  "},
-            {"id":"papelera","titulo":"Papelera","descripcion":"","space":1,"consecuencia":"permanente","command":"y"}
+            {"id":"logs","titulo":"Logs","descripcion":"","space":1,"consecuencia":"regenera","categoria":"caches","command":"x"},
+            {"id":"docker","titulo":"Docker","descripcion":"","space":1,"consecuencia":"redescarga","categoria":"docker","command":"docker system prune -a -f"},
+            {"id":"lista","titulo":"L","descripcion":"","space":1,"consecuencia":"solo_lista","categoria":"caches","command":"du"},
+            {"id":"vacio","titulo":"V","descripcion":"","space":1,"consecuencia":"regenera","categoria":"caches","command":"  "},
+            {"id":"papelera","titulo":"Papelera","descripcion":"","space":1,"consecuencia":"permanente","categoria":"tuyo","command":"y"}
         ]"#;
         let ids: Vec<String> = leer(json).unwrap().into_iter().map(|l| l.id).collect();
         assert_eq!(ids, vec!["logs", "papelera"]);
     }
 
+    fn ids(f: &[Fila]) -> Vec<String> {
+        f.iter()
+            .filter_map(|x| match x {
+                Fila::Accion { id, .. } => Some(id.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
     #[test]
-    fn la_papelera_va_aparte_y_nunca_entra_en_liberar_todo() {
+    fn la_papelera_va_en_tus_archivos_y_nunca_entra_en_liberar_lo_seguro() {
         let lista = vec![
-            l("caches", REGENERA, 6 * GB),
+            l("caches_de_apps", REGENERA, 6 * GB),
             l("logs", REGENERA, GB / 2),
             l("papelera", PERMANENTE, 2 * GB),
         ];
-        let f = filas(&lista);
-        let pos = |id: &str| {
-            f.iter()
-                .position(|x| matches!(x, Fila::Accion { id: i, .. } if i == id))
-                .unwrap()
-        };
-        let aviso = f
-            .iter()
-            .position(|x| *x == Fila::Texto("No se puede deshacer".into()))
-            .unwrap();
-        assert!(pos(TODO) < aviso && aviso < pos("papelera"));
-        assert!(matches!(&f[pos(TODO)], Fila::Accion { texto, .. } if texto.ends_with("6.5 GB")));
+        assert!(!ids(&filas(Categoria::Caches, &lista, None)).contains(&"liberar:papelera".into()));
+        assert!(ids(&filas(Categoria::Tuyo, &lista, None)).contains(&"liberar:papelera".into()));
 
+        assert_eq!(
+            fila_seguro(&lista),
+            ("Liberar lo seguro…\t6,5 GB".to_string(), true)
+        );
         let todo: Vec<String> = elegir(&lista, TODO).into_iter().map(|l| l.id).collect();
-        assert_eq!(todo, vec!["caches", "logs"]);
+        assert_eq!(todo, vec!["caches_de_apps", "logs"]);
     }
 
     #[test]
-    fn liberar_todo_solo_aparece_con_mas_de_una_cosa() {
-        let f = filas(&[l("logs", REGENERA, GB)]);
-        assert!(!f
-            .iter()
-            .any(|x| matches!(x, Fila::Accion { id, .. } if id == TODO)));
+    fn liberar_lo_seguro_no_entra_en_docker() {
+        let mut build = l("docker_build", REGENERA, 8 * GB);
+        build.categoria = "docker".into();
+        let lista = vec![build, l("logs", REGENERA, GB)];
+        assert_eq!(elegir(&lista, TODO).len(), 1);
+        assert!(fila_seguro(&lista).0.ends_with("1,0 GB"));
     }
 
     #[test]
-    fn sin_nada_que_liberar_lo_dice_y_deja_ir_al_analizador() {
-        let f = filas(&[]);
-        assert_eq!(f[0], Fila::Texto("Nada que liberar ahora mismo".into()));
-        assert!(matches!(f.last(), Some(Fila::Accion { id, .. }) if id == REVISAR));
+    fn limpiar_todas_solo_aparece_en_cachés_con_mas_de_una() {
+        let una = filas(Categoria::Caches, &[l("logs", REGENERA, GB)], None);
+        assert!(!ids(&una).contains(&"liberar:caches".to_string()));
+
+        let lista = vec![l("logs", REGENERA, GB), l("npm", REGENERA, GB)];
+        let dos = filas(Categoria::Caches, &lista, None);
+        assert_eq!(ids(&dos)[0], "liberar:caches");
+        assert_eq!(elegir(&lista, TODAS_CACHES).len(), 2);
+    }
+
+    #[test]
+    fn solo_cachés_ofrece_limpiar_todo() {
+        let lista = vec![l("logs", REGENERA, GB), l("papelera", PERMANENTE, GB)];
+        for c in [Categoria::Docker, Categoria::Tuyo, Categoria::Resto] {
+            assert!(!ids(&filas(c, &lista, None))
+                .iter()
+                .any(|i| i == "liberar:todo" || i == "liberar:caches"));
+        }
+    }
+
+    #[test]
+    fn sistema_y_otros_no_ofrece_borrar_nada_si_el_motor_no_lo_propone() {
+        let f = filas(Categoria::Resto, &[l("logs", REGENERA, GB)], None);
+        assert!(!ids(&f).iter().any(|i| i.starts_with(PREFIJO)));
+        assert_eq!(f[0], Fila::Texto("Nada que limpiar desde aquí".into()));
+    }
+
+    #[test]
+    fn un_aviso_sustituye_las_limpiezas_pero_deja_las_salidas() {
+        let f = filas(Categoria::Caches, &[], Some("Midiendo…"));
+        assert_eq!(f[0], Fila::Texto("Midiendo…".into()));
+        assert_eq!(ids(&f), vec!["externo:caches"]);
+        assert!(!fila_seguro(&[]).1);
+    }
+
+    #[test]
+    fn la_url_del_analizador_conserva_el_token_en_cualquier_pagina() {
+        let u = "http://127.0.0.1:8123/?token=abc";
+        assert_eq!(url_en(u, "/"), u);
+        assert_eq!(
+            url_en(u, "/files"),
+            "http://127.0.0.1:8123/files?token=abc"
+        );
+        assert_eq!(
+            url_en(u, "/files?path=/Downloads/&orden=antiguedad"),
+            "http://127.0.0.1:8123/files?path=/Downloads/&orden=antiguedad&token=abc"
+        );
+    }
+
+    #[test]
+    fn un_id_externo_nunca_es_una_ruta_cualquiera() {
+        assert_eq!(
+            externo_de(EXTERNO_DESCARGAS, "/Users/u").as_deref(),
+            Some("/Users/u/Downloads")
+        );
+        assert_eq!(externo_de("/etc/passwd", "/Users/u"), None);
     }
 
     #[test]
@@ -467,7 +649,7 @@ mod tests {
         let c = confirmacion(&[l("logs", REGENERA, GB)]);
         assert!(!c.permanente);
         assert!(!c.mensaje.contains("no se puede deshacer"));
-        assert!(c.mensaje.contains("T-logs — 1.0 GB"));
+        assert!(c.mensaje.contains("T-logs — 1,0 GB"));
     }
 
     #[test]
@@ -476,7 +658,7 @@ mod tests {
             liberado: 3 * GB,
             fallos: vec![],
         });
-        assert_eq!(t, "Liberados 3.0 GB");
+        assert_eq!(t, "Liberados 3,0 GB");
         let (t, c) = aviso_final(&Hecho {
             liberado: 0,
             fallos: vec![("Caché de npm".into(), "npm: command not found".into())],

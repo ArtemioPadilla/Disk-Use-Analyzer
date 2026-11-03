@@ -11,7 +11,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-from disk_analyzer_core import CONSECUENCIAS, limpiezas_rapidas
+from disk_analyzer_core import CATEGORIAS_RAPIDAS, CONSECUENCIAS, limpiezas_rapidas
 
 RAIZ = Path(__file__).resolve().parent.parent
 MB = 1024 * 1024
@@ -32,6 +32,16 @@ def test_solo_pasa_lo_que_vuelve_solo_y_la_papelera():
     assert 'docker' not in ids, "lo que hay que redescargar se queda en el analizador"
 
 
+def test_cada_limpieza_dice_bajo_que_categoria_del_menu_va():
+    recs = [_rec(i) for i in CONSECUENCIAS]
+    por_id = {r['id']: r['categoria'] for r in limpiezas_rapidas(recs)}
+    assert por_id['npm'] == 'caches'
+    assert por_id['papelera'] == 'tuyo'
+    assert por_id['xcode_deriveddata'] == 'resto'
+    assert set(por_id.values()) <= {'docker', 'caches', 'tuyo', 'resto'}
+    assert set(por_id) == {i for i in CATEGORIAS_RAPIDAS if i in por_id}
+
+
 def test_lo_que_solo_lista_o_no_tiene_comando_no_llega_al_menu():
     recs = [
         _rec('logs', efecto='solo_lista'),
@@ -46,7 +56,7 @@ def test_lo_que_vuelve_solo_va_primero_y_la_papelera_al_final():
     recs = [_rec('papelera'), _rec('logs', space=1 * MB), _rec('caches_de_apps', space=9 * MB)]
     salida = limpiezas_rapidas(recs)
     assert [r['id'] for r in salida] == ['caches_de_apps', 'logs', 'papelera']
-    assert set(salida[0]) == {'id', 'titulo', 'descripcion', 'space', 'consecuencia', 'command'}
+    assert set(salida[0]) == {'id', 'titulo', 'descripcion', 'space', 'consecuencia', 'categoria', 'command'}
 
 
 def test_la_cli_mide_un_home_y_devuelve_json_con_comandos_que_pasan_la_verja():

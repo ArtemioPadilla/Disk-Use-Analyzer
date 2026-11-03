@@ -260,14 +260,16 @@ comprobadas en pantalla en macOS 27, están en
 
 ## Liberar espacio desde el menú
 
-El submenú **Liberar espacio** ofrece, con su tamaño, lo que se puede borrar sin
-abrir el analizador:
+Cada categoría del menú abre sus acciones al pasar el cursor, con su tamaño:
 
-- **Vuelve solo, sin perder nada tuyo**: cachés de apps, logs, caché de VS Code,
-  de npm, DerivedData de Xcode… Con más de una, **Liberar todo lo anterior**.
-- **No se puede deshacer**: la papelera, aparte, y nunca dentro de "liberar todo".
-- **Revisar todo en el analizador completo…**: Docker y lo demás, que necesitan
-  ver qué se pierde, se quedan allí.
+- **Cachés**: cada caché por separado y, con más de una, **Limpiar todas**.
+- **Tus archivos**: la papelera, bajo **No vuelve**, y enlaces a los archivos más
+  grandes y las descargas más antiguas en el analizador, donde se elige uno por uno.
+- **Sistema y otros**: lo que el motor proponga, como DerivedData de Xcode; si no
+  propone nada, solo el desglose y Almacenamiento de macOS.
+
+**Liberar lo seguro…** ejecuta lo que vuelve solo de una vez. Nunca incluye la papelera
+ni Docker. Solo Cachés ofrece limpiar todo.
 
 La lista sale del motor (`disk_analyzer.py --limpieza-rapida`), que mide solo las
 cachés conocidas (unos 10 s) y devuelve las reglas con consecuencia `regenera` o

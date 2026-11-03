@@ -87,6 +87,19 @@ CONSECUENCIAS: Dict[str, str] = {
 # full analyzer, where the user sees which ones go.
 CONSECUENCIAS_RAPIDAS = ('regenera', 'permanente')
 
+# Which row of the menu each rule goes under: the same parts as the tray ring.
+# A rule the menu may offer and is missing here fails loudly.
+CATEGORIAS_RAPIDAS: Dict[str, str] = {
+    'logs': 'caches',
+    'homebrew': 'caches',
+    'vscode': 'caches',
+    'npm': 'caches',
+    'caches_de_apps': 'caches',
+    'papelera': 'tuyo',
+    'simuladores': 'resto',
+    'xcode_deriveddata': 'resto',
+}
+
 # Cache dirs that only feed rules the menu never offers (lists, Docker), or
 # that are protected anyway. Skipping them is what makes the quick mode take
 # seconds: measuring Docker's disk image or ~/Downloads alone can take longer
@@ -113,6 +126,7 @@ def limpiezas_rapidas(recomendaciones: List[Dict]) -> List[Dict]:
     elegidas.sort(key=lambda r: (CONSECUENCIAS_RAPIDAS.index(r['consecuencia']), -r['space']))
     return [{'id': r['id'], 'titulo': r['type'], 'descripcion': r['description'],
              'space': r['space'], 'consecuencia': r['consecuencia'],
+             'categoria': CATEGORIAS_RAPIDAS[r['id']],
              'command': r['command']} for r in elegidas]
 
 

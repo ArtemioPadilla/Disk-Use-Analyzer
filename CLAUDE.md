@@ -222,7 +222,7 @@ The project has three interfaces: CLI, GUI, and Web.
   `anillo.rs` (draws the live tray ring), `categorias.rs` (splits used space into
   categories without triggering TCC prompts), `ajustes.rs` (label and palette
   prefs), `avisos.rs` + `notificar.rs` (low-disk notifications), `memoria.rs`
-  (swap and the app holding it), `liberar.rs` (the "Liberar espacio" submenu:
+  (swap and the app holding it), `liberar.rs` (the category submenus and "Liberar lo seguro":
   lists what `disk_analyzer.py --limpieza-rapida` offers, confirms with a native
   dialog, runs it, notifies the measured savings — it never builds a deletion
   command itself), `progreso.rs` (the status lines during a scan, from the

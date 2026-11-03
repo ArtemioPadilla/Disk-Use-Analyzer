@@ -29,7 +29,13 @@ use tauri::{AppHandle, Wry};
 pub const ID_BANDEJA: &str = "principal";
 
 /// Section titles. Matched by their exact text, on disabled items only.
-const TITULOS: [&str; 3] = ["Disco", "Memoria", "Análisis"];
+const TITULOS: [&str; 5] = [
+    "Disco",
+    "Memoria",
+    "Análisis",
+    "No vuelve",
+    "Revisar antes de borrar",
+];
 
 /// Where a figure ends, in points from the start of the title. Also what
 /// keeps the rows of a section the same width.

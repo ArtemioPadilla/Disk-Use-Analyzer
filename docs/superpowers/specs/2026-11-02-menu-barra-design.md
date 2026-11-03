@@ -33,7 +33,7 @@ Salir de Disk Use Analyzer ⌘Q
 |---|---|
 | Docker | Caché de build (vuelve sola); imágenes sin usar y contenedores parados (hay que volver a descargar); abrir el analizador. Deshabilitado si el daemon no corre. |
 | Cachés | Limpiar todas; cada caché por separado; abrir en Finder. |
-| Tus archivos | Vaciar papelera; revisar archivos grandes y descargas antiguas en el analizador; abrir Descargas en Finder. |
+| Tus archivos | Vaciar papelera; revisar archivos grandes y descargas más antiguas en el analizador; abrir Descargas en Finder. |
 | Sistema y otros | No limpia nada. Desglose en el analizador y Almacenamiento de macOS. |
 | Swap | Cerrar cada una de las tres apps que más retienen; Monitor de Actividad. |
 | Analizar | Disco completo (⌘R), carpeta personal, elegir carpeta, ver último resultado. Durante un análisis, «Cancelar análisis». |
