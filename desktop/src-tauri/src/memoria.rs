@@ -13,6 +13,8 @@
 use std::collections::HashMap;
 use std::process::Command;
 
+use objc2_app_kit::NSWorkspace;
+
 /// Swap in use, in bytes, read straight from the kernel (`vm.swapusage`).
 pub fn swap_usado() -> Option<u64> {
     let mut uso: libc::xsw_usage = unsafe { std::mem::zeroed() };
@@ -121,10 +123,57 @@ pub fn culpable(top: &[(i32, u64)], tabla: &HashMap<i32, (i32, String)>) -> Opti
     por_app.into_iter().max_by_key(|(_, b)| *b)
 }
 
-/// Runs `top` and `ps` and names the app holding the most swapped memory.
-/// Costs about a second of `top` sampling, so callers must not run it on
-/// every 5-second poll.
-pub fn medir_culpable() -> Option<(String, u64)> {
+/// The app of a process when the menu may offer to close it: one the user
+/// opened, not part of macOS (closing `loginwindow.app` logs the user out) and
+/// not this very app.
+fn app_cerrable(pid: i32, tabla: &HashMap<i32, (i32, String)>) -> Option<String> {
+    let mut actual = pid;
+    for _ in 0..32 {
+        let (ppid, ruta) = tabla.get(&actual)?;
+        if let Some(app) = app_en_ruta(ruta) {
+            return (!es_de_macos(ruta) && app != NOMBRE_DE_ESTA_APP).then_some(app);
+        }
+        if *ppid <= 1 || *ppid == actual {
+            return None;
+        }
+        actual = *ppid;
+    }
+    None
+}
+
+const NOMBRE_DE_ESTA_APP: &str = "Disk Use Analyzer";
+
+/// Part of macOS itself. Not all of `/System`: Notes or Mail live in
+/// `/System/Applications` and quit like any other app.
+fn es_de_macos(ruta: &str) -> bool {
+    ruta.starts_with("/System/Library/")
+}
+
+/// The apps the menu may offer to close, most swapped memory first.
+pub fn cerrables(
+    top: &[(i32, u64)],
+    tabla: &HashMap<i32, (i32, String)>,
+    cuantas: usize,
+) -> Vec<(String, u64)> {
+    let mut por_app: HashMap<String, u64> = HashMap::new();
+    for (pid, bytes) in top {
+        if let Some(app) = app_cerrable(*pid, tabla) {
+            *por_app.entry(app).or_default() += bytes;
+        }
+    }
+    let mut lista: Vec<(String, u64)> = por_app.into_iter().collect();
+    lista.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+    lista.truncate(cuantas);
+    lista
+}
+
+/// The app to name in notifications, and the apps the menu may offer to close.
+pub type Culpables = (Option<String>, Vec<(String, u64)>);
+
+/// Who is holding swap: the name for notifications, and what the menu may offer
+/// to close. Runs `top` and `ps`, which costs about a second of sampling, so
+/// callers must not run it on every 5-second poll.
+pub fn medir_culpables(cuantas: usize) -> Option<Culpables> {
     let top = Command::new("/usr/bin/top")
         .args(["-l", "1", "-o", "cmprs", "-stats", "pid,cmprs", "-n", "40"])
         .output()
@@ -133,10 +182,33 @@ pub fn medir_culpable() -> Option<(String, u64)> {
         .args(["-axo", "pid=,ppid=,comm="])
         .output()
         .ok()?;
-    culpable(
-        &parsear_top(&String::from_utf8_lossy(&top.stdout)),
-        &parsear_ps(&String::from_utf8_lossy(&ps.stdout)),
-    )
+    let top = parsear_top(&String::from_utf8_lossy(&top.stdout));
+    let tabla = parsear_ps(&String::from_utf8_lossy(&ps.stdout));
+    Some((
+        culpable(&top, &tabla).map(|(app, _)| app),
+        cerrables(&top, &tabla, cuantas),
+    ))
+}
+
+/// Asks an app to quit, as its own Quit command would: it can still ask about
+/// unsaved work, or refuse. Never forced. Returns whether the request went out.
+pub fn cerrar(app: &str) -> bool {
+    let bundle = format!("{app}.app");
+    NSWorkspace::sharedWorkspace()
+        .runningApplications()
+        .iter()
+        .filter(|a| {
+            app != NOMBRE_DE_ESTA_APP
+                && a.bundleURL().is_some_and(|u| {
+                    let ruta = u.path().map(|p| p.to_string()).unwrap_or_default();
+                    !es_de_macos(&ruta)
+                        && ruta.trim_end_matches('/').ends_with(&format!("/{bundle}"))
+                })
+        })
+        .map(|a| a.terminate())
+        .filter(|pedido| *pedido)
+        .count()
+        > 0
 }
 
 /// Swap worth mentioning in the menu and in notifications. Below this it is
@@ -147,15 +219,9 @@ fn cifra(swap_gb: f64) -> String {
     format!("{swap_gb:.1}").replace('.', ",")
 }
 
-/// The menu line for swap. Names the app only once swap is big enough to
-/// matter, so the line does not point fingers at normal usage.
-pub fn texto_swap(swap_gb: f64, culpable: Option<&str>) -> String {
-    match culpable {
-        Some(app) if swap_gb >= UMBRAL_SWAP_GB => {
-            format!("Swap {} GB · lo retiene {app}", cifra(swap_gb))
-        }
-        _ => format!("Swap {} GB", cifra(swap_gb)),
-    }
+/// The menu row for swap. The apps holding it are in its submenu.
+pub fn texto_swap(swap_gb: f64) -> String {
+    format!("Swap\t{} GB", cifra(swap_gb))
 }
 
 #[cfg(test)]
@@ -240,18 +306,60 @@ mod tests {
     fn en_vivo() {
         let gb = |b: u64| b as f64 / (1024.0 * 1024.0 * 1024.0);
         println!("swap usado: {:.1} GB", gb(swap_usado().unwrap()));
-        let (app, bytes) = medir_culpable().expect("debería encontrar un culpable");
+        let (app, bytes) = medir_culpables(1)
+            .and_then(|(_, c)| c.into_iter().next())
+            .expect("debería encontrar un culpable");
         println!("culpable: {app} con {:.1} GB", gb(bytes));
     }
 
     #[test]
-    fn la_linea_de_swap_solo_senala_culpable_si_el_swap_importa() {
-        assert_eq!(texto_swap(0.4, Some("Visual Studio Code")), "Swap 0,4 GB");
-        assert_eq!(
-            texto_swap(11.7, Some("Visual Studio Code")),
-            "Swap 11,7 GB · lo retiene Visual Studio Code"
+    fn la_fila_de_swap_alinea_la_cifra() {
+        assert_eq!(texto_swap(11.7), "Swap\t11,7 GB");
+    }
+
+    #[test]
+    fn solo_se_ofrece_cerrar_apps_del_usuario_y_la_que_mas_retiene_va_primero() {
+        let tabla = parsear_ps(
+            "  900     1 /Applications/Visual Studio Code.app/Contents/MacOS/Code
+ 3228   900 /Applications/Visual Studio Code.app/Contents/Frameworks/H.app/Contents/MacOS/H
+  950     1 /Applications/Brave Browser.app/Contents/MacOS/Brave
+   60     1 /System/Library/CoreServices/loginwindow.app/Contents/MacOS/loginwindow
+   65     1 /System/Applications/Notes.app/Contents/MacOS/Notes
+   70     1 /Applications/Disk Use Analyzer.app/Contents/MacOS/Disk Use Analyzer
+   77     1 /usr/libexec/logd
+",
         );
-        assert_eq!(texto_swap(11.7, None), "Swap 11,7 GB");
+        let top = vec![
+            (60, 9_000),
+            (65, 1_000),
+            (70, 8_000),
+            (77, 7_000),
+            (950, 3_000),
+            (900, 2_000),
+            (3228, 2_000),
+        ];
+        assert_eq!(
+            cerrables(&top, &tabla, 3),
+            vec![
+                ("Visual Studio Code".to_string(), 4_000),
+                ("Brave Browser".to_string(), 3_000),
+                ("Notes".to_string(), 1_000),
+            ]
+        );
+        assert_eq!(cerrables(&top, &tabla, 1).len(), 1);
+    }
+
+    #[test]
+    #[ignore]
+    fn cerrar_en_vivo() {
+        // Needs Chess open with `open -a Chess`, and nothing of value in it.
+        assert!(cerrar("Chess"));
+    }
+
+    #[test]
+    fn cerrar_no_toca_esta_app_ni_una_que_no_esta_abierta() {
+        assert!(!cerrar(NOMBRE_DE_ESTA_APP));
+        assert!(!cerrar("Una app que no existe en ningún Mac"));
     }
 
     #[test]

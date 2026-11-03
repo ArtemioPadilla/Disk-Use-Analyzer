@@ -1,5 +1,5 @@
 //! Runs the Python analysis engine as a child process, on demand, from the
-//! "Analizar ahora" tray menu item.
+//! "Analizar" tray submenu.
 //!
 //! Design constraints (from the task brief):
 //! - The PyInstaller sidecar approach was abandoned: this machine's
@@ -10,9 +10,8 @@
 //!   invokes the project's own venv interpreter by absolute path, as a
 //!   normal child process. The app is therefore not self-contained yet;
 //!   that is an accepted, documented tradeoff for this slice.
-//! - Exactly one scan runs at a time (decision D3): a second "Analizar
-//!   ahora" while one is in flight cancels the running scan instead of
-//!   starting a second process.
+//! - Exactly one scan runs at a time (decision D3): the submenu is
+//!   disabled while one is in flight, and "Cancelar análisis" takes its place.
 //! - The child is spawned in its own process group (`process_group(0)`) so
 //!   the whole group can be killed together, not just the immediate
 //!   `python` process. Killing escalates SIGTERM -> SIGKILL after a short
@@ -41,7 +40,7 @@ const REAP_POLL_INTERVAL: Duration = Duration::from_millis(50);
 /// (`sudo make full path=/ min_size=50`): at the CLI's 10 MB default a
 /// whole-disk crawl spends most of its time on files nobody is going to act
 /// on from a tray menu.
-const SCAN_PATH: &str = "/";
+pub const RUTA_DISCO: &str = "/";
 const MIN_SIZE_MB: &str = "50";
 
 /// Outcome of a finished (or aborted) scan, as the menu needs to report it.
@@ -252,7 +251,7 @@ impl AnalisisManager {
     ///
     /// `on_finish` runs exactly once, from a background thread, once the
     /// child has exited (normally, cancelled, or killed on app shutdown).
-    pub fn start<F>(self: &Arc<Self>, on_finish: F) -> Result<(), String>
+    pub fn start<F>(self: &Arc<Self>, ruta: &Path, on_finish: F) -> Result<(), String>
     where
         F: FnOnce(Resultado) + Send + 'static,
     {
@@ -266,7 +265,7 @@ impl AnalisisManager {
             .motor
             .as_ref()
             .ok_or_else(|| "no se encontró el motor de análisis".to_string())?;
-        self.start_con(comando_analisis(motor)?, on_finish)
+        self.start_con(comando_analisis(motor, ruta)?, on_finish)
     }
 
     /// The half of `start` that does not know how to build the real scan
@@ -450,8 +449,20 @@ struct Comando {
 /// and truncated it out from under the still-running child.
 static SECUENCIA: AtomicU64 = AtomicU64::new(0);
 
-/// Builds the real whole-disk scan command.
-fn comando_analisis(motor: &Motor) -> Result<Comando, String> {
+/// Where the last scan's report stays. A file of its own and not the analyzer's
+/// history: a scan from the menu never goes through the web server, so the
+/// analyzer knows nothing about it.
+pub fn ruta_informe() -> PathBuf {
+    let home = std::env::var_os("HOME").unwrap_or_default();
+    Path::new(&home).join(".disk-analyzer/ultimo-informe.html")
+}
+
+/// Builds the real scan command.
+fn comando_analisis(motor: &Motor, ruta: &Path) -> Result<Comando, String> {
+    let informe = ruta_informe();
+    if let Some(carpeta) = informe.parent() {
+        let _ = std::fs::create_dir_all(carpeta);
+    }
     let etiqueta = format!(
         "{}-{}",
         std::process::id(),
@@ -467,13 +478,15 @@ fn comando_analisis(motor: &Motor) -> Result<Comando, String> {
     let mut cmd = Command::new(&motor.python);
     cmd.current_dir(&motor.cwd)
         .arg(&motor.script)
-        .arg(SCAN_PATH)
+        .arg(ruta)
         .arg("--min-size")
         .arg(MIN_SIZE_MB)
         .arg("--export")
         .arg(&export_path)
         .arg("--progreso")
         .arg(&progreso_path)
+        .arg("--informe")
+        .arg(&informe)
         .stdin(Stdio::null())
         // stdout is high-volume progress text nobody reads from a tray
         // menu; piping it without ever draining it risks filling the OS

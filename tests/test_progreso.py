@@ -4,6 +4,8 @@ La app de la barra lo lee cada segundo para decir cuánto lleva y cuánto falta.
 """
 import json
 import os
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -67,3 +69,25 @@ def test_sin_fichero_de_progreso_no_se_escribe_nada(tmp_path, casa):
     (datos / 'f').write_bytes(b'x')
     DiskAnalyzer(str(datos), 1).analyze()
     assert not any(tmp_path.glob('*.json'))
+
+
+def test_el_informe_html_queda_junto_al_json_que_pide_la_app(tmp_path):
+    datos = tmp_path / 'datos'
+    datos.mkdir()
+    (datos / 'f').write_bytes(os.urandom(5000))
+    home = tmp_path / 'home'
+    home.mkdir()
+    informe = tmp_path / 'ultimo.html'
+    export = tmp_path / 'x.json'
+
+    raiz = Path(__file__).resolve().parent.parent
+    proc = subprocess.run(
+        [sys.executable, str(raiz / 'disk_analyzer.py'), str(datos), '--min-size', '1',
+         '--export', str(export), '--informe', str(informe)],
+        cwd=raiz, env={**os.environ, 'HOME': str(home)},
+        capture_output=True, text=True, timeout=120)
+
+    assert proc.returncode == 0, proc.stderr
+    assert export.exists()
+    assert informe.read_text().lstrip().lower().startswith('<!doctype html')
+    assert not (tmp_path / 'ultimo.html.tmp').exists()

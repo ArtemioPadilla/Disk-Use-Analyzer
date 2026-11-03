@@ -7,6 +7,7 @@ use tauri::menu::{CheckMenuItem, IsMenuItem, Menu, MenuItem, PredefinedMenuItem,
 use tauri::tray::{TrayIcon, TrayIconBuilder};
 use tauri::Manager;
 use tauri_plugin_autostart::{MacosLauncher, ManagerExt};
+use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 
 pub mod ajustes;
 pub mod analisis;
@@ -128,31 +129,163 @@ fn poner_puntos(filas: &FilasCategorias, colores: &ajustes::Colores) {
     }
 }
 
-/// Adds or removes the second line of the scan status. There is no hidden
-/// state for a menu item, and an empty line would look like a glitch.
-fn poner_detalle(
+/// Adds or removes a row below the scan status. There is no hidden state for
+/// a menu item, and an empty line would look like a glitch.
+fn poner_fila(
     menu: &Menu<tauri::Wry>,
     item: &MenuItem<tauri::Wry>,
-    puesto: &AtomicBool,
+    puesta: &AtomicBool,
     texto: Option<&str>,
 ) {
     match texto {
         Some(t) => {
             let _ = item.set_text(t);
-            if !puesto.swap(true, Ordering::SeqCst) {
-                let despues_de = menu
+            if !puesta.swap(true, Ordering::SeqCst) {
+                let estado = menu
                     .items()
                     .ok()
-                    .and_then(|v| v.iter().position(|i| i.id().as_ref() == "estado_analisis"));
-                if let Some(pos) = despues_de {
+                    .and_then(|v| v.iter().position(|i| i.id().as_ref() == ID_ESTADO));
+                if let Some(pos) = estado {
                     let _ = menu.insert(item, pos + 1);
                 }
             }
         }
         None => {
-            if puesto.swap(false, Ordering::SeqCst) {
+            if puesta.swap(false, Ordering::SeqCst) {
                 let _ = menu.remove(item);
             }
+        }
+    }
+}
+
+const ID_ESTADO: &str = "estado_analisis";
+
+/// How many apps the swap submenu offers to close.
+const APPS_DE_SWAP: usize = 3;
+
+/// Rebuilds the swap submenu, only when it says something new.
+fn poner_swap(
+    app: &tauri::AppHandle,
+    submenu: &Submenu<tauri::Wry>,
+    actuales: &mut Vec<liberar::Fila>,
+    cerrables: &[(String, u64)],
+) {
+    let nuevas = liberar::filas_swap(cerrables);
+    if nuevas != *actuales {
+        liberar::poner_filas(app, submenu, &nuevas);
+        *actuales = nuevas;
+    }
+}
+
+/// The rows a scan touches.
+#[derive(Clone)]
+struct FilasAnalisis {
+    menu: Menu<tauri::Wry>,
+    analizar: Submenu<tauri::Wry>,
+    estado: MenuItem<tauri::Wry>,
+    detalle: MenuItem<tauri::Wry>,
+    detalle_puesta: Arc<AtomicBool>,
+    cancelar: MenuItem<tauri::Wry>,
+    cancelar_puesta: Arc<AtomicBool>,
+    informe: MenuItem<tauri::Wry>,
+}
+
+impl FilasAnalisis {
+    fn empieza(&self) {
+        let _ = self.analizar.set_enabled(false);
+        let _ = self.cancelar.set_enabled(true);
+        poner_fila(
+            &self.menu,
+            &self.cancelar,
+            &self.cancelar_puesta,
+            Some("Cancelar análisis"),
+        );
+    }
+
+    fn termina(&self) {
+        let _ = self.analizar.set_enabled(true);
+        poner_fila(&self.menu, &self.detalle, &self.detalle_puesta, None);
+        poner_fila(&self.menu, &self.cancelar, &self.cancelar_puesta, None);
+        let _ = self.informe.set_enabled(analisis::ruta_informe().exists());
+    }
+}
+
+/// Starts a scan of `ruta` and keeps the menu up to date until it ends.
+fn iniciar_analisis(
+    app: &tauri::AppHandle,
+    manager: &Arc<AnalisisManager>,
+    filas: &FilasAnalisis,
+    liberador: &Arc<Liberador>,
+    ruta: &std::path::Path,
+    nombre: &str,
+) {
+    if manager.is_running() {
+        return;
+    }
+    let pintor = app.try_state::<Arc<Pintor>>().map(|p| Arc::clone(&p));
+    let pintor_fin = pintor.clone();
+    let liberador_fin = Arc::clone(liberador);
+    let filas_fin = filas.clone();
+    let app_fin = app.clone();
+    // Held while writing the status line, and set once the scan is over: the
+    // progress thread and the start below must never overwrite the final
+    // summary.
+    let terminado = Arc::new(Mutex::new(false));
+    let terminado_fin = Arc::clone(&terminado);
+    // Before `start`, not after: a scan that ends at once would otherwise stop
+    // the sweep before it began, and leave it spinning for good.
+    if let Some(p) = pintor.as_ref() {
+        p.animar();
+    }
+    filas.empieza();
+    let inicio = manager.start(ruta, move |resultado| {
+        let mut fin = terminado_fin.lock().unwrap();
+        *fin = true;
+        let _ = filas_fin.estado.set_text(resultado.resumen());
+        filas_fin.termina();
+        drop(fin);
+        menu_nativo::aplicar(&app_fin);
+        if let Some(p) = pintor_fin {
+            p.parar();
+        }
+        liberador_fin.refrescar();
+    });
+    match inicio {
+        Ok(()) => {
+            let filas = filas.clone();
+            let manager = Arc::clone(manager);
+            let app = app.clone();
+            let poner = move |estado: &str, cuentas: Option<&str>| {
+                let fin = terminado.lock().unwrap();
+                if !*fin {
+                    let _ = filas.estado.set_text(estado);
+                    poner_fila(&filas.menu, &filas.detalle, &filas.detalle_puesta, cuentas);
+                    menu_nativo::aplicar(&app);
+                }
+                !*fin
+            };
+            poner(&format!("Analizando {nombre}…"), None);
+            std::thread::spawn(move || loop {
+                std::thread::sleep(Duration::from_secs(1));
+                let Some(p) = manager.progreso() else {
+                    if manager.is_running() {
+                        continue;
+                    }
+                    break;
+                };
+                let (estado, cuentas) = p.lineas();
+                if !poner(&estado, cuentas.as_deref()) {
+                    break;
+                }
+            });
+        }
+        Err(e) => {
+            if let Some(p) = pintor.as_ref() {
+                p.parar();
+            }
+            filas.termina();
+            let _ = filas.estado.set_text(format!("No se pudo iniciar: {e}"));
+            menu_nativo::aplicar(app);
         }
     }
 }
@@ -312,15 +445,47 @@ pub fn run() {
             let titulo_memoria = titulo("Memoria")?;
             let titulo_analisis = titulo("Análisis")?;
             let detalle_item = MenuItem::new(app, "", false, None::<&str>)?;
-            let analizar_item =
-                MenuItem::with_id(app, "analizar", "Analizar ahora", true, Some("Cmd+R"))?;
-            let estado_analisis_item = MenuItem::with_id(
+            let cancelar_item =
+                MenuItem::with_id(app, "cancelar", "Cancelar análisis", true, None::<&str>)?;
+            let informe_item = MenuItem::with_id(
                 app,
-                "estado_analisis",
-                "Sin análisis reciente",
-                false,
+                "ultimo_informe",
+                "Ver último resultado",
+                analisis::ruta_informe().exists(),
                 None::<&str>,
             )?;
+            let analizar_menu = Submenu::with_items(
+                app,
+                "Analizar",
+                true,
+                &[
+                    &MenuItem::with_id(
+                        app,
+                        "analizar:disco",
+                        "Disco completo",
+                        true,
+                        Some("Cmd+R"),
+                    )?,
+                    &MenuItem::with_id(
+                        app,
+                        "analizar:personal",
+                        "Carpeta personal",
+                        true,
+                        None::<&str>,
+                    )?,
+                    &MenuItem::with_id(
+                        app,
+                        "analizar:elegir",
+                        "Elegir carpeta…",
+                        true,
+                        None::<&str>,
+                    )?,
+                    &PredefinedMenuItem::separator(app)?,
+                    &informe_item,
+                ],
+            )?;
+            let estado_analisis_item =
+                MenuItem::with_id(app, ID_ESTADO, "Sin análisis reciente", false, None::<&str>)?;
             let abrir_item = MenuItem::with_id(
                 app,
                 "abrir",
@@ -345,13 +510,8 @@ pub fn run() {
                 None::<&str>,
             )?;
             let swap_inicial = memoria::swap_usado().map(gb).unwrap_or(0.0);
-            let swap_item = MenuItem::with_id(
-                app,
-                "swap",
-                memoria::texto_swap(swap_inicial, None),
-                false,
-                None::<&str>,
-            )?;
+            let swap_menu = Submenu::new(app, memoria::texto_swap(swap_inicial), true)?;
+            liberar::poner_filas(app.handle(), &swap_menu, &liberar::filas_swap(&[]));
             let quit_item = MenuItem::with_id(
                 app,
                 "quit",
@@ -421,10 +581,10 @@ pub fn run() {
             filas_menu.extend([
                 &sep1 as &dyn IsMenuItem<tauri::Wry>,
                 &titulo_memoria,
-                &swap_item,
+                &swap_menu,
                 &sep2,
                 &titulo_analisis,
-                &analizar_item,
+                &analizar_menu,
                 &estado_analisis_item,
                 &sep3,
                 &seguro_item,
@@ -463,7 +623,7 @@ pub fn run() {
             // app no se rompe -- pero el usuario tiene que saber por qué esa
             // opción está apagada.
             if !hay_motor {
-                let _ = analizar_item.set_enabled(false);
+                let _ = analizar_menu.set_enabled(false);
                 let _ = estado_analisis_item.set_text("Motor de análisis no encontrado");
             } else if !analisis::hay_acceso_total_al_disco() {
                 // Decirlo al arrancar y no al terminar: el escaneo del disco
@@ -497,15 +657,20 @@ pub fn run() {
                 let motor_web = motor.clone();
                 let abrir_item = abrir_item.clone();
                 let arranque_item = arranque_item.clone();
-                let analizar_item = analizar_item.clone();
-                let estado_analisis_item = estado_analisis_item.clone();
+                let filas_analisis = FilasAnalisis {
+                    menu: menu.clone(),
+                    analizar: analizar_menu.clone(),
+                    estado: estado_analisis_item.clone(),
+                    detalle: detalle_item.clone(),
+                    detalle_puesta: Arc::new(AtomicBool::new(false)),
+                    cancelar: cancelar_item.clone(),
+                    cancelar_puesta: Arc::new(AtomicBool::new(false)),
+                    informe: informe_item.clone(),
+                };
                 let ajustes = Arc::clone(&ajustes);
                 let dir_ajustes = dir_ajustes.clone();
                 let liberador = Arc::clone(&liberador);
                 let filas_categorias = filas_categorias.clone();
-                let menu = menu.clone();
-                let detalle_item = detalle_item.clone();
-                let detalle_puesto = Arc::new(AtomicBool::new(false));
                 tray_builder
                     .on_menu_event(move |app, event| {
                         let id = event.id().as_ref();
@@ -615,94 +780,77 @@ pub fn run() {
                                     }
                                 }
                             });
-                        } else if event.id() == "analizar" {
-                            if manager.is_running() {
-                                if manager.cancel() {
-                                    let _ = analizar_item.set_text("Cancelando…");
-                                    let _ = analizar_item.set_enabled(false);
-                                }
-                            } else {
-                                let analizar_item_fin = analizar_item.clone();
-                                let estado_analisis_item_fin = estado_analisis_item.clone();
-                                let pintor = app.try_state::<Arc<Pintor>>().map(|p| Arc::clone(&p));
-                                let pintor_fin = pintor.clone();
-                                let liberador_fin = Arc::clone(&liberador);
-                                // Held while writing the status line, and set
-                                // once the scan is over: the progress thread
-                                // and the start below must never overwrite
-                                // the final summary.
-                                let terminado = Arc::new(Mutex::new(false));
-                                let terminado_fin = Arc::clone(&terminado);
-                                let (menu_fin, detalle_fin, puesto_fin) = (
-                                    menu.clone(),
-                                    detalle_item.clone(),
-                                    Arc::clone(&detalle_puesto),
-                                );
-                                let app_fin = app.clone();
-                                // Before `start`, not after: a scan that ends
-                                // at once would otherwise stop the sweep before
-                                // it began, and leave it spinning for good.
-                                if let Some(p) = pintor.as_ref() {
-                                    p.animar();
-                                }
-                                let inicio = manager.start(move |resultado| {
-                                    let _ = analizar_item_fin.set_text("Analizar ahora");
-                                    let _ = analizar_item_fin.set_enabled(true);
-                                    let mut fin = terminado_fin.lock().unwrap();
-                                    *fin = true;
-                                    let _ = estado_analisis_item_fin.set_text(resultado.resumen());
-                                    poner_detalle(&menu_fin, &detalle_fin, &puesto_fin, None);
-                                    drop(fin);
-                                    menu_nativo::aplicar(&app_fin);
-                                    if let Some(p) = pintor_fin {
-                                        p.parar();
-                                    }
-                                    liberador_fin.refrescar();
-                                });
-                                match inicio {
-                                    Ok(()) => {
-                                        let _ = analizar_item.set_text("Cancelar análisis");
-                                        let item = estado_analisis_item.clone();
-                                        let manager = Arc::clone(&manager);
-                                        let (menu, detalle, puesto, app) = (
-                                            menu.clone(),
-                                            detalle_item.clone(),
-                                            Arc::clone(&detalle_puesto),
-                                            app.clone(),
+                        } else if let Some(que) = id.strip_prefix(liberar::PREFIJO_CERRAR) {
+                            let que = que.to_string();
+                            app.dialog()
+                                .message(
+                                    "Se cierra como si eligieras Salir: te preguntará si quieres \
+                                     guardar lo que tengas abierto.\n\nEl swap puede tardar en \
+                                     bajar. Si no baja, solo se libera al reiniciar.",
+                                )
+                                .title(format!("¿Cerrar {que}?"))
+                                .kind(MessageDialogKind::Warning)
+                                .buttons(MessageDialogButtons::OkCancelCustom(
+                                    "Cerrar".into(),
+                                    "Cancelar".into(),
+                                ))
+                                .show(move |acepta| {
+                                    if acepta && !memoria::cerrar(&que) {
+                                        notificar::enviar(
+                                            empaquetada,
+                                            &format!("No se pudo cerrar {que}"),
+                                            "Puede que ya estuviera cerrada.",
                                         );
-                                        let poner = move |estado: &str, cuentas: Option<&str>| {
-                                            let fin = terminado.lock().unwrap();
-                                            if !*fin {
-                                                let _ = item.set_text(estado);
-                                                poner_detalle(&menu, &detalle, &puesto, cuentas);
-                                                menu_nativo::aplicar(&app);
-                                            }
-                                            !*fin
-                                        };
-                                        poner("Analizando disco completo…", None);
-                                        std::thread::spawn(move || loop {
-                                            std::thread::sleep(Duration::from_secs(1));
-                                            let Some(p) = manager.progreso() else {
-                                                if manager.is_running() {
-                                                    continue;
-                                                }
-                                                break;
-                                            };
-                                            let (estado, cuentas) = p.lineas();
-                                            if !poner(&estado, cuentas.as_deref()) {
-                                                break;
-                                            }
-                                        });
                                     }
-                                    Err(e) => {
-                                        if let Some(p) = pintor.as_ref() {
-                                            p.parar();
-                                        }
-                                        let _ = estado_analisis_item
-                                            .set_text(format!("No se pudo iniciar: {e}"));
-                                    }
-                                }
+                                });
+                        } else if event.id() == "cancelar" {
+                            if manager.cancel() {
+                                let _ = filas_analisis.cancelar.set_text("Cancelando…");
+                                let _ = filas_analisis.cancelar.set_enabled(false);
                             }
+                        } else if event.id() == "ultimo_informe" {
+                            let _ = tauri_plugin_opener::open_path(
+                                analisis::ruta_informe(),
+                                None::<&str>,
+                            );
+                        } else if event.id() == "analizar:disco" {
+                            iniciar_analisis(
+                                app,
+                                &manager,
+                                &filas_analisis,
+                                &liberador,
+                                std::path::Path::new(analisis::RUTA_DISCO),
+                                "disco completo",
+                            );
+                        } else if event.id() == "analizar:personal" {
+                            let home = std::env::var("HOME").unwrap_or_default();
+                            iniciar_analisis(
+                                app,
+                                &manager,
+                                &filas_analisis,
+                                &liberador,
+                                std::path::Path::new(&home),
+                                "carpeta personal",
+                            );
+                        } else if event.id() == "analizar:elegir" {
+                            let (app, manager, filas, liberador) = (
+                                app.clone(),
+                                Arc::clone(&manager),
+                                filas_analisis.clone(),
+                                Arc::clone(&liberador),
+                            );
+                            app.clone().dialog().file().pick_folder(move |carpeta| {
+                                let Some(ruta) = carpeta.and_then(|c| c.into_path().ok()) else {
+                                    return;
+                                };
+                                let nombre = ruta
+                                    .file_name()
+                                    .map(|n| n.to_string_lossy().into_owned())
+                                    .unwrap_or_else(|| ruta.to_string_lossy().into_owned());
+                                iniciar_analisis(
+                                    &app, &manager, &filas, &liberador, &ruta, &nombre,
+                                );
+                            });
                         }
                     })
                     .build(app)?
@@ -752,7 +900,8 @@ pub fn run() {
                 let libre_item = libre_item.clone();
                 let filas_categorias = filas_categorias.clone();
                 let app_poller = app.handle().clone();
-                let swap_item = swap_item.clone();
+                let swap_menu = swap_menu.clone();
+                let mut filas_swap = liberar::filas_swap(&[]);
                 let libre_inicial = lectura_inicial.map(|u| gb(u.available)).unwrap_or(f64::MAX);
                 let (mut vigia, aviso_inicial) = avisos::Vigia::al_arrancar(libre_inicial);
                 let mut culpable: Option<String> = None;
@@ -768,7 +917,7 @@ pub fn run() {
                         notificar::enviar(empaquetada, &titulo, &cuerpo);
                     };
                     if let Some(aviso) = aviso_inicial {
-                        culpable = memoria::medir_culpable().map(|(app, _)| app);
+                        culpable = memoria::medir_culpables(0).and_then(|(app, _)| app);
                         notificar(&aviso, &culpable);
                     }
                     loop {
@@ -777,13 +926,16 @@ pub fn run() {
                         let swap_gb = memoria::swap_usado().map(gb).unwrap_or(0.0);
                         if swap_gb >= memoria::UMBRAL_SWAP_GB {
                             if culpable.is_none() || tick.is_multiple_of(TICKS_POR_CULPABLE) {
-                                culpable = memoria::medir_culpable().map(|(app, _)| app);
+                                let (app, cerrables) =
+                                    memoria::medir_culpables(APPS_DE_SWAP).unwrap_or_default();
+                                culpable = app;
+                                poner_swap(&app_poller, &swap_menu, &mut filas_swap, &cerrables);
                             }
                         } else {
                             culpable = None;
+                            poner_swap(&app_poller, &swap_menu, &mut filas_swap, &[]);
                         }
-                        let _ =
-                            swap_item.set_text(memoria::texto_swap(swap_gb, culpable.as_deref()));
+                        let _ = swap_menu.set_text(memoria::texto_swap(swap_gb));
                         match disk::read() {
                             Some(usage) => {
                                 let _ = libre_item.set_text(texto_libre(&usage));

@@ -249,6 +249,18 @@ y con el porcentaje en el centro. Se regenera con
 `./desktop/tools/gen_icono_app.sh` (necesita Chrome y node); los ficheros de
 `desktop/src-tauri/icons/` son su salida versionada.
 
+## Swap y Analizar desde el menú
+
+**Swap** no borra nada: el archivo de swap lo gestiona macOS. Su submenú ofrece
+cerrar las tres apps que más retienen, nunca una de `/System` ni esta misma, con
+confirmación y de forma normal: la app puede preguntar si guardar o negarse. El swap
+puede tardar en bajar, o no bajar hasta reiniciar.
+
+**Analizar** escanea el disco completo (⌘R), la carpeta personal o una carpeta a
+elegir. **Ver último resultado** abre el informe HTML del último análisis del menú
+(`~/.disk-analyzer/ultimo-informe.html`). No es el analizador web: esos análisis no
+pasan por el servidor, así que el analizador no los conoce.
+
 ## El formato del menú
 
 Tauri solo sabe de títulos planos, así que `menu_nativo.rs` escribe sobre el
