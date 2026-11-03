@@ -11,7 +11,9 @@ import sys
 import tempfile
 from pathlib import Path
 
-from disk_analyzer_core import CATEGORIAS_RAPIDAS, CONSECUENCIAS, limpiezas_rapidas
+from disk_analyzer_core import (
+    CATEGORIAS_RAPIDAS, CONSECUENCIAS, DiskAnalyzerCore, limpiezas_rapidas,
+)
 
 RAIZ = Path(__file__).resolve().parent.parent
 MB = 1024 * 1024
@@ -28,8 +30,9 @@ def _rec(id_: str, **extra):
 def test_solo_pasa_lo_que_vuelve_solo_y_la_papelera():
     recs = [_rec(i) for i in CONSECUENCIAS]
     ids = {r['id'] for r in limpiezas_rapidas(recs)}
-    assert ids == {i for i, c in CONSECUENCIAS.items() if c in ('regenera', 'permanente')}
-    assert 'docker' not in ids, "lo que hay que redescargar se queda en el analizador"
+    assert ids == set(CATEGORIAS_RAPIDAS)
+    assert 'descargas_antiguas' not in ids
+    assert 'docker' not in ids, "docker system prune -a mezcla y solo va con revisión"
 
 
 def test_cada_limpieza_dice_bajo_que_categoria_del_menu_va():
@@ -79,7 +82,7 @@ def _comprobar_cli(home: Path):
 
     proc = subprocess.run(
         [sys.executable, str(RAIZ / 'disk_analyzer.py'), '--limpieza-rapida'],
-        cwd=RAIZ, env={**os.environ, 'HOME': str(home)},
+        cwd=RAIZ, env={**os.environ, 'HOME': str(home), 'PATH': '/usr/bin:/bin'},
         capture_output=True, text=True, timeout=60)
 
     assert proc.returncode == 0, proc.stderr
@@ -91,3 +94,56 @@ def _comprobar_cli(home: Path):
     subprocess.run(['/bin/sh', '-c', salida[0]['command']], check=True)
     assert list(logs.iterdir()) == []
     assert (home / 'Documents' / 'notas.log').exists()
+
+
+DF = """TYPE            TOTAL     ACTIVE    SIZE      RECLAIMABLE
+Images          10        2         20GB      14GB (70%)
+Containers      3         1         1GB       512MB (50%)
+Local Volumes   5         1         30GB      25GB (83%)
+Build Cache     40        0         8GB       8GB
+"""
+
+
+def _con_docker_falso(tmp_path, monkeypatch, salida_version=0):
+    bin_dir = tmp_path / 'bin'
+    bin_dir.mkdir()
+    falso = bin_dir / 'docker'
+    falso.write_text(
+        '#!/bin/sh\n'
+        f'if [ "$1" = version ]; then exit {salida_version}; fi\n'
+        f"cat <<'FIN'\n{DF}FIN\n")
+    falso.chmod(0o755)
+    monkeypatch.setenv('PATH', f"{bin_dir}:{os.environ['PATH']}")
+
+
+def _reglas_docker():
+    return DiskAnalyzerCore(str(Path.home()))._reglas_docker_rapidas()
+
+
+def test_docker_se_ofrece_en_dos_partes_que_no_se_solapan(tmp_path, monkeypatch):
+    _con_docker_falso(tmp_path, monkeypatch)
+    reglas = {r['id']: r for r in _reglas_docker()}
+
+    assert set(reglas) == {'docker_build', 'docker_imagenes'}
+    assert reglas['docker_build']['consecuencia'] == 'regenera'
+    assert reglas['docker_build']['command'].startswith('docker builder prune')
+    assert reglas['docker_imagenes']['consecuencia'] == 'redescarga'
+    assert 'builder' not in reglas['docker_imagenes']['command']
+
+
+def test_la_cifra_de_docker_no_cuenta_los_volumenes(tmp_path, monkeypatch):
+    _con_docker_falso(tmp_path, monkeypatch)
+    reglas = {r['id']: r for r in _reglas_docker()}
+    assert reglas['docker_imagenes']['space'] < 15 * 1024 * MB
+
+
+def test_nada_del_menu_toca_un_volumen_de_docker(tmp_path, monkeypatch):
+    _con_docker_falso(tmp_path, monkeypatch)
+    for r in _reglas_docker():
+        assert 'volume' not in r['command']
+        assert 'system prune' not in r['command']
+
+
+def test_con_el_daemon_apagado_no_se_ofrece_nada_de_docker(tmp_path, monkeypatch):
+    _con_docker_falso(tmp_path, monkeypatch, salida_version=1)
+    assert _reglas_docker() == []

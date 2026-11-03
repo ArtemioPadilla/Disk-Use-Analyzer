@@ -74,6 +74,8 @@ CONSECUENCIAS: Dict[str, str] = {
     'simuladores': 'regenera',
     'descargas_antiguas': 'solo_lista',
     'docker': 'redescarga',
+    'docker_build': 'regenera',
+    'docker_imagenes': 'redescarga',
     'caches_de_apps': 'regenera',
     'cache_general': 'solo_lista',
     'xcode_deriveddata': 'regenera',
@@ -83,9 +85,9 @@ CONSECUENCIAS: Dict[str, str] = {
 }
 
 # What the menu-bar app may offer from its own menu, still behind a native
-# confirmation. 'redescarga' stays out: Docker images are a decision for the
-# full analyzer, where the user sees which ones go.
-CONSECUENCIAS_RAPIDAS = ('regenera', 'permanente')
+# confirmation. 'redescarga' only reaches it through the two narrow Docker
+# rules: `CATEGORIAS_RAPIDAS` is the list of what the menu can show.
+CONSECUENCIAS_RAPIDAS = ('regenera', 'redescarga', 'permanente')
 
 # Which row of the menu each rule goes under: the same parts as the tray ring.
 # A rule the menu may offer and is missing here fails loudly.
@@ -95,6 +97,8 @@ CATEGORIAS_RAPIDAS: Dict[str, str] = {
     'vscode': 'caches',
     'npm': 'caches',
     'caches_de_apps': 'caches',
+    'docker_build': 'docker',
+    'docker_imagenes': 'docker',
     'papelera': 'tuyo',
     'simuladores': 'resto',
     'xcode_deriveddata': 'resto',
@@ -112,13 +116,14 @@ def limpiezas_rapidas(recomendaciones: List[Dict]) -> List[Dict]:
     """The recommendations the menu-bar app can run, in menu order.
 
     Whatever comes back here reaches a menu item, so the filter is strict:
-    only 'regenera' and 'permanente', never a 'solo_lista' rule, and never a
-    command that is empty or a shell comment. What comes back by itself goes
-    first, largest first; the Trash goes last because it cannot be undone.
+    only the rules with a place in the menu, never a 'solo_lista' one, and
+    never a command that is empty or a shell comment. What comes back by itself
+    goes first, largest first; the Trash goes last because it cannot be undone.
     """
     elegidas = [
         r for r in recomendaciones
         if r.get('consecuencia') in CONSECUENCIAS_RAPIDAS
+        and r.get('id') in CATEGORIAS_RAPIDAS
         and r.get('efecto') != 'solo_lista'
         and (r.get('command') or '').strip()
         and not r['command'].lstrip().startswith('#')
@@ -360,7 +365,38 @@ class DiskAnalyzerCore:
         """
         rapidos = [d for d in CACHE_DIRS if not any(x in d for x in _NO_RAPIDOS)]
         self.find_cache_locations(rapidos)
-        return limpiezas_rapidas(self.generate_recommendations())
+        return limpiezas_rapidas(self.generate_recommendations() + self._reglas_docker_rapidas())
+
+    def _reglas_docker_rapidas(self) -> List[Dict]:
+        """What the menu offers for Docker, in two parts that do not overlap.
+
+        Not the web's `docker` rule: `docker system prune -a` mixes what comes
+        back by itself with what has to be downloaded again, and its figure
+        counts volumes it does not delete. Neither command here ever touches a
+        volume: they hold the containers' data, which does not come back.
+        """
+        stats = self.analyze_docker()
+        if not stats.get('available'):
+            return []
+        construccion = stats['build_cache'].get('reclaimable', 0)
+        imagenes = (stats['images'].get('reclaimable', 0)
+                    + stats['containers'].get('reclaimable', 0))
+        reglas = []
+        if construccion > 100 * MB:
+            reglas.append({
+                'id': 'docker_build', 'type': 'Caché de build',
+                'description': 'Capas intermedias de docker build',
+                'space': construccion, 'efecto': 'irreversible',
+                'consecuencia': CONSECUENCIAS['docker_build'],
+                'command': 'docker builder prune -a -f'})
+        if imagenes > 100 * MB:
+            reglas.append({
+                'id': 'docker_imagenes', 'type': 'Imágenes sin usar',
+                'description': 'Imágenes sin usar y contenedores parados',
+                'space': imagenes, 'efecto': 'irreversible',
+                'consecuencia': CONSECUENCIAS['docker_imagenes'],
+                'command': 'docker container prune -f && docker image prune -a -f'})
+        return reglas
 
     def find_cache_locations(self, cache_dirs: Optional[List[str]] = None):
         """Busca ubicaciones de cache conocidas"""
@@ -489,7 +525,7 @@ class DiskAnalyzerCore:
                         return docker_stats
             
             self._update_progress("Connecting to Docker daemon...", 91, phase="docker_analysis")
-            result = subprocess.run([docker_cmd, 'version'], capture_output=True, text=True)
+            result = subprocess.run([docker_cmd, 'version'], capture_output=True, text=True, timeout=20)
             if result.returncode != 0:
                 self._update_progress("Docker daemon not running", 95, phase="docker_analysis")
                 return docker_stats
@@ -499,7 +535,7 @@ class DiskAnalyzerCore:
             
             # Obtener información del sistema Docker
             self._update_progress("Analyzing Docker resources...", 93, phase="docker_analysis")
-            result = subprocess.run([docker_cmd, 'system', 'df'], capture_output=True, text=True)
+            result = subprocess.run([docker_cmd, 'system', 'df'], capture_output=True, text=True, timeout=20)
             if result.returncode == 0:
                 lines = result.stdout.strip().split('\n')
                 for line in lines[1:]:  # Skip header

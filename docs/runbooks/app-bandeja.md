@@ -262,6 +262,10 @@ comprobadas en pantalla en macOS 27, están en
 
 Cada categoría del menú abre sus acciones al pasar el cursor, con su tamaño:
 
+- **Docker**: la caché de build, que vuelve sola, y las imágenes sin usar con los
+  contenedores parados, que hay que volver a descargar. Nada toca los volúmenes. Con el
+  daemon apagado no ofrece nada. Docker guarda todo en una imagen de disco, así que lo
+  liberado puede tardar en verse.
 - **Cachés**: cada caché por separado y, con más de una, **Limpiar todas**.
 - **Tus archivos**: la papelera, bajo **No vuelve**, y enlaces a los archivos más
   grandes y las descargas más antiguas en el analizador, donde se elige uno por uno.
