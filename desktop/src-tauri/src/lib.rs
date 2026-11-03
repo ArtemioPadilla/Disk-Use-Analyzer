@@ -297,21 +297,14 @@ pub fn run() {
             let filas_categorias: FilasCategorias = Categoria::TODAS
                 .iter()
                 .map(|c| {
-                    let m = Submenu::with_id_and_icon(
+                    Submenu::with_id_and_icon(
                         app,
                         format!("categoria:{}", c.nombre()),
                         format!("{}\t…", c.nombre()),
                         true,
                         icono_punto(*c, &ajustes_iniciales.paleta.colores()),
-                    )?;
-                    m.append(&MenuItem::with_id(
-                        app,
-                        "abrir",
-                        "Abrir analizador completo",
-                        true,
-                        None::<&str>,
-                    )?)?;
-                    Ok((*c, m))
+                    )
+                    .map(|m| (*c, m))
                 })
                 .collect::<tauri::Result<_>>()?;
             let titulo = |t: &str| MenuItem::new(app, t, false, None::<&str>);
@@ -402,7 +395,13 @@ pub fn run() {
                 &como_menu(&etiqueta_items),
             )?;
             let paleta_menu = Submenu::with_items(app, "Colores", true, &como_menu(&paleta_items))?;
-            let liberar_menu = Submenu::new(app, "Liberar espacio", true)?;
+            let seguro_item = MenuItem::with_id(
+                app,
+                format!("{}{}", liberar::PREFIJO, liberar::TODO),
+                "Midiendo lo que se puede liberar…",
+                false,
+                None::<&str>,
+            )?;
 
             let ajustes_menu = Submenu::with_items(
                 app,
@@ -428,7 +427,7 @@ pub fn run() {
                 &analizar_item,
                 &estado_analisis_item,
                 &sep3,
-                &liberar_menu,
+                &seguro_item,
                 &abrir_item,
                 &sep4,
                 &ajustes_menu,
@@ -452,7 +451,12 @@ pub fn run() {
             // just the "quit" menu item.
             app.manage(Arc::clone(&manager));
             app.manage(Arc::clone(&servidor));
-            let liberador = Liberador::new(app.handle().clone(), liberar_menu, motor.clone());
+            let liberador = Liberador::new(
+                app.handle().clone(),
+                filas_categorias.clone(),
+                seguro_item,
+                motor.clone(),
+            );
 
             // Decirlo desde el arranque, no solo al pulsar: sin motor, el
             // indicador de disco sigue siendo perfectamente útil, así que la
@@ -556,10 +560,7 @@ pub fn run() {
                             // whether RunEvent::ExitRequested also fires.
                             manager.kill_blocking();
                             app.exit(0);
-                        } else if let Some(que) = id
-                            .strip_prefix(liberar::PREFIJO)
-                            .filter(|q| *q != liberar::REVISAR)
-                        {
+                        } else if let Some(que) = id.strip_prefix(liberar::PREFIJO) {
                             let Some(pintor) = app.try_state::<Arc<Pintor>>() else {
                                 return;
                             };
@@ -577,9 +578,22 @@ pub fn run() {
                                     }
                                 },
                             );
+                        } else if let Some(que) = id.strip_prefix(liberar::PREFIJO_EXTERNO) {
+                            let home = std::env::var("HOME").unwrap_or_default();
+                            if let Some(destino) = liberar::externo_de(que, &home) {
+                                let _ = if destino.starts_with('/') {
+                                    tauri_plugin_opener::open_path(destino, None::<&str>)
+                                } else {
+                                    tauri_plugin_opener::open_url(destino, None::<&str>)
+                                };
+                            }
                         } else if event.id() == "abrir"
-                            || id == format!("{}{}", liberar::PREFIJO, liberar::REVISAR)
+                            || id.starts_with(liberar::PREFIJO_ANALIZADOR)
                         {
+                            let pagina = id
+                                .strip_prefix(liberar::PREFIJO_ANALIZADOR)
+                                .unwrap_or("/")
+                                .to_string();
                             // Arrancar FastAPI lleva varios segundos, así que
                             // el ítem lo dice en vez de parecer que el clic no
                             // hizo nada.
@@ -591,7 +605,10 @@ pub fn run() {
                                 match resultado {
                                     Ok(url) => {
                                         let _ = volver.set_text("Abrir analizador completo");
-                                        let _ = tauri_plugin_opener::open_url(url, None::<&str>);
+                                        let _ = tauri_plugin_opener::open_url(
+                                            liberar::url_en(&url, &pagina),
+                                            None::<&str>,
+                                        );
                                     }
                                     Err(e) => {
                                         let _ = volver.set_text(format!("No se pudo abrir: {e}"));

@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useMemo } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { on, emit } from '../lib/events';
 import { api, type LargeFile, type SessionResults } from '../lib/api';
+import { authHeaders } from '../lib/auth';
 import { formatBytes, formatAge, describePath } from '../lib/format';
 import { getCategory } from '../lib/categories';
 
@@ -15,7 +16,12 @@ export default function FileTable() {
 
   const [files, setFiles] = useState<LargeFile[]>([]);
   const [search, setSearch] = useState(initialSearch);
-  const [sortKey, setSortKey] = useState<SortKey>('size');
+  const [sortKey, setSortKey] = useState<SortKey>(() =>
+    typeof window !== 'undefined' &&
+    new URLSearchParams(window.location.search).get('orden') === 'antiguedad'
+      ? 'age_days'
+      : 'size',
+  );
   const [sortDir, setSortDir] = useState<SortDir>('desc');
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [viewMode, setViewMode] = useState<'flat' | 'grouped'>('flat');
@@ -26,6 +32,14 @@ export default function FileTable() {
       const allFiles = data.results.flatMap(r => r.report.large_files);
       setFiles(allFiles);
     });
+    // A direct link (the menu-bar app opens this page) arrives with nothing
+    // loaded: same source as the Dashboard, the latest results.
+    fetch('/api/analysis/latest', { headers: authHeaders() })
+      .then(r => (r.ok ? r.json() : null))
+      .then((data: SessionResults | null) => {
+        if (data?.results) setFiles(data.results.flatMap(r => r.report.large_files));
+      })
+      .catch(() => {});
     return off;
   }, []);
 
