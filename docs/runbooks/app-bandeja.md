@@ -284,6 +284,11 @@ Cada categoría del menú abre sus acciones al pasar el cursor, con su tamaño:
 - **Sistema y otros**: lo que el motor proponga, como DerivedData de Xcode; si no
   propone nada, solo el desglose y Almacenamiento de macOS.
 
+Mientras borra, la fila de **Liberar lo seguro** dice el paso y lo liberado, por
+ejemplo "Liberando 2 de 4: Cache de npm · 5,0 GB de 12 GB". La primera cifra se mide
+cada segundo en el disco, así que puede ir por detrás del borrado o moverse si otra
+app escribe; la segunda es la estimación del motor.
+
 **Liberar lo seguro…** ejecuta lo que vuelve solo de una vez. Nunca incluye la papelera
 ni Docker. Solo Cachés ofrece limpiar todo.
 

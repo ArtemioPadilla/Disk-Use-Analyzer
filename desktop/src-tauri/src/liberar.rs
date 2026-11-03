@@ -13,7 +13,7 @@
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use serde::Deserialize;
 use tauri::menu::{IsMenuItem, MenuItem, PredefinedMenuItem, Submenu};
@@ -436,18 +436,86 @@ fn path_con_herramientas() -> String {
     )
 }
 
-/// Runs the chosen cleanups one after another and measures the result.
-pub fn ejecutar(elegidas: &[Limpieza]) -> Hecho {
+/// How far a run has got. `liberado` is measured on the disk, like the final
+/// figure; `objetivo` is the engine's estimate.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Avance {
+    pub paso: usize,
+    pub pasos: usize,
+    pub titulo: String,
+    pub liberado: u64,
+    pub objetivo: u64,
+}
+
+impl Avance {
+    /// One line for the menu. The estimate can fall short, so once the
+    /// measured figure passes it only the measured figure is shown.
+    pub fn texto(&self) -> String {
+        let cuenta = if self.pasos > 1 {
+            format!("{} de {}: ", self.paso, self.pasos)
+        } else {
+            String::new()
+        };
+        let cifras = if self.liberado > self.objetivo {
+            format!("{} liberados", tamano(self.liberado))
+        } else {
+            format!("{} de {}", tamano(self.liberado), tamano(self.objetivo))
+        };
+        format!("Liberando {cuenta}{} · {cifras}", self.titulo)
+    }
+}
+
+/// How often the free space is measured during a run. Reading it costs next to
+/// nothing (see `POLL_INTERVAL` in `lib.rs`).
+const INTERVALO_AVANCE: Duration = Duration::from_secs(1);
+
+/// Runs the chosen cleanups one after another and measures the result, telling
+/// `al_avanzar` how it goes: when each one starts, and every second while it
+/// runs, since a single `rm -rf` of a big cache can take minutes.
+pub fn ejecutar<A>(elegidas: &[Limpieza], al_avanzar: A) -> Hecho
+where
+    A: Fn(&Avance) + Sync,
+{
     let antes = disk::read().map(|u| u.available);
+    let objetivo: u64 = elegidas.iter().map(|l| l.space).sum();
+    let medido = || match (antes, disk::read().map(|u| u.available)) {
+        (Some(a), Some(d)) => d.saturating_sub(a),
+        _ => 0,
+    };
     let mut fallos = Vec::new();
-    for l in elegidas {
-        let r = Command::new("/bin/sh")
-            .arg("-c")
-            .arg(&l.command)
-            .env("PATH", path_con_herramientas())
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .output();
+    for (i, l) in elegidas.iter().enumerate() {
+        let avisar = || {
+            al_avanzar(&Avance {
+                paso: i + 1,
+                pasos: elegidas.len(),
+                titulo: l.titulo.clone(),
+                liberado: medido(),
+                objetivo,
+            })
+        };
+        avisar();
+        let termino = AtomicBool::new(false);
+        let r = std::thread::scope(|hilos| {
+            hilos.spawn(|| {
+                let mut ultimo = Instant::now();
+                while !termino.load(Ordering::SeqCst) {
+                    std::thread::sleep(Duration::from_millis(50));
+                    if ultimo.elapsed() >= INTERVALO_AVANCE {
+                        ultimo = Instant::now();
+                        avisar();
+                    }
+                }
+            });
+            let r = Command::new("/bin/sh")
+                .arg("-c")
+                .arg(&l.command)
+                .env("PATH", path_con_herramientas())
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .output();
+            termino.store(true, Ordering::SeqCst);
+            r
+        });
         match r {
             Ok(o) if o.status.success() => {}
             Ok(o) => fallos.push((
@@ -460,13 +528,8 @@ pub fn ejecutar(elegidas: &[Limpieza]) -> Hecho {
     // APFS frees blocks asynchronously; a moment's wait keeps the measured
     // figure from coming out short.
     std::thread::sleep(Duration::from_secs(1));
-    let despues = disk::read().map(|u| u.available);
-    let liberado = match (antes, despues) {
-        (Some(a), Some(d)) => d.saturating_sub(a),
-        _ => 0,
-    };
     Hecho {
-        liberado,
+        liberado: medido(),
         fallos,
         docker: elegidas.iter().any(|l| l.esta_en(Categoria::Docker)),
     }
@@ -576,10 +639,16 @@ impl Liberador {
                 yo.poner(&[], Some("Liberando espacio…"));
                 std::thread::spawn(move || {
                     al_empezar();
-                    let hecho = ejecutar(&elegidas);
+                    let hecho = ejecutar(&elegidas, |avance| {
+                        let _ = yo.fila_seguro.set_text(avance.texto());
+                        menu_nativo::aplicar(&yo.app);
+                    });
+                    // Before measuring again, which takes about ten seconds:
+                    // the result is already known.
+                    al_terminar(&hecho);
+                    yo.poner(&[], Some("Midiendo lo que se puede liberar…"));
                     yo.ocupado.store(false, Ordering::SeqCst);
                     yo.refrescar();
-                    al_terminar(&hecho);
                 });
             });
     }
@@ -807,11 +876,59 @@ mod tests {
         assert!(c.contains("Caché de npm: npm: command not found"));
     }
 
+    fn avance(paso: usize, pasos: usize, liberado: u64, objetivo: u64) -> Avance {
+        Avance {
+            paso,
+            pasos,
+            titulo: "Cache de npm".into(),
+            liberado,
+            objetivo,
+        }
+    }
+
+    #[test]
+    fn el_avance_dice_el_paso_y_lo_liberado_de_lo_estimado() {
+        assert_eq!(
+            avance(2, 4, 5 * GB, 12 * GB).texto(),
+            "Liberando 2 de 4: Cache de npm · 5,0 GB de 12 GB"
+        );
+        assert_eq!(
+            avance(1, 1, GB / 2, GB).texto(),
+            "Liberando Cache de npm · 512 MB de 1,0 GB"
+        );
+    }
+
+    #[test]
+    fn si_se_libera_mas_de_lo_estimado_solo_da_lo_medido() {
+        assert_eq!(
+            avance(1, 1, 3 * GB, GB).texto(),
+            "Liberando Cache de npm · 3,0 GB liberados"
+        );
+    }
+
+    #[test]
+    fn ejecutar_avisa_al_empezar_cada_paso_y_mientras_dura() {
+        let mut lenta = l("lenta", REGENERA, GB);
+        lenta.command = "sleep 3.5".into();
+        let mut rapida = l("rapida", REGENERA, GB);
+        rapida.command = "true".into();
+        let vistos = Mutex::new(Vec::new());
+
+        ejecutar(&[lenta, rapida], |a| {
+            vistos.lock().unwrap().push((a.paso, a.pasos, a.objetivo));
+        });
+
+        let vistos = vistos.into_inner().unwrap();
+        let del_primero = vistos.iter().filter(|v| v.0 == 1).count();
+        assert!(del_primero >= 3, "al empezar y cada segundo: {vistos:?}");
+        assert_eq!(vistos.last(), Some(&(2, 2, 2 * GB)));
+    }
+
     #[test]
     fn ejecutar_informa_del_error_de_un_comando_que_falla() {
         let mut malo = l("x", REGENERA, 1);
         malo.command = "echo 'algo salió mal' >&2; exit 3".into();
-        let h = ejecutar(&[malo]);
+        let h = ejecutar(&[malo], |_| {});
         assert_eq!(h.fallos, vec![("T-x".into(), "algo salió mal".into())]);
     }
 }
