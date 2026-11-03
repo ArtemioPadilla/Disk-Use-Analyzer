@@ -143,14 +143,18 @@ pub fn medir_culpable() -> Option<(String, u64)> {
 /// ordinary macOS housekeeping, not a cause of a full disk.
 pub const UMBRAL_SWAP_GB: f64 = 4.0;
 
+fn cifra(swap_gb: f64) -> String {
+    format!("{swap_gb:.1}").replace('.', ",")
+}
+
 /// The menu line for swap. Names the app only once swap is big enough to
 /// matter, so the line does not point fingers at normal usage.
 pub fn texto_swap(swap_gb: f64, culpable: Option<&str>) -> String {
     match culpable {
         Some(app) if swap_gb >= UMBRAL_SWAP_GB => {
-            format!("Swap: {swap_gb:.1} GB · lo retiene {app}")
+            format!("Swap {} GB · lo retiene {app}", cifra(swap_gb))
         }
-        _ => format!("Swap: {swap_gb:.1} GB"),
+        _ => format!("Swap {} GB", cifra(swap_gb)),
     }
 }
 
@@ -242,12 +246,12 @@ mod tests {
 
     #[test]
     fn la_linea_de_swap_solo_senala_culpable_si_el_swap_importa() {
-        assert_eq!(texto_swap(0.4, Some("Visual Studio Code")), "Swap: 0.4 GB");
+        assert_eq!(texto_swap(0.4, Some("Visual Studio Code")), "Swap 0,4 GB");
         assert_eq!(
             texto_swap(11.7, Some("Visual Studio Code")),
-            "Swap: 11.7 GB · lo retiene Visual Studio Code"
+            "Swap 11,7 GB · lo retiene Visual Studio Code"
         );
-        assert_eq!(texto_swap(11.7, None), "Swap: 11.7 GB");
+        assert_eq!(texto_swap(11.7, None), "Swap 11,7 GB");
     }
 
     #[test]

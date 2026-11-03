@@ -17,13 +17,14 @@ pub mod disk;
 pub mod estado;
 pub mod liberar;
 pub mod memoria;
+pub mod menu_nativo;
 pub mod notificar;
 pub mod progreso;
 pub mod servidor;
 
 use ajustes::{Ajustes, Etiqueta, PaletaId};
 use analisis::AnalisisManager;
-use categorias::Reparto;
+use categorias::{Categoria, Reparto};
 use disk::DiskUsage;
 use liberar::Liberador;
 use servidor::Servidor;
@@ -86,31 +87,73 @@ fn gb(bytes: u64) -> f64 {
     bytes as f64 / (1024.0 * 1024.0 * 1024.0)
 }
 
-fn texto_uso(u: &DiskUsage) -> String {
-    format!(
-        "Uso: {:.1} GB / {:.1} GB ({:.0}%)",
-        gb(u.used),
-        gb(u.total),
-        u.percent
-    )
+fn cifra(bytes: u64) -> String {
+    format!("{:.1}", gb(bytes)).replace('.', ",")
 }
 
-/// The absolute free-space figure gets its own menu line, not just a
-/// percentage: it's the number that actually drives `estado::classify`'s
-/// thresholds (25 GB / 75 GB), so it's the one that explains *why* the icon
-/// is the color it is.
+/// The free figure leads: it's the number that actually drives
+/// `estado::classify`'s thresholds (25 GB / 75 GB), so it's the one that
+/// explains *why* the icon is the color it is.
 fn texto_libre(u: &DiskUsage) -> String {
+    let base = format!("{} GB libres de {} GB", cifra(u.available), cifra(u.total));
     // Purgeable space is shown apart, never added to the free figure: like
     // swap, it is disk the user can neither see in Finder nor delete, and
     // macOS gives it back only when it decides to.
     if gb(u.purgeable) >= 1.0 {
-        format!(
-            "Libre: {:.1} GB (+{:.1} GB purgables)",
-            gb(u.available),
-            gb(u.purgeable)
-        )
+        format!("{base} (+{} GB purgables)", cifra(u.purgeable))
     } else {
-        format!("Libre: {:.1} GB", gb(u.available))
+        base
+    }
+}
+
+fn color_de(c: Categoria, colores: &ajustes::Colores) -> ajustes::Rgb {
+    match c {
+        Categoria::Docker => colores.docker,
+        Categoria::Caches => colores.caches,
+        Categoria::Tuyo => colores.tuyo,
+        Categoria::Resto => colores.resto,
+    }
+}
+
+fn icono_punto(c: Categoria, colores: &ajustes::Colores) -> Option<Image<'static>> {
+    Image::from_bytes(&anillo::png_punto(color_de(c, colores))?).ok()
+}
+
+/// One menu row per category, in the ring's order.
+type FilasCategorias = Vec<(Categoria, Submenu<tauri::Wry>)>;
+
+fn poner_puntos(filas: &FilasCategorias, colores: &ajustes::Colores) {
+    for (c, item) in filas {
+        let _ = item.set_icon(icono_punto(*c, colores));
+    }
+}
+
+/// Adds or removes the second line of the scan status. There is no hidden
+/// state for a menu item, and an empty line would look like a glitch.
+fn poner_detalle(
+    menu: &Menu<tauri::Wry>,
+    item: &MenuItem<tauri::Wry>,
+    puesto: &AtomicBool,
+    texto: Option<&str>,
+) {
+    match texto {
+        Some(t) => {
+            let _ = item.set_text(t);
+            if !puesto.swap(true, Ordering::SeqCst) {
+                let despues_de = menu
+                    .items()
+                    .ok()
+                    .and_then(|v| v.iter().position(|i| i.id().as_ref() == "estado_analisis"));
+                if let Some(pos) = despues_de {
+                    let _ = menu.insert(item, pos + 1);
+                }
+            }
+        }
+        None => {
+            if puesto.swap(false, Ordering::SeqCst) {
+                let _ = menu.remove(item);
+            }
+        }
     }
 }
 
@@ -241,16 +284,6 @@ pub fn run() {
             let ajustes = Arc::new(Mutex::new(ajustes_iniciales));
             let reparto = Arc::new(Mutex::new(Reparto::default()));
 
-            let uso_item = MenuItem::with_id(
-                app,
-                "uso",
-                lectura_inicial
-                    .as_ref()
-                    .map(texto_uso)
-                    .unwrap_or_else(|| "Uso: no disponible".to_string()),
-                false,
-                None::<&str>,
-            )?;
             let libre_item = MenuItem::with_id(
                 app,
                 "libre",
@@ -261,8 +294,33 @@ pub fn run() {
                 false,
                 None::<&str>,
             )?;
+            let filas_categorias: FilasCategorias = Categoria::TODAS
+                .iter()
+                .map(|c| {
+                    let m = Submenu::with_id_and_icon(
+                        app,
+                        format!("categoria:{}", c.nombre()),
+                        format!("{}\t…", c.nombre()),
+                        true,
+                        icono_punto(*c, &ajustes_iniciales.paleta.colores()),
+                    )?;
+                    m.append(&MenuItem::with_id(
+                        app,
+                        "abrir",
+                        "Abrir analizador completo",
+                        true,
+                        None::<&str>,
+                    )?)?;
+                    Ok((*c, m))
+                })
+                .collect::<tauri::Result<_>>()?;
+            let titulo = |t: &str| MenuItem::new(app, t, false, None::<&str>);
+            let titulo_disco = titulo("Disco")?;
+            let titulo_memoria = titulo("Memoria")?;
+            let titulo_analisis = titulo("Análisis")?;
+            let detalle_item = MenuItem::new(app, "", false, None::<&str>)?;
             let analizar_item =
-                MenuItem::with_id(app, "analizar", "Analizar ahora", true, None::<&str>)?;
+                MenuItem::with_id(app, "analizar", "Analizar ahora", true, Some("Cmd+R"))?;
             let estado_analisis_item = MenuItem::with_id(
                 app,
                 "estado_analisis",
@@ -275,7 +333,7 @@ pub fn run() {
                 "abrir",
                 "Abrir analizador completo",
                 true,
-                None::<&str>,
+                Some("Cmd+O"),
             )?;
             let empaquetada = std::env::current_exe()
                 .map(|e| es_app_empaquetada(&e))
@@ -301,9 +359,13 @@ pub fn run() {
                 false,
                 None::<&str>,
             )?;
-            let quit_item = MenuItem::with_id(app, "quit", "Salir", true, None::<&str>)?;
-            let reparto_item =
-                MenuItem::with_id(app, "reparto", "Midiendo categorías…", false, None::<&str>)?;
+            let quit_item = MenuItem::with_id(
+                app,
+                "quit",
+                "Salir de Disk Use Analyzer",
+                true,
+                Some("Cmd+Q"),
+            )?;
 
             let etiqueta_items = Etiqueta::TODAS
                 .iter()
@@ -342,26 +404,37 @@ pub fn run() {
             let paleta_menu = Submenu::with_items(app, "Colores", true, &como_menu(&paleta_items))?;
             let liberar_menu = Submenu::new(app, "Liberar espacio", true)?;
 
-            let menu = Menu::with_items(
+            let ajustes_menu = Submenu::with_items(
                 app,
-                &[
-                    &uso_item,
-                    &libre_item,
-                    &swap_item,
-                    &reparto_item,
-                    &PredefinedMenuItem::separator(app)?,
-                    &analizar_item,
-                    &estado_analisis_item,
-                    &PredefinedMenuItem::separator(app)?,
-                    &liberar_menu,
-                    &abrir_item,
-                    &PredefinedMenuItem::separator(app)?,
-                    &etiqueta_menu,
-                    &paleta_menu,
-                    &arranque_item,
-                    &quit_item,
-                ],
+                "Ajustes",
+                true,
+                &[&etiqueta_menu, &paleta_menu, &arranque_item],
             )?;
+
+            let mut filas_menu: Vec<&dyn IsMenuItem<tauri::Wry>> = vec![&titulo_disco, &libre_item];
+            filas_menu.extend(
+                filas_categorias
+                    .iter()
+                    .map(|(_, i)| i as &dyn IsMenuItem<tauri::Wry>),
+            );
+            let separador = || PredefinedMenuItem::separator(app);
+            let (sep1, sep2, sep3, sep4) = (separador()?, separador()?, separador()?, separador()?);
+            filas_menu.extend([
+                &sep1 as &dyn IsMenuItem<tauri::Wry>,
+                &titulo_memoria,
+                &swap_item,
+                &sep2,
+                &titulo_analisis,
+                &analizar_item,
+                &estado_analisis_item,
+                &sep3,
+                &liberar_menu,
+                &abrir_item,
+                &sep4,
+                &ajustes_menu,
+                &quit_item,
+            ]);
+            let menu = Menu::with_items(app, &filas_menu)?;
 
             // El motor empaquetado dentro de la .app es el que hace que la
             // app sea autocontenida; si no está (modo desarrollo), se cae al
@@ -397,7 +470,7 @@ pub fn run() {
                     .set_text("Sin acceso total al disco: el análisis saldrá incompleto");
             }
 
-            let mut tray_builder = TrayIconBuilder::new()
+            let mut tray_builder = TrayIconBuilder::with_id(menu_nativo::ID_BANDEJA)
                 .menu(&menu)
                 .show_menu_on_left_click(true);
             let icono_inicial = lectura_inicial
@@ -425,6 +498,10 @@ pub fn run() {
                 let ajustes = Arc::clone(&ajustes);
                 let dir_ajustes = dir_ajustes.clone();
                 let liberador = Arc::clone(&liberador);
+                let filas_categorias = filas_categorias.clone();
+                let menu = menu.clone();
+                let detalle_item = detalle_item.clone();
+                let detalle_puesto = Arc::new(AtomicBool::new(false));
                 tray_builder
                     .on_menu_event(move |app, event| {
                         let id = event.id().as_ref();
@@ -448,6 +525,7 @@ pub fn run() {
                             if let Some(dir) = dir_ajustes.as_deref() {
                                 let _ = actuales.guardar(dir);
                             }
+                            poner_puntos(&filas_categorias, &actuales.paleta.colores());
                             if let (Some(uso), Some(pintor)) =
                                 (disk::read(), app.try_state::<Arc<Pintor>>())
                             {
@@ -538,6 +616,12 @@ pub fn run() {
                                 // the final summary.
                                 let terminado = Arc::new(Mutex::new(false));
                                 let terminado_fin = Arc::clone(&terminado);
+                                let (menu_fin, detalle_fin, puesto_fin) = (
+                                    menu.clone(),
+                                    detalle_item.clone(),
+                                    Arc::clone(&detalle_puesto),
+                                );
+                                let app_fin = app.clone();
                                 // Before `start`, not after: a scan that ends
                                 // at once would otherwise stop the sweep before
                                 // it began, and leave it spinning for good.
@@ -550,7 +634,9 @@ pub fn run() {
                                     let mut fin = terminado_fin.lock().unwrap();
                                     *fin = true;
                                     let _ = estado_analisis_item_fin.set_text(resultado.resumen());
+                                    poner_detalle(&menu_fin, &detalle_fin, &puesto_fin, None);
                                     drop(fin);
+                                    menu_nativo::aplicar(&app_fin);
                                     if let Some(p) = pintor_fin {
                                         p.parar();
                                     }
@@ -561,14 +647,22 @@ pub fn run() {
                                         let _ = analizar_item.set_text("Cancelar análisis");
                                         let item = estado_analisis_item.clone();
                                         let manager = Arc::clone(&manager);
-                                        let poner = move |texto: &str| {
+                                        let (menu, detalle, puesto, app) = (
+                                            menu.clone(),
+                                            detalle_item.clone(),
+                                            Arc::clone(&detalle_puesto),
+                                            app.clone(),
+                                        );
+                                        let poner = move |estado: &str, cuentas: Option<&str>| {
                                             let fin = terminado.lock().unwrap();
                                             if !*fin {
-                                                let _ = item.set_text(texto);
+                                                let _ = item.set_text(estado);
+                                                poner_detalle(&menu, &detalle, &puesto, cuentas);
+                                                menu_nativo::aplicar(&app);
                                             }
                                             !*fin
                                         };
-                                        poner("Analizando disco completo…");
+                                        poner("Analizando disco completo…", None);
                                         std::thread::spawn(move || loop {
                                             std::thread::sleep(Duration::from_secs(1));
                                             let Some(p) = manager.progreso() else {
@@ -577,7 +671,8 @@ pub fn run() {
                                                 }
                                                 break;
                                             };
-                                            if !poner(&p.texto()) {
+                                            let (estado, cuentas) = p.lineas();
+                                            if !poner(&estado, cuentas.as_deref()) {
                                                 break;
                                             }
                                         });
@@ -608,13 +703,13 @@ pub fn run() {
             if let Some(uso) = lectura_inicial.as_ref() {
                 pintor.pintar(uso);
             }
+            menu_nativo::aplicar(app.handle());
 
             // The category split, measured off the main thread: the first
             // pass runs `du` for a few seconds, and the tray must be up and
             // showing the free gap before that finishes.
             {
                 let pintor = Arc::clone(&pintor);
-                let reparto_item = reparto_item.clone();
                 let liberador = Arc::clone(&liberador);
                 std::thread::spawn(move || loop {
                     // Probed on every pass, not once: cheap, and it also
@@ -622,7 +717,6 @@ pub fn run() {
                     // still needs a relaunch; macOS does not re-evaluate a
                     // running process.
                     let medido = categorias::medir(analisis::hay_acceso_total_al_disco());
-                    let _ = reparto_item.set_text(categorias::texto_reparto(&medido));
                     *pintor.reparto.lock().unwrap() = medido;
                     if let Some(uso) = disk::read() {
                         pintor.pintar(&uso);
@@ -638,8 +732,9 @@ pub fn run() {
             // `Pintor` only touches the tray when something visible changed.
             {
                 let pintor = Arc::clone(&pintor);
-                let uso_item = uso_item.clone();
                 let libre_item = libre_item.clone();
+                let filas_categorias = filas_categorias.clone();
+                let app_poller = app.handle().clone();
                 let swap_item = swap_item.clone();
                 let libre_inicial = lectura_inicial.map(|u| gb(u.available)).unwrap_or(f64::MAX);
                 let (mut vigia, aviso_inicial) = avisos::Vigia::al_arrancar(libre_inicial);
@@ -674,18 +769,24 @@ pub fn run() {
                             swap_item.set_text(memoria::texto_swap(swap_gb, culpable.as_deref()));
                         match disk::read() {
                             Some(usage) => {
-                                let _ = uso_item.set_text(texto_uso(&usage));
                                 let _ = libre_item.set_text(texto_libre(&usage));
+                                let reparto = *pintor.reparto.lock().unwrap();
+                                if reparto != Reparto::default() {
+                                    for (c, item) in &filas_categorias {
+                                        let _ =
+                                            item.set_text(categorias::fila(*c, &usage, &reparto));
+                                    }
+                                }
                                 if let Some(aviso) = vigia.observar(gb(usage.available)) {
                                     notificar(&aviso, &culpable);
                                 }
                                 pintor.pintar(&usage);
                             }
                             None => {
-                                let _ = uso_item.set_text("Uso: no disponible");
                                 let _ = libre_item.set_text("Libre: no disponible");
                             }
                         }
+                        menu_nativo::aplicar(&app_poller);
                     }
                 });
             }
@@ -728,15 +829,15 @@ mod tests {
             purgeable,
             percent: 97.0,
         };
-        assert_eq!(texto_libre(&u(0)), "Libre: 14.0 GB");
+        assert_eq!(texto_libre(&u(0)), "14,0 GB libres de 460,0 GB");
         assert_eq!(
             texto_libre(&u(g / 2)),
-            "Libre: 14.0 GB",
+            "14,0 GB libres de 460,0 GB",
             "menos de 1 GB no merece ruido"
         );
         assert_eq!(
             texto_libre(&u(5 * g + g / 2)),
-            "Libre: 14.0 GB (+5.5 GB purgables)"
+            "14,0 GB libres de 460,0 GB (+5,5 GB purgables)"
         );
     }
 

@@ -5,7 +5,7 @@
 //! colour of the warning state. Drawn at 36 px because `tray-icon` scales the
 //! image to 18 points tall, so 36 px stays sharp on Retina screens.
 
-use tiny_skia::{LineCap, Paint, PathBuilder, Pixmap, Stroke, Transform};
+use tiny_skia::{FillRule, LineCap, Paint, PathBuilder, Pixmap, Stroke, Transform};
 
 use crate::ajustes::{Colores, Rgb};
 use crate::categorias::{self, Categoria, Reparto};
@@ -129,6 +129,26 @@ fn arco(pb: &mut PathBuilder, cx: f32, cy: f32, r: f32, desde: f32, barrido: f32
 /// The ring as a PNG, ready for `tauri::image::Image::from_bytes`.
 pub fn png(trozos: &[Trozo]) -> Option<Vec<u8>> {
     lienzo(trozos)?.encode_png().ok()
+}
+
+/// A category's colour as a menu icon, so the menu reads as the ring's legend.
+/// macOS scales it to 18 points of height, so the margin is part of the size.
+pub fn png_punto(color: Rgb) -> Option<Vec<u8>> {
+    const LADO: u32 = 36;
+    const RADIO: f32 = 9.0;
+    let mut lienzo = Pixmap::new(LADO, LADO)?;
+    let circulo = PathBuilder::from_circle(LADO as f32 / 2.0, LADO as f32 / 2.0, RADIO)?;
+    let mut pintura = Paint::default();
+    pintura.set_color_rgba8(color[0], color[1], color[2], 255);
+    pintura.anti_alias = true;
+    lienzo.fill_path(
+        &circulo,
+        &pintura,
+        FillRule::Winding,
+        Transform::identity(),
+        None,
+    );
+    lienzo.encode_png().ok()
 }
 
 /// How many frames make one turn of the "working" sweep.

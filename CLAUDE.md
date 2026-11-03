@@ -225,8 +225,10 @@ The project has three interfaces: CLI, GUI, and Web.
   (swap and the app holding it), `liberar.rs` (the "Liberar espacio" submenu:
   lists what `disk_analyzer.py --limpieza-rapida` offers, confirms with a native
   dialog, runs it, notifies the measured savings — it never builds a deletion
-  command itself), `progreso.rs` (the status line during a scan, from the
-  engine's `--progreso` file)
+  command itself), `progreso.rs` (the status lines during a scan, from the
+  engine's `--progreso` file), `menu_nativo.rs` (what Tauri's menu API cannot do:
+  bold titles, readable info rows, aligned figures and category dots, written on
+  the `NSMenu`; call `aplicar` after changing any menu text)
 - **Build:** `cd desktop && npm run tauri build -- --bundles app`
 - **Tests:** `cargo test --manifest-path desktop/src-tauri/Cargo.toml` (also run by `make test`)
 - **Bundled engine:** the `.app` ships its own trimmed CPython

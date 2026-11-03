@@ -221,8 +221,8 @@ sentido horario (12 fotogramas, uno cada 120 ms), para que se vea que está
 trabajando sin abrir el menú. Al terminar, cancelar o fallar vuelve el anillo
 quieto.
 
-Durante el análisis, la línea de estado del menú dice cuánto lleva:
-"Analizando… 23 % · 71 de 313 GB · 506 mil archivos · faltan ~1 min". El motor
+Durante el análisis, la sección Análisis del menú dice cuánto lleva, en dos
+líneas: "Analizando… 23 % · faltan ~1 min" y "71 de 313 GB · 506 mil archivos". El motor
 escribe su progreso en un temporal cada segundo (`disk_analyzer.py --progreso`)
 y la app lo lee. El total es una estimación: un escaneo de `/` nunca cuenta todo
 lo que `df` da por usado (el volumen sellado del sistema, carpetas ilegibles),
@@ -248,6 +248,15 @@ El icono de la app (Dock, Finder, notificaciones) es el mismo anillo, estático
 y con el porcentaje en el centro. Se regenera con
 `./desktop/tools/gen_icono_app.sh` (necesita Chrome y node); los ficheros de
 `desktop/src-tauri/icons/` son su salida versionada.
+
+## El formato del menú
+
+Tauri solo sabe de títulos planos, así que `menu_nativo.rs` escribe sobre el
+`NSMenu`: títulos en negrita, filas informativas legibles, cifras alineadas y puntos
+de color. Si una fila sale gris o sin alinear, falta llamar a `menu_nativo::aplicar`
+después de cambiar su texto: `set_text` borra el formato. Las razones de cada técnica,
+comprobadas en pantalla en macOS 27, están en
+`docs/superpowers/specs/2026-11-02-menu-barra-design.md`.
 
 ## Liberar espacio desde el menú
 
