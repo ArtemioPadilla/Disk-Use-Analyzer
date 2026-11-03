@@ -173,6 +173,11 @@ fn recorrer(menu: &NSMenu, raiz: bool, mtm: MainThreadMarker) {
             continue;
         }
         let estilo = clasificar(&titulo, item.isEnabled(), raiz);
+        // A row that became clickable must lose its label: a view takes the
+        // clicks and hides the submenu, and macOS would not draw the item.
+        if matches!(estilo, Estilo::ConCifra | Estilo::Normal) && item.view().is_some() {
+            item.setView(None);
+        }
         let Some(texto) = atribuido(&titulo, estilo) else {
             continue;
         };
