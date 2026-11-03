@@ -53,41 +53,45 @@ fn falta(segundos: f64) -> String {
 }
 
 impl Progreso {
-    /// One line for the menu.
-    pub fn texto(&self) -> String {
+    /// What the menu says: the state, and for the scan a second line with the
+    /// counts. Two lines because a single one made the whole menu wider.
+    pub fn lineas(&self) -> (String, Option<String>) {
         match self.fase.as_str() {
-            "escaneo" => self.texto_escaneo(),
-            "duplicados" => "Buscando archivos duplicados…".into(),
-            "caches" => "Midiendo cachés…".into(),
-            "docker" => "Revisando Docker…".into(),
-            _ => "Preparando el informe…".into(),
+            "escaneo" => self.lineas_escaneo(),
+            "duplicados" => ("Buscando archivos duplicados…".into(), None),
+            "caches" => ("Midiendo cachés…".into(), None),
+            "docker" => ("Revisando Docker…".into(), None),
+            _ => ("Preparando el informe…".into(), None),
         }
     }
 
-    fn texto_escaneo(&self) -> String {
+    fn lineas_escaneo(&self) -> (String, Option<String>) {
         let Some(objetivo) = self.objetivo.filter(|o| *o > 0) else {
-            return format!(
-                "Analizando… {:.0} GB · {}",
-                gb(self.bytes),
-                archivos(self.archivos)
+            return (
+                "Analizando…".into(),
+                Some(format!(
+                    "{:.0} GB · {}",
+                    gb(self.bytes),
+                    archivos(self.archivos)
+                )),
             );
         };
         // Capped: the estimate can fall short of what the scan finds, and
         // "100 %" with more to go, or "104 %", would be worse than vague.
         let fraccion = (self.bytes as f64 / objetivo as f64).min(0.99);
-        let mut out = format!(
-            "Analizando… {:.0} % · {:.0} de {:.0} GB · {}",
-            fraccion * 100.0,
+        let mut estado = format!("Analizando… {:.0} %", fraccion * 100.0);
+        if self.segundos >= SEGUNDOS_ANTES_DE_ESTIMAR && fraccion > 0.02 {
+            let restante = self.segundos * (1.0 - fraccion) / fraccion;
+            estado.push_str(" · ");
+            estado.push_str(&falta(restante));
+        }
+        let cuentas = format!(
+            "{:.0} de {:.0} GB · {}",
             gb(self.bytes),
             gb(objetivo),
             archivos(self.archivos)
         );
-        if self.segundos >= SEGUNDOS_ANTES_DE_ESTIMAR && fraccion > 0.02 {
-            let restante = self.segundos * (1.0 - fraccion) / fraccion;
-            out.push_str(" · ");
-            out.push_str(&falta(restante));
-        }
-        out
+        (estado, Some(cuentas))
     }
 }
 
@@ -107,42 +111,48 @@ mod tests {
         }
     }
 
+    fn par(a: &str, b: &str) -> (String, Option<String>) {
+        (a.to_string(), Some(b.to_string()))
+    }
+
     #[test]
     fn con_objetivo_dice_porcentaje_total_y_lo_que_falta() {
         // 100 of 300 GB in 60 s: a third done, twice as long to go.
-        let t = p(100 * GB, Some(300 * GB), 60.0, 1_234_567).texto();
+        let t = p(100 * GB, Some(300 * GB), 60.0, 1_234_567).lineas();
         assert_eq!(
             t,
-            "Analizando… 33 % · 100 de 300 GB · 1,2 M archivos · faltan ~2 min"
+            par(
+                "Analizando… 33 % · faltan ~2 min",
+                "100 de 300 GB · 1,2 M archivos"
+            )
         );
     }
 
     #[test]
     fn sin_objetivo_solo_dice_lo_contado() {
-        let t = p(95 * GB, None, 60.0, 850_400).texto();
-        assert_eq!(t, "Analizando… 95 GB · 850 mil archivos");
+        let t = p(95 * GB, None, 60.0, 850_400).lineas();
+        assert_eq!(t, par("Analizando…", "95 GB · 850 mil archivos"));
     }
 
     #[test]
     fn al_principio_no_se_atreve_a_estimar_el_tiempo() {
-        let t = p(10 * GB, Some(300 * GB), 5.0, 900).texto();
-        assert_eq!(t, "Analizando… 3 % · 10 de 300 GB · 900 archivos");
+        let t = p(10 * GB, Some(300 * GB), 5.0, 900).lineas();
+        assert_eq!(t, par("Analizando… 3 %", "10 de 300 GB · 900 archivos"));
     }
 
     #[test]
     fn nunca_pasa_del_99_aunque_cuente_mas_de_lo_estimado() {
-        let t = p(320 * GB, Some(300 * GB), 200.0, 2_000_000).texto();
-        assert!(t.starts_with("Analizando… 99 %"), "{t}");
-        assert!(t.ends_with("falta menos de 1 min"), "{t}");
+        let (estado, _) = p(320 * GB, Some(300 * GB), 200.0, 2_000_000).lineas();
+        assert_eq!(estado, "Analizando… 99 % · falta menos de 1 min");
     }
 
     #[test]
     fn las_fases_tras_el_escaneo_se_nombran() {
         let mut x = p(0, None, 0.0, 0);
         x.fase = "duplicados".into();
-        assert_eq!(x.texto(), "Buscando archivos duplicados…");
+        assert_eq!(x.lineas(), ("Buscando archivos duplicados…".into(), None));
         x.fase = "informe".into();
-        assert_eq!(x.texto(), "Preparando el informe…");
+        assert_eq!(x.lineas(), ("Preparando el informe…".into(), None));
     }
 
     #[test]

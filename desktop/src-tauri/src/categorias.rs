@@ -197,21 +197,54 @@ pub fn medir(acceso_total: bool) -> Reparto {
     }
 }
 
-/// The menu line that says what the ring's colours are, in the ring's
-/// order. Without Full Disk Access it says so, so a mostly grey ring reads
-/// as "missing permission" rather than "your disk is all system".
-pub fn texto_reparto(r: &Reparto) -> String {
-    let gb = |b: u64| format!("{:.0} GB", b as f64 / (1u64 << 30) as f64);
-    let mut partes = Vec::new();
-    if let Some(d) = r.docker.filter(|d| *d > 0) {
-        partes.push(format!("Docker {}", gb(d)));
+/// A size as the menu writes it, in Spanish: whole gigabytes once the
+/// decimals stop saying anything, megabytes below one gigabyte.
+pub fn tamano(bytes: u64) -> String {
+    let g = bytes as f64 / (1u64 << 30) as f64;
+    if g >= 10.0 {
+        format!("{g:.0} GB")
+    } else if g >= 1.0 {
+        format!("{g:.1} GB").replace('.', ",")
+    } else {
+        format!("{} MB", bytes >> 20)
     }
-    partes.push(format!("Cachés {}", gb(r.caches)));
-    match r.tuyo {
-        Some(t) => partes.push(format!("Tus archivos {}", gb(t))),
-        None => partes.push("sin Acceso total al disco, el resto no se desglosa".into()),
+}
+
+impl Categoria {
+    /// In the ring's order.
+    pub const TODAS: [Categoria; 4] = [
+        Categoria::Docker,
+        Categoria::Caches,
+        Categoria::Tuyo,
+        Categoria::Resto,
+    ];
+
+    pub fn nombre(self) -> &'static str {
+        match self {
+            Categoria::Docker => "Docker",
+            Categoria::Caches => "Cachés",
+            Categoria::Tuyo => "Tus archivos",
+            Categoria::Resto => "Sistema y otros",
+        }
     }
-    partes.join(" · ")
+}
+
+/// The menu row of a category: its name and its size, separated by a tab, with
+/// the same figures as the ring's slices. Without Full Disk Access it says so,
+/// so a mostly grey ring reads as "missing permission" rather than "your disk
+/// is all system".
+pub fn fila(categoria: Categoria, uso: &DiskUsage, reparto: &Reparto) -> String {
+    let medida = porciones(uso, reparto)
+        .iter()
+        .find(|p| p.categoria == categoria)
+        .map(|p| (p.fraccion * uso.total as f64) as u64)
+        .unwrap_or(0);
+    let cifra = match categoria {
+        Categoria::Docker if reparto.docker.is_none() => "—".to_string(),
+        Categoria::Tuyo if reparto.tuyo.is_none() => "sin permiso".to_string(),
+        _ => tamano(medida),
+    };
+    format!("{}\t{cifra}", categoria.nombre())
 }
 
 #[cfg(test)]
@@ -310,25 +343,36 @@ mod tests {
     }
 
     #[test]
-    fn el_texto_del_reparto_sigue_el_orden_del_anillo_y_dice_si_falta_permiso() {
+    fn la_fila_da_la_misma_cifra_que_el_anillo_y_dice_si_falta_permiso() {
         let g = 1u64 << 30;
-        let completo = Reparto {
-            docker: Some(20 * g),
-            caches: 21 * g,
-            tuyo: Some(180 * g),
+        let u = uso(460 * g, 450 * g);
+        let r = Reparto {
+            docker: Some(40 * g),
+            caches: 26 * g,
+            tuyo: Some(110 * g),
         };
-        assert_eq!(
-            texto_reparto(&completo),
-            "Docker 20 GB · Cachés 21 GB · Tus archivos 180 GB"
-        );
+        assert_eq!(fila(Categoria::Docker, &u, &r), "Docker\t40 GB");
+        assert_eq!(fila(Categoria::Caches, &u, &r), "Cachés\t26 GB");
+        assert_eq!(fila(Categoria::Tuyo, &u, &r), "Tus archivos\t110 GB");
+        assert_eq!(fila(Categoria::Resto, &u, &r), "Sistema y otros\t274 GB");
+
         let sin_permiso = Reparto {
             docker: None,
-            caches: 21 * g,
+            caches: 26 * g,
             tuyo: None,
         };
+        assert_eq!(fila(Categoria::Docker, &u, &sin_permiso), "Docker\t—");
         assert_eq!(
-            texto_reparto(&sin_permiso),
-            "Cachés 21 GB · sin Acceso total al disco, el resto no se desglosa"
+            fila(Categoria::Tuyo, &u, &sin_permiso),
+            "Tus archivos\tsin permiso"
         );
+    }
+
+    #[test]
+    fn el_tamano_se_escribe_en_espanol_y_sin_decimales_que_no_dicen_nada() {
+        let g = 1u64 << 30;
+        assert_eq!(tamano(110 * g), "110 GB");
+        assert_eq!(tamano(6 * g + g / 2), "6,5 GB");
+        assert_eq!(tamano(g / 2), "512 MB");
     }
 }
