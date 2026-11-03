@@ -5,9 +5,10 @@
 //! gate. Nothing here builds a deletion command: this module only shows what
 //! the engine offers, asks, runs it, and measures what it actually freed.
 //!
-//! Only two consequences ever reach the menu: what comes back by itself
-//! (caches, logs, build products) and the Trash, which goes in its own
-//! section and is never part of "free everything".
+//! Three consequences reach the menu: what comes back by itself (caches, logs,
+//! build products), Docker images, which have to be downloaded again, and the
+//! Trash. The last two go under their own heading and are never part of "free
+//! everything".
 
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -40,6 +41,7 @@ const EXTERNO_DESCARGAS: &str = "descargas";
 const EXTERNO_ALMACENAMIENTO: &str = "almacenamiento";
 
 const REGENERA: &str = "regenera";
+const REDESCARGA: &str = "redescarga";
 const PERMANENTE: &str = "permanente";
 
 /// One cleanup the engine offers.
@@ -64,18 +66,19 @@ impl Limpieza {
     }
 }
 
-/// Parses the engine's output. Anything that is not one of the two
-/// consequences the menu may offer is dropped here too: the engine already
-/// filters, but this is the last place a Docker prune could slip into a
-/// one-click menu, so it checks again rather than trust the other side.
+/// Parses the engine's output. Anything the menu may not offer is dropped here
+/// too: the engine already filters, but this is the last place a list of files
+/// or a command touching Docker's volumes could slip into the menu, so it
+/// checks again rather than trust the other side.
 pub fn leer(json: &str) -> Result<Vec<Limpieza>, String> {
     let todas: Vec<Limpieza> =
         serde_json::from_str(json).map_err(|e| format!("respuesta del motor ilegible: {e}"))?;
     Ok(todas
         .into_iter()
         .filter(|l| {
-            (l.consecuencia == REGENERA || l.consecuencia == PERMANENTE)
+            [REGENERA, REDESCARGA, PERMANENTE].contains(&l.consecuencia.as_str())
                 && !l.command.trim().is_empty()
+                && !(l.categoria == "docker" && l.command.contains("volume"))
         })
         .collect())
 }
@@ -87,6 +90,7 @@ pub fn medir(motor: &Motor) -> Result<Vec<Limpieza>, String> {
         .current_dir(motor.cwd())
         .arg(motor.script())
         .arg("--limpieza-rapida")
+        .env("PATH", path_con_herramientas())
         .stdin(Stdio::null())
         .output()
         .map_err(|e| format!("no se pudo lanzar el motor: {e}"))?;
@@ -148,7 +152,32 @@ pub fn filas(c: Categoria, lista: &[Limpieza], aviso: Option<&str>) -> Vec<Fila>
     let aviso = aviso.map(|a| Fila::Texto(a.to_string()));
     let mut out = Vec::new();
     match c {
-        Categoria::Docker => out.push(analizador("/", "Abrir analizador completo")),
+        Categoria::Docker => {
+            let (vuelve, descarga): (Vec<&&Limpieza>, Vec<&&Limpieza>) =
+                propias.iter().partition(|l| l.consecuencia == REGENERA);
+            if let Some(a) = aviso {
+                out.push(a);
+            } else if propias.is_empty() {
+                out.push(Fila::Texto(
+                    "Nada que limpiar, o Docker está apagado".into(),
+                ));
+            }
+            if !vuelve.is_empty() {
+                out.push(Fila::Texto("Vuelve solo".into()));
+                out.extend(vuelve.iter().map(|l| limpieza(l)));
+            }
+            if !descarga.is_empty() {
+                if !vuelve.is_empty() {
+                    out.push(Fila::Separador);
+                }
+                out.push(Fila::Texto("Hay que volver a descargar".into()));
+                out.extend(descarga.iter().map(|l| limpieza(l)));
+                out.push(Fila::Texto("También borra contenedores parados".into()));
+                out.push(Fila::Texto("Los volúmenes no se tocan".into()));
+            }
+            out.push(Fila::Separador);
+            out.push(analizador("/", "Abrir analizador completo"));
+        }
         Categoria::Caches => {
             if let Some(a) = aviso {
                 out.push(a);
@@ -281,8 +310,12 @@ pub fn confirmacion(elegidas: &[Limpieza]) -> Confirmacion {
         .iter()
         .map(|l| format!("• {} — {}", l.titulo, tamano(l.space)))
         .collect();
+    let descarga = elegidas.iter().any(|l| l.consecuencia == REDESCARGA);
     let despues = if permanente {
         "Lo que hay en la papelera se borra para siempre. Esto no se puede deshacer."
+    } else if descarga {
+        "Las imágenes habrá que volver a descargarlas cuando las necesites, y los \
+         contenedores parados se pierden. Lo que esté corriendo y los volúmenes no se tocan."
     } else {
         "Son datos que las apps vuelven a crear solas cuando los necesitan: \
          como mucho, la próxima vez que abras una app o compiles irá un poco más lento."
@@ -300,10 +333,12 @@ pub fn confirmacion(elegidas: &[Limpieza]) -> Confirmacion {
         ),
         boton: if permanente {
             "Vaciar la papelera".into()
+        } else if descarga {
+            "Borrar imágenes".into()
         } else {
             "Liberar".into()
         },
-        permanente,
+        permanente: permanente || descarga,
     }
 }
 
@@ -313,6 +348,8 @@ pub fn confirmacion(elegidas: &[Limpieza]) -> Confirmacion {
 pub struct Hecho {
     pub liberado: u64,
     pub fallos: Vec<(String, String)>,
+    /// Docker keeps everything in one disk image, which may not shrink at once.
+    pub docker: bool,
 }
 
 /// The notification after a run. The figure is always the measured one: a
@@ -325,6 +362,7 @@ pub fn aviso_final(h: &Hecho) -> (String, String) {
     };
     let cuerpo = match h.fallos.as_slice() {
         [] if h.liberado >= 1024 * 1024 => "Medido en el disco antes y después.".to_string(),
+        [] if h.docker => "Docker puede tardar en devolver el espacio al disco.".to_string(),
         [] => "Puede que una app lo estuviera usando, o que ya estuviera vacío.".to_string(),
         fallos => fallos
             .iter()
@@ -345,10 +383,12 @@ fn ultima_linea(bytes: &[u8]) -> Option<String> {
 }
 
 /// An app launched from Finder gets a bare PATH (/usr/bin:/bin:…), where
-/// `brew` and `npm` from Homebrew are not found.
-fn path_con_homebrew() -> String {
+/// `brew`, `npm` and `docker` are not found.
+fn path_con_herramientas() -> String {
     let actual = std::env::var("PATH").unwrap_or_default();
-    format!("/opt/homebrew/bin:/usr/local/bin:{actual}")
+    format!(
+        "/opt/homebrew/bin:/usr/local/bin:/Applications/Docker.app/Contents/Resources/bin:{actual}"
+    )
 }
 
 /// Runs the chosen cleanups one after another and measures the result.
@@ -359,7 +399,7 @@ pub fn ejecutar(elegidas: &[Limpieza]) -> Hecho {
         let r = Command::new("/bin/sh")
             .arg("-c")
             .arg(&l.command)
-            .env("PATH", path_con_homebrew())
+            .env("PATH", path_con_herramientas())
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .output();
@@ -380,7 +420,11 @@ pub fn ejecutar(elegidas: &[Limpieza]) -> Hecho {
         (Some(a), Some(d)) => d.saturating_sub(a),
         _ => 0,
     };
-    Hecho { liberado, fallos }
+    Hecho {
+        liberado,
+        fallos,
+        docker: elegidas.iter().any(|l| l.esta_en(Categoria::Docker)),
+    }
 }
 
 /// The cleanups' place in the menu and their current list.
@@ -532,16 +576,17 @@ mod tests {
     }
 
     #[test]
-    fn solo_entra_lo_que_vuelve_solo_y_la_papelera() {
+    fn solo_entra_lo_que_el_menu_puede_ofrecer() {
         let json = r#"[
             {"id":"logs","titulo":"Logs","descripcion":"","space":1,"consecuencia":"regenera","categoria":"caches","command":"x"},
-            {"id":"docker","titulo":"Docker","descripcion":"","space":1,"consecuencia":"redescarga","categoria":"docker","command":"docker system prune -a -f"},
+            {"id":"docker_imagenes","titulo":"I","descripcion":"","space":1,"consecuencia":"redescarga","categoria":"docker","command":"docker image prune -a -f"},
+            {"id":"malo","titulo":"M","descripcion":"","space":1,"consecuencia":"redescarga","categoria":"docker","command":"docker system prune -a --volumes -f"},
             {"id":"lista","titulo":"L","descripcion":"","space":1,"consecuencia":"solo_lista","categoria":"caches","command":"du"},
             {"id":"vacio","titulo":"V","descripcion":"","space":1,"consecuencia":"regenera","categoria":"caches","command":"  "},
             {"id":"papelera","titulo":"Papelera","descripcion":"","space":1,"consecuencia":"permanente","categoria":"tuyo","command":"y"}
         ]"#;
         let ids: Vec<String> = leer(json).unwrap().into_iter().map(|l| l.id).collect();
-        assert_eq!(ids, vec!["logs", "papelera"]);
+        assert_eq!(ids, vec!["logs", "docker_imagenes", "papelera"]);
     }
 
     fn ids(f: &[Fila]) -> Vec<String> {
@@ -578,6 +623,57 @@ mod tests {
         let lista = vec![build, l("logs", REGENERA, GB)];
         assert_eq!(elegir(&lista, TODO).len(), 1);
         assert!(fila_seguro(&lista).0.ends_with("1,0 GB"));
+    }
+
+    fn de_docker(id: &str, consecuencia: &str) -> Limpieza {
+        let mut d = l(id, consecuencia, 4 * GB);
+        d.categoria = "docker".into();
+        d
+    }
+
+    #[test]
+    fn docker_separa_lo_que_vuelve_solo_de_lo_que_hay_que_descargar() {
+        let lista = vec![
+            de_docker("docker_build", REGENERA),
+            de_docker("docker_imagenes", REDESCARGA),
+        ];
+        let f = filas(Categoria::Docker, &lista, None);
+        let pos = |t: &str| f.iter().position(|x| *x == Fila::Texto(t.into())).unwrap();
+        let fila = |i: &str| {
+            f.iter()
+                .position(|x| matches!(x, Fila::Accion { id, .. } if id == i))
+                .unwrap()
+        };
+        assert!(fila("liberar:docker_build") < pos("Hay que volver a descargar"));
+        assert!(pos("Hay que volver a descargar") < fila("liberar:docker_imagenes"));
+        assert!(!ids(&f).iter().any(|i| i == "liberar:todo"));
+    }
+
+    #[test]
+    fn docker_apagado_lo_dice_y_no_ofrece_limpiar() {
+        let f = filas(Categoria::Docker, &[], None);
+        assert!(matches!(&f[0], Fila::Texto(t) if t.contains("apagado")));
+        assert!(!ids(&f).iter().any(|i| i.starts_with(PREFIJO)));
+    }
+
+    #[test]
+    fn la_confirmacion_de_docker_avisa_de_la_descarga_y_de_los_contenedores() {
+        let c = confirmacion(&[de_docker("docker_imagenes", REDESCARGA)]);
+        assert!(c.permanente, "se avisa con el diálogo de advertencia");
+        assert_eq!(c.boton, "Borrar imágenes");
+        assert!(c.mensaje.contains("volver a descargarlas"));
+        assert!(c.mensaje.contains("contenedores parados"));
+    }
+
+    #[test]
+    fn el_aviso_final_explica_que_docker_puede_tardar_en_devolver_el_espacio() {
+        let (t, c) = aviso_final(&Hecho {
+            liberado: 0,
+            fallos: vec![],
+            docker: true,
+        });
+        assert_eq!(t, "No se liberó espacio");
+        assert!(c.contains("Docker puede tardar"));
     }
 
     #[test]
@@ -620,10 +716,7 @@ mod tests {
     fn la_url_del_analizador_conserva_el_token_en_cualquier_pagina() {
         let u = "http://127.0.0.1:8123/?token=abc";
         assert_eq!(url_en(u, "/"), u);
-        assert_eq!(
-            url_en(u, "/files"),
-            "http://127.0.0.1:8123/files?token=abc"
-        );
+        assert_eq!(url_en(u, "/files"), "http://127.0.0.1:8123/files?token=abc");
         assert_eq!(
             url_en(u, "/files?path=/Downloads/&orden=antiguedad"),
             "http://127.0.0.1:8123/files?path=/Downloads/&orden=antiguedad&token=abc"
@@ -656,12 +749,13 @@ mod tests {
     fn el_aviso_final_da_la_cifra_medida_y_los_fallos() {
         let (t, _) = aviso_final(&Hecho {
             liberado: 3 * GB,
-            fallos: vec![],
+            ..Hecho::default()
         });
         assert_eq!(t, "Liberados 3,0 GB");
         let (t, c) = aviso_final(&Hecho {
             liberado: 0,
             fallos: vec![("Caché de npm".into(), "npm: command not found".into())],
+            docker: false,
         });
         assert_eq!(t, "No se liberó espacio");
         assert!(c.contains("Caché de npm: npm: command not found"));
