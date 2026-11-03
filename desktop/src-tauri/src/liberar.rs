@@ -39,6 +39,10 @@ const TODAS_CACHES: &str = "caches";
 const EXTERNO_CACHES: &str = "caches";
 const EXTERNO_DESCARGAS: &str = "descargas";
 const EXTERNO_ALMACENAMIENTO: &str = "almacenamiento";
+const EXTERNO_MONITOR: &str = "monitor";
+
+/// Prefix of the menu ids that ask an app to quit.
+pub const PREFIJO_CERRAR: &str = "cerrar:";
 
 const REGENERA: &str = "regenera";
 const REDESCARGA: &str = "redescarga";
@@ -239,6 +243,46 @@ pub fn filas(c: Categoria, lista: &[Limpieza], aviso: Option<&str>) -> Vec<Fila>
     out
 }
 
+/// The swap submenu. Nothing can delete swap: it only shrinks when the app
+/// holding it quits, or with a restart, and the last lines say so.
+pub fn filas_swap(cerrables: &[(String, u64)]) -> Vec<Fila> {
+    let mut out = vec![Fila::Texto("Lo retiene".into())];
+    if cerrables.is_empty() {
+        out.push(Fila::Texto("Ninguna app en especial".into()));
+    }
+    out.extend(cerrables.iter().map(|(app, bytes)| {
+        accion(
+            format!("{PREFIJO_CERRAR}{app}"),
+            format!("Cerrar {app}…\t{}", tamano(*bytes)),
+        )
+    }));
+    out.push(Fila::Separador);
+    out.push(externo(EXTERNO_MONITOR, "Abrir Monitor de Actividad"));
+    out.push(Fila::Texto(
+        "Si no baja al cerrar, solo se libera al reiniciar".into(),
+    ));
+    out
+}
+
+/// Replaces what a submenu shows.
+pub fn poner_filas(app: &AppHandle, submenu: &Submenu<Wry>, filas: &[Fila]) {
+    if let Ok(viejos) = submenu.items() {
+        for v in viejos {
+            let _ = submenu.remove(&v as &dyn IsMenuItem<Wry>);
+        }
+    }
+    for f in filas {
+        let _ = match f {
+            Fila::Texto(t) => {
+                MenuItem::new(app, t, false, None::<&str>).and_then(|i| submenu.append(&i))
+            }
+            Fila::Accion { id, texto } => MenuItem::with_id(app, id, texto, true, None::<&str>)
+                .and_then(|i| submenu.append(&i)),
+            Fila::Separador => PredefinedMenuItem::separator(app).and_then(|i| submenu.append(&i)),
+        };
+    }
+}
+
 /// "Liberar lo seguro" and what it adds up to. It runs what comes back by
 /// itself, without a rebuild or a download behind it: never the Trash, never
 /// Docker.
@@ -274,6 +318,7 @@ pub fn externo_de(id: &str, home: &str) -> Option<String> {
     match id {
         EXTERNO_CACHES => Some(format!("{home}/Library/Caches")),
         EXTERNO_DESCARGAS => Some(format!("{home}/Downloads")),
+        EXTERNO_MONITOR => Some("/System/Applications/Utilities/Activity Monitor.app".to_string()),
         EXTERNO_ALMACENAMIENTO => {
             Some("x-apple.systempreferences:com.apple.settings.Storage".to_string())
         }
@@ -464,24 +509,7 @@ impl Liberador {
     /// Rebuilds every submenu and the top-level row.
     fn poner(&self, lista: &[Limpieza], aviso: Option<&str>) {
         for (c, submenu) in &self.categorias {
-            if let Ok(viejos) = submenu.items() {
-                for v in viejos {
-                    let _ = submenu.remove(&v as &dyn IsMenuItem<Wry>);
-                }
-            }
-            for f in filas(*c, lista, aviso) {
-                let _ = match &f {
-                    Fila::Texto(t) => MenuItem::new(&self.app, t, false, None::<&str>)
-                        .and_then(|i| submenu.append(&i)),
-                    Fila::Accion { id, texto } => {
-                        MenuItem::with_id(&self.app, id, texto, true, None::<&str>)
-                            .and_then(|i| submenu.append(&i))
-                    }
-                    Fila::Separador => {
-                        PredefinedMenuItem::separator(&self.app).and_then(|i| submenu.append(&i))
-                    }
-                };
-            }
+            poner_filas(&self.app, submenu, &filas(*c, lista, aviso));
         }
         let (texto, activa) = match aviso {
             Some(a) => (a.to_string(), false),
@@ -506,7 +534,11 @@ impl Liberador {
                 self.poner(&lista, None);
                 *self.lista.lock().unwrap() = lista;
             }
-            Err(e) => self.poner(&[], Some(&format!("No se pudo medir: {e}"))),
+            // The reason goes to the log: a long line would widen the whole menu.
+            Err(e) => {
+                eprintln!("No se pudo medir lo que se puede liberar: {e}");
+                self.poner(&[], Some("No se pudo medir"));
+            }
         }
     }
 
@@ -710,6 +742,20 @@ mod tests {
         assert_eq!(f[0], Fila::Texto("Midiendo…".into()));
         assert_eq!(ids(&f), vec!["externo:caches"]);
         assert!(!fila_seguro(&[]).1);
+    }
+
+    #[test]
+    fn el_swap_ofrece_cerrar_apps_y_no_promete_nada_mas() {
+        let f = filas_swap(&[("Slack".to_string(), 4 * GB)]);
+        assert_eq!(ids(&f), vec!["cerrar:Slack", "externo:monitor"]);
+        assert!(matches!(&f[1], Fila::Accion { texto, .. } if texto == "Cerrar Slack…\t4,0 GB"));
+        assert_eq!(
+            f.last(),
+            Some(&Fila::Texto(
+                "Si no baja al cerrar, solo se libera al reiniciar".into()
+            ))
+        );
+        assert_eq!(ids(&filas_swap(&[])), vec!["externo:monitor"]);
     }
 
     #[test]

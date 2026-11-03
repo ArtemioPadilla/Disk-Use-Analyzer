@@ -4619,6 +4619,8 @@ Ejemplos de uso:
     parser.add_argument('--quick', action='store_true',
                         help='Solo generar reporte sin análisis completo')
     
+    parser.add_argument('--informe', metavar='FICHERO',
+                        help='Dejar además el informe HTML en este archivo')
     parser.add_argument('--progreso', metavar='FICHERO',
                         help='Escribir el progreso del análisis en FICHERO (JSON, cada segundo)')
     parser.add_argument('--limpieza-rapida', action='store_true',
@@ -4696,6 +4698,16 @@ Ejemplos de uso:
             filename = f"{args.export}.json" if not args.export.endswith('.json') else args.export
             analyzer.export_json(report, filename)
     
+    if args.informe:
+        # Replaced whole, so a failure keeps the previous report. A report is
+        # not worth failing a scan that already finished: it only warns.
+        temporal = f"{args.informe}.tmp"
+        try:
+            analyzer.export_html(report, temporal)
+            os.replace(temporal, args.informe)
+        except OSError as e:
+            print(f"No se pudo guardar el informe: {e}", file=sys.stderr)
+
     # Limpiar si se solicita
     if args.clean_all or args.clean_cache:
         if not args.dry_run:

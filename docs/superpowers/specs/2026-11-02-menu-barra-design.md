@@ -36,7 +36,7 @@ Salir de Disk Use Analyzer ⌘Q
 | Tus archivos | Vaciar papelera; revisar archivos grandes y descargas más antiguas en el analizador; abrir Descargas en Finder. |
 | Sistema y otros | No limpia nada. Desglose en el analizador y Almacenamiento de macOS. |
 | Swap | Cerrar cada una de las tres apps que más retienen; Monitor de Actividad. |
-| Analizar | Disco completo (⌘R), carpeta personal, elegir carpeta, ver último resultado. Durante un análisis, «Cancelar análisis». |
+| Analizar | Disco completo (⌘R), carpeta personal, elegir carpeta, ver último resultado (el informe HTML del último análisis del menú, porque esos análisis no pasan por el servidor web). Durante un análisis, «Cancelar análisis». |
 
 ## Reglas
 
