@@ -70,6 +70,7 @@ CONSECUENCIAS: Dict[str, str] = {
     'homebrew': 'regenera',
     'vscode': 'regenera',
     'npm': 'regenera',
+    'npx': 'regenera',
     'papelera': 'permanente',
     'simuladores': 'regenera',
     'descargas_antiguas': 'solo_lista',
@@ -96,6 +97,7 @@ CATEGORIAS_RAPIDAS: Dict[str, str] = {
     'homebrew': 'caches',
     'vscode': 'caches',
     'npm': 'caches',
+    'npx': 'caches',
     'caches_de_apps': 'caches',
     'docker_build': 'docker',
     'docker_imagenes': 'docker',
@@ -776,13 +778,26 @@ class DiskAnalyzerCore:
                 'command': comandos.borrar_contenido([l['path'] for l in vscode_locs]),
                 'efecto': 'borra'})
 
+        # `npm cache clean` only empties _cacache. Measuring all of ~/.npm here
+        # promised space the command could not free, and the menu offered it
+        # again after every cleanup.
         npm_locs = [l for l in self.cache_locations
-                    if l['type'] == cache_types.NPM and '/.npm' in l['path']]
+                    if l['type'] == cache_types.NPM and '/.npm' in l['path']
+                    and '/_npx' not in l['path']]
         if npm_locs and sum(l['size'] for l in npm_locs) > 50 * MB:
             recommendations.append({'id': 'npm', 'tier': 1, 'priority': 'Seguro', 'type': 'Cache de npm',
                 'description': f'{self.format_size(sum(l["size"] for l in npm_locs))} en cache de npm (se regenera con npm install)',
                 'space': sum(l['size'] for l in npm_locs), 'command': 'npm cache clean --force',
                 'efecto': 'irreversible'})
+
+        npx_locs = [l for l in self.cache_locations
+                    if l['type'] == cache_types.NPM and '/.npm/_npx' in l['path']]
+        if sum(l['size'] for l in npx_locs) > 50 * MB:
+            recommendations.append({'id': 'npx', 'tier': 1, 'priority': 'Seguro', 'type': 'Paquetes de npx',
+                'description': f'{self.format_size(sum(l["size"] for l in npx_locs))} de paquetes descargados por npx (npx los baja de nuevo)',
+                'space': sum(l['size'] for l in npx_locs),
+                'command': comandos.borrar_contenido([l['path'] for l in npx_locs]),
+                'efecto': 'borra'})
 
         # La papelera: espacio que el usuario ya decidió tirar. Nivel 1 sin
         # discusión, y además es lo único que hace que "mover a la papelera"

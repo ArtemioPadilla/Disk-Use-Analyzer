@@ -11,6 +11,7 @@ import sys
 import tempfile
 from pathlib import Path
 
+from analyzer import cache_types
 from disk_analyzer_core import (
     CATEGORIAS_RAPIDAS, CONSECUENCIAS, DiskAnalyzerCore, limpiezas_rapidas,
 )
@@ -147,3 +148,27 @@ def test_nada_del_menu_toca_un_volumen_de_docker(tmp_path, monkeypatch):
 def test_con_el_daemon_apagado_no_se_ofrece_nada_de_docker(tmp_path, monkeypatch):
     _con_docker_falso(tmp_path, monkeypatch, salida_version=1)
     assert _reglas_docker() == []
+
+
+def _core_con_caches(*ubicaciones):
+    core = DiskAnalyzerCore(str(Path.home()))
+    core.cache_locations = [{'path': p, 'size': t, 'type': cache_types.NPM} for p, t in ubicaciones]
+    return {r['id']: r for r in core.generate_recommendations()}
+
+
+def test_npm_no_promete_lo_que_su_comando_no_borra():
+    """`npm cache clean` deja _npx: contarlo hacía que se ofreciera para siempre."""
+    casa = str(Path.home())
+    reglas = _core_con_caches((f'{casa}/.npm/_cacache', 200 * MB), (f'{casa}/.npm/_npx', 300 * MB))
+
+    assert reglas['npm']['space'] == 200 * MB
+    assert reglas['npm']['command'] == 'npm cache clean --force'
+    assert reglas['npx']['space'] == 300 * MB
+    assert reglas['npx']['consecuencia'] == 'regenera'
+    assert f'{casa}/.npm/_npx' in reglas['npx']['command']
+    assert '_cacache' not in reglas['npx']['command']
+
+
+def test_sin_npx_no_hay_regla_npx():
+    casa = str(Path.home())
+    assert 'npx' not in _core_con_caches((f'{casa}/.npm/_cacache', 200 * MB))

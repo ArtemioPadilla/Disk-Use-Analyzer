@@ -57,6 +57,7 @@ def test_los_datos_del_usuario_y_el_sistema_no_se_borran(ruta):
 @pytest.mark.parametrize("ruta", [
     os.path.join(CASA, "Library/Caches/com.apple.Safari"),
     os.path.join(CASA, ".npm/_cacache"),
+    os.path.join(CASA, ".npm/_npx"),
     os.path.join(CASA, "Library/Logs/algo.log"),
 ])
 def test_las_caches_conocidas_si_se_borran(ruta):
