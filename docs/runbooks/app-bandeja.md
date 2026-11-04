@@ -346,7 +346,8 @@ Cada categoría del menú abre sus acciones al pasar el cursor, con su tamaño:
   que se quitan una a una con `docker image rm` sin forzar, y los volúmenes, que solo se
   listan. Docker guarda todo en una imagen de disco que no se reduce al momento, sino un
   rato después. Tras limpiarlo el menú vuelve a estar disponible, y la app vigila esa imagen
-  hasta dos minutos, hasta que deje de encoger, para dar la cifra. Esa cifra sale de la imagen
+  hasta tres minutos, hasta que lleve un rato sin encoger, porque lo hace a tramos, para dar
+  la cifra. Esa cifra sale de la imagen
   y no del espacio libre, que también cambia con lo que haga cualquier otra app. Sin Acceso
   total al disco no se puede vigilar, y se da lo medido al terminar. El total de
   «recuperable» que da `docker system df` cuenta capas compartidas más de una vez, así que

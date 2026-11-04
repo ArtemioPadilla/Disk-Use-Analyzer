@@ -97,7 +97,7 @@ La regla `npm` mide todo `~/.npm`, pero `npm cache clean --force` solo vacía `_
 
 - [x] Tras limpiar `npm`, la regla deja de ofrecer espacio que no puede liberar.
 - [x] `_npx` aparece aparte, con su tamaño, y se puede limpiar.
-- [ ] Lo liberado medido coincide con lo estimado salvo ruido de APFS.
+- [x] Lo liberado medido coincide con lo estimado salvo ruido de APFS.
 
 **Seguridad**
 
@@ -270,7 +270,7 @@ Coexisten varias instalaciones de Python y Node, y entornos que nadie usa. La ap
 
 - [x] El submenú suma lo mismo que la fila, y «sin medir» es una cifra explícita.
 - [x] Sin Acceso total, dice qué falta y cómo darlo.
-- [ ] Las cifras cuadran con el contenedor APFS con un margen documentado.
+- [x] Las cifras cuadran con el contenedor APFS con un margen documentado.
 
 **Seguridad**
 

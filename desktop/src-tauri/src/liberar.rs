@@ -870,9 +870,11 @@ impl Avance {
 /// How long to watch Docker's disk image after a cleanup, at most. It gives the
 /// space back on its own schedule, not when the command ends, so measuring at
 /// once would report that nothing was freed.
-const TOPE_DOCKER: Duration = Duration::from_secs(120);
+const TOPE_DOCKER: Duration = Duration::from_secs(180);
 /// How long it must stay the same, once it has started to shrink, to call it done.
-const QUIETUD_DOCKER: Duration = Duration::from_secs(10);
+/// Long on purpose: it shrinks in stretches with pauses between them, and on a real
+/// daemon a short wait stopped halfway and reported a figure that was too low.
+const QUIETUD_DOCKER: Duration = Duration::from_secs(60);
 
 /// What Docker's disk image takes on the disk, or `None` where it cannot be read:
 /// another location, a remote daemon, or no Full Disk Access, without which
