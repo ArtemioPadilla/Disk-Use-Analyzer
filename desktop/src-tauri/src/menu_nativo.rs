@@ -29,12 +29,13 @@ use tauri::{AppHandle, Wry};
 pub const ID_BANDEJA: &str = "principal";
 
 /// Section titles. Matched by their exact text, on disabled items only.
-const TITULOS: [&str; 13] = [
+const TITULOS: [&str; 14] = [
     "Disco",
     "Desarrollo",
     "Memoria",
     "Análisis",
     "Lo retiene",
+    "Apps con sus datos",
     "Imágenes",
     "Volúmenes: guardan datos, no se tocan",
     "De qué está hecho",
