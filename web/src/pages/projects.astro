@@ -1,0 +1,7 @@
+---
+import MainLayout from '../layouts/MainLayout.astro';
+import ProyectosTabla from '../components/ProyectosTabla.tsx';
+---
+<MainLayout title="Proyectos" currentPath="/projects">
+  <ProyectosTabla client:load />
+</MainLayout>

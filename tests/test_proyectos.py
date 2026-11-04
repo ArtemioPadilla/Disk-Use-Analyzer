@@ -194,3 +194,33 @@ def test_lo_diminuto_no_se_lista(raiz):
 
 def test_una_raiz_que_no_existe_no_rompe():
     assert inventario(['/no/existe/en/ningun/mac']) == []
+
+
+def test_el_id_y_el_titulo_sirven_para_el_menu(raiz):
+    nm = _pesado(raiz / 'web' / 'node_modules')
+    (raiz / 'web' / 'package.json').write_text('{}')
+    datos = _por_ruta(raiz)[str(nm)]
+    assert datos['id'] == f'proyecto:{nm}'
+    assert datos['titulo'] == 'web · node_modules'
+    assert datos['categoria'] == 'proyectos'
+
+
+def test_la_api_devuelve_el_inventario_y_exige_token(raiz, monkeypatch):
+    import importlib
+    from fastapi.testclient import TestClient
+    import analyzer.proyectos
+    import disk_analyzer_web
+
+    monkeypatch.setattr(analyzer.proyectos, 'ROOTS', (str(raiz),))
+    _pesado(raiz / 'web' / 'node_modules')
+    (raiz / 'web' / 'package.json').write_text('{}')
+
+    monkeypatch.setenv('DISK_ANALYZER_NO_AUTH', '1')
+    importlib.reload(disk_analyzer_web)
+    r = TestClient(disk_analyzer_web.app).get('/api/proyectos')
+    assert r.status_code == 200
+    assert r.json()['proyectos'][0]['artefacto'] == 'node_modules'
+
+    monkeypatch.delenv('DISK_ANALYZER_NO_AUTH')
+    importlib.reload(disk_analyzer_web)
+    assert TestClient(disk_analyzer_web.app).get('/api/proyectos').status_code == 401

@@ -164,7 +164,7 @@ Lo regenerable más grande no son las cachés sino los artefactos de cada proyec
 ## E7.4: Menú: sección Proyectos
 
 - [ ] **Issue:** [#39](https://github.com/ArtemioPadilla/Disk-Use-Analyzer/issues/39)
-- **PR:** pendiente
+- **PR:** [#52](https://github.com/ArtemioPadilla/Disk-Use-Analyzer/pull/52)
 - **Depende de:** E7.3 (#38)
 
 El inventario de E7.3 no sirve si solo se ve en JSON. Hace falta una fila en el menú con lo que se puede recuperar por proyecto.
@@ -173,16 +173,16 @@ El inventario de E7.3 no sirve si solo se ve en JSON. Hace falta una fila en el 
 
 **Tareas**
 
-- [ ] Pruebas de filas y de la selección por antigüedad
-- [ ] Medir en segundo plano sin bloquear el menú
-- [ ] Fila y submenú
-- [ ] Revisar en pantalla con datos reales
+- [x] Pruebas de filas y de la selección por antigüedad
+- [x] Medir en segundo plano sin bloquear el menú
+- [x] Fila y submenú
+- [x] Revisar en pantalla con datos reales
 
 **Hecho cuando**
 
-- [ ] Se ve cuánto ocupa cada proyecto y desde cuándo no se toca.
-- [ ] La confirmación nombra cada proyecto y avisa que hay que reinstalar.
-- [ ] Lo liberado se mide, igual que el resto de limpiezas, con progreso.
+- [x] Se ve cuánto ocupa cada proyecto y desde cuándo no se toca.
+- [x] La confirmación nombra cada proyecto y avisa que hay que reinstalar.
+- [x] Lo liberado se mide, igual que el resto de limpiezas, con progreso.
 
 **Seguridad**
 

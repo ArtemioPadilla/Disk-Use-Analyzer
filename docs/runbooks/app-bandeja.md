@@ -247,6 +247,18 @@ y con el porcentaje en el centro. Se regenera con
 `./desktop/tools/gen_icono_app.sh` (necesita Chrome y node); los ficheros de
 `desktop/src-tauri/icons/` son su salida versionada.
 
+## Proyectos
+
+La sección **Desarrollo** lista lo que los proyectos pueden reconstruir
+(`disk_analyzer.py --proyectos`): `node_modules`, `.venv`, `target` y `.next`, en las
+carpetas de `analyzer/proyectos.py::ROOTS`. Tarda bastante más que las cachés, así que se
+mide al final, en segundo plano. La lista completa está en `/projects` del analizador.
+
+Un artefacto no se ofrece si git no lo ignora, porque podría estar versionado, o si el
+proyecto no dice cómo reconstruirlo. Para borrarlo, `puede_borrarse` exige evidencia junto
+al nombre (`analyzer/protection.py::es_artefacto`). **Liberar lo seguro** no incluye nada de
+esto: reinstalar es trabajo.
+
 ## Swap y Analizar desde el menú
 
 **Swap** no borra nada: el archivo de swap lo gestiona macOS. Su submenú ofrece

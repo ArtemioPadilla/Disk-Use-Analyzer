@@ -555,6 +555,8 @@ pub fn run() {
                 &como_menu(&etiqueta_items),
             )?;
             let paleta_menu = Submenu::with_items(app, "Colores", true, &como_menu(&paleta_items))?;
+            let titulo_desarrollo = titulo("Desarrollo")?;
+            let proyectos_menu = Submenu::new(app, "Proyectos\t…", true)?;
             let seguro_item = MenuItem::with_id(
                 app,
                 format!("{}{}", liberar::PREFIJO, liberar::TODO),
@@ -577,9 +579,18 @@ pub fn run() {
                     .map(|(_, i)| i as &dyn IsMenuItem<tauri::Wry>),
             );
             let separador = || PredefinedMenuItem::separator(app);
-            let (sep1, sep2, sep3, sep4) = (separador()?, separador()?, separador()?, separador()?);
+            let (sep1, sep2, sep3, sep4, sep5) = (
+                separador()?,
+                separador()?,
+                separador()?,
+                separador()?,
+                separador()?,
+            );
             filas_menu.extend([
                 &sep1 as &dyn IsMenuItem<tauri::Wry>,
+                &titulo_desarrollo,
+                &proyectos_menu,
+                &sep5,
                 &titulo_memoria,
                 &swap_menu,
                 &sep2,
@@ -615,6 +626,7 @@ pub fn run() {
                 app.handle().clone(),
                 filas_categorias.clone(),
                 seguro_item,
+                proyectos_menu,
                 motor.clone(),
             );
 
