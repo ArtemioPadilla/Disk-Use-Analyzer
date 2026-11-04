@@ -10,6 +10,7 @@
 //! Trash. The last two go under their own heading and are never part of "free
 //! everything".
 
+use std::os::unix::fs::MetadataExt;
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -744,6 +745,23 @@ pub struct Hecho {
     pub fallos: Vec<(String, String)>,
     /// Docker keeps everything in one disk image, which may not shrink at once.
     pub docker: bool,
+    /// What that image took before, when it can be watched.
+    pub docker_antes: Option<u64>,
+    /// Time ran out with the image possibly still shrinking.
+    pub docker_pendiente: bool,
+}
+
+impl Hecho {
+    /// Updates the figure with what Docker's image gave back. Measured on the
+    /// image and not on the free space: over this long, free space also moves
+    /// with whatever else is running, and none of that is this cleanup's doing.
+    fn con_lo_que_encogio(mut self, minimo: Option<u64>, pendiente: bool) -> Self {
+        if let (Some(a), Some(m)) = (self.docker_antes, minimo) {
+            self.liberado = self.liberado.max(a.saturating_sub(m));
+        }
+        self.docker_pendiente = pendiente;
+        self
+    }
 }
 
 /// The notification after a run. The figure is always the measured one: a
@@ -755,6 +773,7 @@ pub fn aviso_final(h: &Hecho) -> (String, String) {
         "No se liberó espacio".to_string()
     };
     let cuerpo = match h.fallos.as_slice() {
+        [] if h.docker_pendiente => "Docker aún puede devolver más espacio.".to_string(),
         [] if h.liberado >= 1024 * 1024 => "Medido en el disco antes y después.".to_string(),
         [] if h.docker => "Docker puede tardar en devolver el espacio al disco.".to_string(),
         [] => "Puede que una app lo estuviera usando, o que ya estuviera vacío.".to_string(),
@@ -838,11 +857,56 @@ impl Avance {
     }
 }
 
-/// How long to keep measuring after a Docker cleanup. Its disk image gives the
-/// space back on its own schedule: seen on a real daemon, nothing right after
-/// deleting an image and all of it within a minute and a half. Measuring at once
-/// would report that nothing was freed.
-const ESPERA_DOCKER: Duration = Duration::from_secs(120);
+/// How long to watch Docker's disk image after a cleanup, at most. It gives the
+/// space back on its own schedule, not when the command ends, so measuring at
+/// once would report that nothing was freed.
+const TOPE_DOCKER: Duration = Duration::from_secs(120);
+/// How long it must stay the same, once it has started to shrink, to call it done.
+const QUIETUD_DOCKER: Duration = Duration::from_secs(10);
+
+/// What Docker's disk image takes on the disk, or `None` where it cannot be read:
+/// another location, a remote daemon, or no Full Disk Access, without which
+/// reading it would make macOS ask.
+fn bytes_imagen_docker() -> Option<u64> {
+    if !crate::analisis::hay_acceso_total_al_disco() {
+        return None;
+    }
+    let casa = std::env::var_os("HOME")?;
+    let ruta = std::path::Path::new(&casa)
+        .join("Library/Containers/com.docker.docker/Data/vms/0/data/Docker.raw");
+    std::fs::metadata(ruta).ok().map(|m| m.blocks() * 512)
+}
+
+/// Watches something shrink until it stops, or until `tope`. Returns its lowest
+/// reading, and whether time ran out with it possibly still going.
+fn esperar_que_encoja<L>(
+    mut leer: L,
+    tope: Duration,
+    quietud: Duration,
+    pausa: Duration,
+) -> (Option<u64>, bool)
+where
+    L: FnMut() -> Option<u64>,
+{
+    let inicio = Instant::now();
+    let primera = leer();
+    let mut minimo = primera;
+    let mut ultimo_cambio = None;
+    while inicio.elapsed() < tope {
+        std::thread::sleep(pausa);
+        let ahora = leer();
+        if let (Some(a), Some(m)) = (ahora, minimo) {
+            if a < m {
+                minimo = Some(a);
+                ultimo_cambio = Some(Instant::now());
+            }
+        }
+        if ultimo_cambio.is_some_and(|t: Instant| t.elapsed() >= quietud) {
+            return (minimo, false);
+        }
+    }
+    (minimo, ultimo_cambio.is_some())
+}
 
 /// How often the free space is measured during a run. Reading it costs next to
 /// nothing (see `POLL_INTERVAL` in `lib.rs`).
@@ -855,14 +919,8 @@ pub fn ejecutar<A>(elegidas: &[Limpieza], al_avanzar: A) -> Hecho
 where
     A: Fn(&Avance) + Sync,
 {
-    ejecutar_con(elegidas, ESPERA_DOCKER, al_avanzar)
-}
-
-fn ejecutar_con<A>(elegidas: &[Limpieza], espera_docker: Duration, al_avanzar: A) -> Hecho
-where
-    A: Fn(&Avance) + Sync,
-{
     let antes = disk::read().map(|u| u.available);
+    let imagen_antes = bytes_imagen_docker();
     let objetivo: u64 = elegidas.iter().map(|l| l.space).sum();
     let medido = || match (antes, disk::read().map(|u| u.available)) {
         (Some(a), Some(d)) => d.saturating_sub(a),
@@ -935,23 +993,16 @@ where
     let docker = elegidas
         .iter()
         .any(|l| l.esta_en(Categoria::Docker) || l.categoria == CATEGORIA_DOCKER_DETALLE);
-    if docker && fallos.len() < elegidas.len() {
-        let inicio = Instant::now();
-        while inicio.elapsed() < espera_docker && medido() < objetivo {
-            std::thread::sleep(INTERVALO_AVANCE.min(espera_docker));
-            al_avanzar(&Avance {
-                paso: elegidas.len(),
-                pasos: elegidas.len(),
-                titulo: "Docker devolviendo el espacio".to_string(),
-                liberado: medido(),
-                objetivo,
-            });
-        }
-    }
     Hecho {
         liberado: medido(),
+        docker_antes: if docker && fallos.is_empty() {
+            imagen_antes
+        } else {
+            None
+        },
         fallos,
         docker,
+        docker_pendiente: false,
     }
 }
 
@@ -1141,10 +1192,30 @@ impl Liberador {
                 yo.poner(&[], Some("Liberando espacio…"));
                 std::thread::spawn(move || {
                     al_empezar();
-                    let hecho = ejecutar(&elegidas, |avance| {
+                    let mut hecho = ejecutar(&elegidas, |avance| {
                         let _ = yo.fila_seguro.set_text(avance.texto());
                         menu_nativo::aplicar(&yo.app);
                     });
+                    if hecho.docker_antes.is_some() {
+                        // Nothing is being deleted any more: the menu goes back
+                        // to work while Docker takes its time.
+                        yo.ocupado.store(false, Ordering::SeqCst);
+                        let lista = yo.lista.lock().unwrap().clone();
+                        yo.poner(&lista, None);
+                        let (minimo, pendiente) = esperar_que_encoja(
+                            bytes_imagen_docker,
+                            TOPE_DOCKER,
+                            QUIETUD_DOCKER,
+                            INTERVALO_AVANCE,
+                        );
+                        hecho = hecho.con_lo_que_encogio(minimo, pendiente);
+                        if yo.ocupado.swap(true, Ordering::SeqCst) {
+                            // Another cleanup started meanwhile: it re-measures
+                            // when it ends. This one only reports.
+                            al_terminar(&hecho);
+                            return;
+                        }
+                    }
                     // Before measuring again, which takes about ten seconds:
                     // the result is already known.
                     al_terminar(&hecho);
@@ -1314,9 +1385,8 @@ mod tests {
     #[test]
     fn el_aviso_final_explica_que_docker_puede_tardar_en_devolver_el_espacio() {
         let (t, c) = aviso_final(&Hecho {
-            liberado: 0,
-            fallos: vec![],
             docker: true,
+            ..Hecho::default()
         });
         assert_eq!(t, "No se liberó espacio");
         assert!(c.contains("Docker puede tardar"));
@@ -1638,7 +1708,7 @@ mod tests {
         let (t, c) = aviso_final(&Hecho {
             liberado: 0,
             fallos: vec![("Caché de npm".into(), "npm: command not found".into())],
-            docker: false,
+            ..Hecho::default()
         });
         assert_eq!(t, "No se liberó espacio");
         assert!(c.contains("Caché de npm: npm: command not found"));
@@ -1692,41 +1762,90 @@ mod tests {
         assert_eq!(vistos.last(), Some(&(2, 2, 2 * GB)));
     }
 
-    #[test]
-    fn tras_limpiar_docker_sigue_midiendo_porque_tarda_en_devolver_el_espacio() {
-        let mut d = l("docker_build", REGENERA, 1 << 50);
-        d.categoria = "docker".into();
-        d.command = "true".into();
-        let vistos = Mutex::new(Vec::new());
-        let h = ejecutar_con(&[d], Duration::from_millis(1200), |a| {
-            vistos.lock().unwrap().push(a.titulo.clone());
-        });
-        assert!(h.docker);
-        assert!(vistos
-            .into_inner()
-            .unwrap()
-            .iter()
-            .any(|t| t == "Docker devolviendo el espacio"));
+    const POCO: Duration = Duration::from_millis(1);
+
+    fn lecturas(v: Vec<u64>) -> impl FnMut() -> Option<u64> {
+        let mut i = 0;
+        move || {
+            let a = v[i.min(v.len() - 1)];
+            i += 1;
+            Some(a)
+        }
     }
 
     #[test]
-    fn si_docker_falla_no_espera_en_vano() {
-        let mut d = l("docker_build", REGENERA, 1 << 50);
-        d.categoria = "docker".into();
-        d.command = "exit 1".into();
-        let inicio = Instant::now();
-        ejecutar(&[d], |_| {});
-        assert!(inicio.elapsed() < Duration::from_secs(10));
+    fn la_espera_termina_cuando_deja_de_encoger() {
+        let (m, pendiente) = esperar_que_encoja(
+            lecturas(vec![100, 100, 80, 60, 60]),
+            Duration::from_secs(5),
+            Duration::from_millis(20),
+            POCO,
+        );
+        assert_eq!(m, Some(60));
+        assert!(!pendiente);
     }
 
     #[test]
-    fn lo_demas_no_espera_a_docker() {
-        let mut c = l("logs", REGENERA, 1 << 50);
-        c.command = "true".into();
-        let inicio = Instant::now();
-        let h = ejecutar(&[c], |_| {});
-        assert!(!h.docker);
-        assert!(inicio.elapsed() < Duration::from_secs(10));
+    fn si_se_acaba_el_tiempo_encogiendo_avisa_que_puede_seguir() {
+        let mut v = 1_000_000u64;
+        let (m, pendiente) = esperar_que_encoja(
+            move || {
+                v -= 1;
+                Some(v)
+            },
+            Duration::from_millis(30),
+            Duration::from_secs(5),
+            POCO,
+        );
+        assert!(m.unwrap() < 1_000_000);
+        assert!(pendiente);
+    }
+
+    #[test]
+    fn si_nunca_encoge_no_promete_mas() {
+        let (m, pendiente) = esperar_que_encoja(
+            lecturas(vec![100]),
+            Duration::from_millis(20),
+            Duration::from_secs(5),
+            POCO,
+        );
+        assert_eq!(m, Some(100));
+        assert!(!pendiente);
+    }
+
+    #[test]
+    fn que_crezca_mientras_tanto_no_cuenta_como_liberado() {
+        let (m, _) = esperar_que_encoja(
+            lecturas(vec![100, 150, 200]),
+            Duration::from_millis(20),
+            Duration::from_secs(5),
+            POCO,
+        );
+        assert_eq!(m, Some(100));
+    }
+
+    #[test]
+    fn lo_liberado_de_docker_sale_de_lo_que_encogio_su_imagen() {
+        let h = Hecho {
+            liberado: 0,
+            docker: true,
+            docker_antes: Some(10 * GB),
+            ..Hecho::default()
+        }
+        .con_lo_que_encogio(Some(4 * GB), false);
+        assert_eq!(h.liberado, 6 * GB);
+        assert_eq!(aviso_final(&h).0, "Liberados 6,0 GB");
+    }
+
+    #[test]
+    fn si_docker_puede_seguir_devolviendo_el_aviso_lo_dice() {
+        let h = Hecho {
+            liberado: GB,
+            docker: true,
+            docker_pendiente: true,
+            ..Hecho::default()
+        };
+        assert!(aviso_final(&h).1.contains("aún puede devolver"));
     }
 
     #[test]
