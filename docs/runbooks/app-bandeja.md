@@ -277,6 +277,17 @@ ofrece limpiar, con sus propios comandos: `conda clean --all` y `conda env remov
 versiones de Homebrew, uv, pyenv y nvm, y los paquetes globales de npm, solo se informan:
 quitar una fórmula puede romper otras que dependen de ella.
 
+## Qué es «Sistema y otros»
+
+Esa fila es lo que sobra tras medir lo demás. Su submenú lo desglosa (`desglose.rs`): apps,
+herramientas de desarrollo, `/Library` y `/private/var`, datos de apps, Mail y Mensajes, macOS
+y swap, estos dos con los volúmenes de `diskutil apfs list`. **Sin medir** es lo que queda
+hasta la cifra de la fila. Solo informa: nada de esto se ofrece borrar.
+
+Sin Acceso total al disco no se lee `~/Library`, porque macOS preguntaría carpeta por carpeta,
+así que todo eso cae en «Sin medir». Con clones de APFS o mediciones de distintos momentos, lo
+medido puede pasarse de la fila; entonces no aparece «Sin medir».
+
 ## Swap y Analizar desde el menú
 
 **Swap** no borra nada: el archivo de swap lo gestiona macOS. Su submenú ofrece
