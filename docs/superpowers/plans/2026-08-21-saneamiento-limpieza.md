@@ -1001,9 +1001,8 @@ git commit -m "refactor: una sola definición de los niveles de limpieza"
 - Modificar: `disk_analyzer_core.py` (`generate_recommendations`)
 - Crear: `tests/test_reglas_nuevas.py`
 
-**Contexto medido:** las cachés de la máquina de desarrollo suman 101,85 GB,
-pero solo se recomiendan 17,6 y solo 4,01 son de nivel 1. Se quedan fuera Docker
-(39,6 GB), `~/Library/Caches` (21,4 GB) y la papelera. La regla de Docker
+**Contexto:** solo se recomienda una parte pequeña de las cachés encontradas. Se quedan
+fuera Docker, `~/Library/Caches` y la papelera. La regla de Docker
 **solo necesita `docker system df`**, que tarda segundos: hoy no aparece en la
 bandeja porque nadie rellena `docker_stats` en ese camino.
 
@@ -1030,7 +1029,7 @@ def _core_con(locs, docker=None):
 
 
 def test_las_caches_de_library_se_recomiendan():
-    """21,4 GB reales en la máquina de desarrollo, sin ninguna regla."""
+    """mucho, reales en la máquina de desarrollo, sin ninguna regla."""
     import os
     ruta = os.path.expanduser('~/Library/Caches')
     core = _core_con([{'type': cache_types.GENERAL, 'path': ruta,
@@ -1081,7 +1080,7 @@ Esperado: FAIL, no existen `caches_de_apps` ni `papelera`.
 En `generate_recommendations`, junto a las de nivel 2:
 
 ```python
-        # Cachés de aplicaciones: 21,4 GB medidos en la máquina de desarrollo y
+        # Cachés de aplicaciones: mucho, medidos en la máquina de desarrollo y
         # ninguna regla los miraba. Nivel 2 y no 1 porque algunas apps guardan
         # ahí cosas que tardan en regenerarse (índices, miniaturas).
         app_caches = [l for l in self.cache_locations

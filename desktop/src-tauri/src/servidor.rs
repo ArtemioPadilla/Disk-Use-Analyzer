@@ -30,8 +30,7 @@ use crate::analisis::Motor;
 
 const HOST: &str = "127.0.0.1";
 /// Cuánto se espera a que el servidor acepte conexiones. Arrancar FastAPI y
-/// uvicorn lleva varios segundos en frío; medido en esta máquina, entre 8 y
-/// 10. El margen es generoso a propósito: quedarse corto se manifiesta como
+/// uvicorn lleva varios segundos en frío. El margen es generoso a propósito: quedarse corto se manifiesta como
 /// "el botón no hace nada".
 const ARRANQUE_MAXIMO: Duration = Duration::from_secs(45);
 const SONDEO: Duration = Duration::from_millis(250);

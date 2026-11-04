@@ -39,16 +39,16 @@ esac
 
 def test_una_imagen_sin_usar_se_ofrece_sin_forzar(tmp_path, monkeypatch):
     _falso(tmp_path, monkeypatch)
-    f = {x['id']: x for x in inventario()}['docker:imagen:bbb222']
+    f = {x['id']: x for x in inventario()}['docker:imagen:bbb222:app:latest']
     assert f['titulo'] == 'app:latest'
-    assert f['command'] == 'docker image rm bbb222'
+    assert f['command'] == 'docker image rm app:latest'
     assert f['consecuencia'] == 'redescarga'
     assert f['space'] == 1_500_000_000
 
 
 def test_una_imagen_en_uso_no_se_ofrece(tmp_path, monkeypatch):
     _falso(tmp_path, monkeypatch)
-    f = {x['id']: x for x in inventario()}['docker:imagen:aaa111']
+    f = {x['id']: x for x in inventario()}['docker:imagen:aaa111:postgres:16']
     assert f['command'] == ''
     assert f['motivo'] == EN_USO
 
@@ -81,3 +81,13 @@ def test_sin_docker_instalado_no_rompe(monkeypatch, tmp_path):
 @pytest.mark.parametrize('texto,esperado', [('12.5GB', 12_500_000_000), ('1.2kB', 1200), ('0B', 0), ('raro', 0)])
 def test_lee_los_tamanos_de_docker(texto, esperado):
     assert _bytes(texto) == esperado
+
+
+def test_una_imagen_con_varias_etiquetas_no_duplica_ids(tmp_path, monkeypatch):
+    IMAGENES.append({'ID': 'bbb222', 'Repository': 'app', 'Tag': 'v1', 'Size': '1.5GB'})
+    try:
+        _falso(tmp_path, monkeypatch)
+        ids = [x['id'] for x in inventario()]
+        assert len(ids) == len(set(ids))
+    finally:
+        IMAGENES.pop()

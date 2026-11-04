@@ -86,7 +86,7 @@ requirements-web.txt              # No changes needed (pty is stdlib)
 - [ ] **Step 1: Initialize Astro project**
 
 ```bash
-cd /Users/artemiopadilla/Documents/repos/GitHub/personal/Disk-Use-Analyzer
+cd <repo>
 mkdir -p web/src/pages web/src/layouts web/src/components web/src/hooks web/src/lib web/public
 ```
 
@@ -204,7 +204,7 @@ web/.astro/
 - [ ] **Step 8: Install dependencies and verify build**
 
 ```bash
-cd /Users/artemiopadilla/Documents/repos/GitHub/personal/Disk-Use-Analyzer/web
+cd <repo>/web
 npm install
 npm run build
 ```
@@ -298,7 +298,7 @@ async def serve_root():
 - [ ] **Step 3: Test that the server starts and serves the Astro build**
 
 ```bash
-cd /Users/artemiopadilla/Documents/repos/GitHub/personal/Disk-Use-Analyzer/web
+cd <repo>/web
 npm run build
 cd ..
 python -c "
@@ -664,7 +664,7 @@ import MainLayout from '../layouts/MainLayout.astro';
 - [ ] **Step 7: Build and verify all pages render**
 
 ```bash
-cd /Users/artemiopadilla/Documents/repos/GitHub/personal/Disk-Use-Analyzer/web
+cd <repo>/web
 npm run build
 ls dist/index.html dist/files/index.html dist/cleanup/index.html dist/export/index.html dist/history/index.html
 ```
@@ -1047,7 +1047,7 @@ export function useAnalysis() {
 - [ ] **Step 6: Build to verify types compile**
 
 ```bash
-cd /Users/artemiopadilla/Documents/repos/GitHub/personal/Disk-Use-Analyzer/web
+cd <repo>/web
 npm run build
 ```
 
@@ -1162,7 +1162,7 @@ class TestPTYManager:
 - [ ] **Step 2: Run tests to verify they fail**
 
 ```bash
-cd /Users/artemiopadilla/Documents/repos/GitHub/personal/Disk-Use-Analyzer
+cd <repo>
 python -m pytest tests/test_pty_manager.py -v 2>&1 | head -30
 ```
 
@@ -1482,7 +1482,7 @@ class PTYManager:
 - [ ] **Step 4: Run tests**
 
 ```bash
-cd /Users/artemiopadilla/Documents/repos/GitHub/personal/Disk-Use-Analyzer
+cd <repo>
 python -m pytest tests/test_pty_manager.py -v
 ```
 
@@ -2060,7 +2060,7 @@ import TaskList from '../components/TaskList.tsx';
 - [ ] **Step 6: Build and verify**
 
 ```bash
-cd /Users/artemiopadilla/Documents/repos/GitHub/personal/Disk-Use-Analyzer/web
+cd <repo>/web
 npm run build
 ```
 
@@ -2277,7 +2277,7 @@ import FileTable from '../components/FileTable.tsx';
 - [ ] **Step 3: Build and verify**
 
 ```bash
-cd /Users/artemiopadilla/Documents/repos/GitHub/personal/Disk-Use-Analyzer/web
+cd <repo>/web
 npm run build
 ```
 
@@ -2473,7 +2473,7 @@ import CleanupWizard from '../components/CleanupWizard.tsx';
 - [ ] **Step 3: Build and verify**
 
 ```bash
-cd /Users/artemiopadilla/Documents/repos/GitHub/personal/Disk-Use-Analyzer/web
+cd <repo>/web
 npm run build
 ```
 
@@ -2796,7 +2796,7 @@ Replace `<div id="terminal-root"></div>` with:
 - [ ] **Step 4: Build and verify**
 
 ```bash
-cd /Users/artemiopadilla/Documents/repos/GitHub/personal/Disk-Use-Analyzer/web
+cd <repo>/web
 npm run build
 ```
 
@@ -2975,7 +2975,7 @@ import ExportPanel from '../components/ExportPanel.tsx';
 - [ ] **Step 4: Build and verify**
 
 ```bash
-cd /Users/artemiopadilla/Documents/repos/GitHub/personal/Disk-Use-Analyzer/web
+cd <repo>/web
 npm run build
 ```
 
@@ -3114,7 +3114,7 @@ import SessionList from '../components/SessionList.tsx';
 - [ ] **Step 3: Build and verify**
 
 ```bash
-cd /Users/artemiopadilla/Documents/repos/GitHub/personal/Disk-Use-Analyzer/web
+cd <repo>/web
 npm run build
 ```
 
@@ -3281,7 +3281,7 @@ Add before the closing `</div>` of app-shell:
 - [ ] **Step 4: Build and verify**
 
 ```bash
-cd /Users/artemiopadilla/Documents/repos/GitHub/personal/Disk-Use-Analyzer/web
+cd <repo>/web
 npm run build
 ```
 
@@ -3302,7 +3302,7 @@ git commit -m "feat: new analysis modal with path selection and size slider"
 - [ ] **Step 1: Build the full Astro project**
 
 ```bash
-cd /Users/artemiopadilla/Documents/repos/GitHub/personal/Disk-Use-Analyzer/web
+cd <repo>/web
 npm run build
 ```
 
@@ -3311,7 +3311,7 @@ Expected: Build succeeds with no errors.
 - [ ] **Step 2: Verify FastAPI serves all pages**
 
 ```bash
-cd /Users/artemiopadilla/Documents/repos/GitHub/personal/Disk-Use-Analyzer
+cd <repo>
 python -c "
 from fastapi.testclient import TestClient
 from disk_analyzer_web import app
@@ -3356,7 +3356,7 @@ print('\\nAll integration checks passed!')
 - [ ] **Step 3: Run all backend tests**
 
 ```bash
-cd /Users/artemiopadilla/Documents/repos/GitHub/personal/Disk-Use-Analyzer
+cd <repo>
 python -m pytest tests/ -v
 ```
 

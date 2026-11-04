@@ -267,8 +267,14 @@ un proceso trabajando dentro, y los demás dicen por qué se quedan. Un squash c
 mergeado, porque el commit no es alcanzable desde la rama principal: ese worktree se queda
 aunque el trabajo ya esté dentro.
 
-Quitar usa `git worktree remove` sin `--force`, tras comprobar de nuevo que sigue mergeado.
-La rama no se borra. Un worktree roto se limpia con `git worktree prune`.
+También se queda el que tiene archivos ignorados que no se reconstruyen, como un `.env`:
+`git worktree remove` los borra sin avisar. Quitar usa ese comando sin `--force`, y justo
+antes vuelve a comprobar el commit, que sigue mergeado, que nada trabaja dentro y que no
+aparecieron ignorados nuevos. La rama no se borra.
+
+`git worktree prune` actúa sobre todo el repo, y una carpeta ausente puede ser un disco sin
+montar o una carpeta movida. Solo se ofrece si ninguna ausente está en `/Volumes` ni bloqueada,
+y el commit de cada una sobrevive porque tiene rama o está mergeado.
 
 ## Ambientes
 

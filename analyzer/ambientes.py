@@ -44,7 +44,7 @@ def _fila(id_: str, titulo: str, ruta: Path, consecuencia: str = 'regenera',
 def _dias_desde(ruta: Path) -> Optional[int]:
     """Days since conda last changed the environment."""
     try:
-        return int((time.time() - (ruta / 'conda-meta').stat().st_mtime) / 86400)
+        return max(0, int((time.time() - (ruta / 'conda-meta').stat().st_mtime) / 86400))
     except OSError:
         return None
 
@@ -54,7 +54,7 @@ def _de_conda(base: Path) -> List[Dict]:
     if not conda.exists():
         return []
     c = escapar(str(conda))
-    filas = [_fila(f'{base.name}-pkgs', 'Paquetes de conda', base / 'pkgs', 'redescarga',
+    filas = [_fila(f'{base}-pkgs', 'Paquetes de conda', base / 'pkgs', 'redescarga',
                    f'{c} clean --all -y')]
     entornos = base / 'envs'
     if entornos.is_dir():
@@ -62,8 +62,9 @@ def _de_conda(base: Path) -> List[Dict]:
             ruta = Path(e.path)
             # Only what conda itself recognises as an environment.
             if e.is_dir(follow_symlinks=False) and (ruta / 'conda-meta').is_dir():
-                filas.append(_fila(f'{base.name}-env-{e.name}', f'Entorno conda {e.name}', ruta,
-                                   'redescarga', f'{c} env remove -y -p {escapar(str(ruta))}',
+                # 'permanente': nothing says this environment can be rebuilt.
+                filas.append(_fila(f'{base}-env-{e.name}', f'Entorno conda {e.name}', ruta,
+                                   'permanente', f'{c} env remove -y -p {escapar(str(ruta))}',
                                    _dias_desde(ruta)))
     return [f for f in filas if f]
 

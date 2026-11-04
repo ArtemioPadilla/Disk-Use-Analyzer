@@ -125,7 +125,7 @@ Expected: ambas versiones se imprimen. Si `cargo` no se encuentra en shells nuev
 - [ ] **Step 2: Crear el proyecto**
 
 ```bash
-cd /Users/artemiopadilla/Documents/repos/GitHub/personal/Disk-Use-Analyzer
+cd <repo>
 npm create tauri-app@latest desktop -- --template vanilla --manager npm --yes
 ```
 

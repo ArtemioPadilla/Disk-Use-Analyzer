@@ -160,7 +160,7 @@ def test_no_se_puede_escapar_con_puntos():
 def test_los_temporales_del_sistema_los_gestiona_macos():
     """`/private/var/folders` está protegido a propósito.
 
-    Aparece entre las cachés que el escáner encuentra (4,14 GB medidos), pero
+    Aparece entre las cachés que el escáner encuentra, pero
     macOS gestiona ese directorio por su cuenta y borrarlo entero es
     arriesgado. Este test existe para que quede claro que la exclusión es
     deliberada y no un olvido.

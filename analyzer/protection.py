@@ -131,9 +131,11 @@ def es_artefacto(file_path: str) -> bool:
     evidencia que los distinga de datos del usuario. Un symlink nunca cuenta.
     """
     ruta = Path(file_path)
+    if ruta.is_symlink():
+        return False
     if ruta.name == 'node_modules':
         return True
-    if ruta.is_symlink() or not ruta.is_dir():
+    if not ruta.is_dir():
         return False
     if ruta.name in ('.venv', 'venv'):
         return (ruta / 'pyvenv.cfg').is_file()
