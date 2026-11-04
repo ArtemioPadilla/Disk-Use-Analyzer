@@ -270,6 +270,13 @@ aunque el trabajo ya esté dentro.
 Quitar usa `git worktree remove` sin `--force`, tras comprobar de nuevo que sigue mergeado.
 La rama no se borra. Un worktree roto se limpia con `git worktree prune`.
 
+## Ambientes
+
+**Ambientes** muestra lo que hay de Python y Node (`disk_analyzer.py --ambientes`). Solo conda
+ofrece limpiar, con sus propios comandos: `conda clean --all` y `conda env remove`. Las
+versiones de Homebrew, uv, pyenv y nvm, y los paquetes globales de npm, solo se informan:
+quitar una fórmula puede romper otras que dependen de ella.
+
 ## Swap y Analizar desde el menú
 
 **Swap** no borra nada: el archivo de swap lo gestiona macOS. Su submenú ofrece

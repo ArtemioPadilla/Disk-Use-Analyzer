@@ -4621,6 +4621,8 @@ Ejemplos de uso:
     
     parser.add_argument('--proyectos', action='store_true',
                         help='Listar en JSON lo que los proyectos pueden reconstruir')
+    parser.add_argument('--ambientes', action='store_true',
+                        help='Listar en JSON los ambientes de Python y Node')
     parser.add_argument('--worktrees', action='store_true',
                         help='Listar en JSON los worktrees de git y su estado')
     parser.add_argument('--informe', metavar='FICHERO',
@@ -4640,6 +4642,11 @@ Ejemplos de uso:
 
     if args.proyectos:
         from analyzer.proyectos import inventario
+        print(json.dumps(inventario()))
+        return
+
+    if args.ambientes:
+        from analyzer.ambientes import inventario
         print(json.dumps(inventario()))
         return
 

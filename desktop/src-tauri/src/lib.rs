@@ -558,6 +558,7 @@ pub fn run() {
             let titulo_desarrollo = titulo("Desarrollo")?;
             let proyectos_menu = Submenu::new(app, "Proyectos\t…", true)?;
             let worktrees_menu = Submenu::new(app, "Worktrees\t…", true)?;
+            let ambientes_menu = Submenu::new(app, "Ambientes\t…", true)?;
             let seguro_item = MenuItem::with_id(
                 app,
                 format!("{}{}", liberar::PREFIJO, liberar::TODO),
@@ -592,6 +593,7 @@ pub fn run() {
                 &titulo_desarrollo,
                 &proyectos_menu,
                 &worktrees_menu,
+                &ambientes_menu,
                 &sep5,
                 &titulo_memoria,
                 &swap_menu,
@@ -630,6 +632,7 @@ pub fn run() {
                 seguro_item,
                 proyectos_menu,
                 worktrees_menu,
+                ambientes_menu,
                 motor.clone(),
             );
 

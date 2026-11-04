@@ -39,6 +39,7 @@ const CATEGORIA_PROYECTOS: &str = "proyectos";
 /// Menu id suffix of "the worktrees that lose nothing".
 const WORKTREES_LIMPIOS: &str = "worktrees_limpios";
 const CATEGORIA_WORKTREES: &str = "worktrees";
+const CATEGORIA_AMBIENTES: &str = "ambientes";
 /// Menu id suffix of "all the caches".
 const TODAS_CACHES: &str = "caches";
 
@@ -423,6 +424,45 @@ pub fn filas_worktrees(lista: &[Limpieza], aviso: Option<&str>) -> Vec<Fila> {
     out
 }
 
+/// The top-level row for environments.
+pub fn fila_ambientes(lista: &[Limpieza]) -> String {
+    let total: u64 = lista
+        .iter()
+        .filter(|l| l.categoria == CATEGORIA_AMBIENTES)
+        .map(|l| l.space)
+        .sum();
+    format!("Ambientes\t{}", tamano(total))
+}
+
+/// The environments submenu: what conda can clean, then the rest to inform.
+pub fn filas_ambientes(lista: &[Limpieza], aviso: Option<&str>) -> Vec<Fila> {
+    let propias: Vec<&Limpieza> = lista
+        .iter()
+        .filter(|l| l.categoria == CATEGORIA_AMBIENTES)
+        .collect();
+    let (limpiables, informan): (Vec<&Limpieza>, Vec<&Limpieza>) =
+        propias.iter().partition(|l| !l.command.is_empty());
+    let mut out = Vec::new();
+    if let Some(a) = aviso {
+        out.push(Fila::Texto(a.to_string()));
+    } else if propias.is_empty() {
+        out.push(Fila::Texto("No se encontró ninguno".into()));
+    }
+    out.extend(limpiables.iter().map(|l| limpieza(l)));
+    if !informan.is_empty() {
+        if !limpiables.is_empty() {
+            out.push(Fila::Separador);
+        }
+        out.push(Fila::Texto("Instalados".into()));
+        out.extend(
+            informan
+                .iter()
+                .map(|l| Fila::Texto(format!("{}\t{}", l.titulo, tamano(l.space)))),
+        );
+    }
+    out
+}
+
 /// The swap submenu. Nothing can delete swap: it only shrinks when the app
 /// holding it quits, or with a restart, and the last lines say so.
 pub fn filas_swap(cerrables: &[(String, u64)]) -> Vec<Fila> {
@@ -754,7 +794,7 @@ where
 }
 
 /// What the engine lists about development, slower than the caches.
-const MODOS_DESARROLLO: [&str; 2] = ["--proyectos", "--worktrees"];
+const MODOS_DESARROLLO: [&str; 3] = ["--proyectos", "--worktrees", "--ambientes"];
 
 /// The cleanups' place in the menu and their current list.
 pub struct Liberador {
@@ -763,6 +803,7 @@ pub struct Liberador {
     fila_seguro: MenuItem<Wry>,
     proyectos: Submenu<Wry>,
     worktrees: Submenu<Wry>,
+    ambientes: Submenu<Wry>,
     motor: Option<Motor>,
     lista: Mutex<Vec<Limpieza>>,
     /// What comes from the slower measures: projects and the like.
@@ -777,6 +818,7 @@ impl Liberador {
         fila_seguro: MenuItem<Wry>,
         proyectos: Submenu<Wry>,
         worktrees: Submenu<Wry>,
+        ambientes: Submenu<Wry>,
         motor: Option<Motor>,
     ) -> Arc<Self> {
         let l = Arc::new(Liberador {
@@ -785,6 +827,7 @@ impl Liberador {
             fila_seguro,
             proyectos,
             worktrees,
+            ambientes,
             motor,
             lista: Mutex::new(Vec::new()),
             desarrollo: Mutex::new(Vec::new()),
@@ -820,6 +863,8 @@ impl Liberador {
         poner_filas(&self.app, &self.proyectos, &filas_proyectos(&lista, aviso));
         let _ = self.worktrees.set_text(fila_worktrees(&lista));
         poner_filas(&self.app, &self.worktrees, &filas_worktrees(&lista, aviso));
+        let _ = self.ambientes.set_text(fila_ambientes(&lista));
+        poner_filas(&self.app, &self.ambientes, &filas_ambientes(&lista, aviso));
     }
 
     /// Re-measures and rebuilds the menu. Blocking: call it off the main
@@ -1173,6 +1218,23 @@ mod tests {
         let c = confirmacion(&[worktree("a", "", GB)]);
         assert_eq!(c.boton, "Quitar");
         assert!(c.mensaje.contains("la rama y sus commits siguen"));
+    }
+
+    #[test]
+    fn los_ambientes_solo_ofrecen_lo_que_tiene_comando() {
+        let mut cache = l("pkgs", REDESCARGA, GB);
+        cache.categoria = CATEGORIA_AMBIENTES.into();
+        let mut brew = l("brew", REGENERA, 2 * GB);
+        brew.categoria = CATEGORIA_AMBIENTES.into();
+        brew.command = String::new();
+        let lista = vec![cache, brew];
+
+        let f = filas_ambientes(&lista, None);
+
+        assert_eq!(ids(&f), vec!["liberar:pkgs"]);
+        assert!(f.contains(&Fila::Texto("T-brew\t2,0 GB".into())));
+        assert_eq!(fila_ambientes(&lista), "Ambientes\t3,0 GB");
+        assert!(elegir(&lista, TODO).is_empty());
     }
 
     #[test]
