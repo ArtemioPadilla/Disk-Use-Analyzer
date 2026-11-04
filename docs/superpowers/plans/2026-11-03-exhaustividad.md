@@ -280,7 +280,7 @@ Coexisten varias instalaciones de Python y Node, y entornos que nadie usa. La ap
 ## E7.8: Docker a fondo: imágenes y volúmenes por nombre
 
 - [ ] **Issue:** [#43](https://github.com/ArtemioPadilla/Disk-Use-Analyzer/issues/43)
-- **PR:** pendiente
+- **PR:** [#56](https://github.com/ArtemioPadilla/Disk-Use-Analyzer/pull/56)
 
 Con el daemon apagado la app no sabe qué hay en `Docker.raw`, y con él encendido solo da dos totales. Tampoco se ha probado ninguna limpieza contra un Docker real.
 
@@ -288,16 +288,16 @@ Con el daemon apagado la app no sabe qué hay en `Docker.raw`, y con él encendi
 
 **Tareas**
 
-- [ ] Pruebas con el `docker` falso
-- [ ] Inventario por nombre
-- [ ] Encender desde el menú
-- [ ] Probar de verdad y medir `Docker.raw`
+- [x] Pruebas con el `docker` falso
+- [x] Inventario por nombre
+- [x] Encender desde el menú
+- [x] Probar de verdad y medir `Docker.raw`
 
 **Hecho cuando**
 
-- [ ] Se ve qué ocupa Docker por nombre.
-- [ ] Las limpiezas de E4 están probadas contra un daemon real.
-- [ ] El aviso final sobre el espacio refleja lo que realmente pasa.
+- [x] Se ve qué ocupa Docker por nombre.
+- [x] Las limpiezas de E4 están probadas contra un daemon real.
+- [x] El aviso final sobre el espacio refleja lo que realmente pasa.
 
 **Seguridad**
 
