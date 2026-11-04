@@ -77,6 +77,7 @@ CONSECUENCIAS: Dict[str, str] = {
     'docker': 'redescarga',
     'docker_build': 'regenera',
     'docker_imagenes': 'redescarga',
+    'simuladores_sistema': 'regenera',
     'cache_huggingface': 'redescarga',
     'cache_puppeteer': 'redescarga',
     'cache_uv': 'regenera',
@@ -106,6 +107,7 @@ CATEGORIAS_RAPIDAS: Dict[str, str] = {
     'caches_de_apps': 'caches',
     'docker_build': 'docker',
     'docker_imagenes': 'docker',
+    'simuladores_sistema': 'resto',
     'cache_huggingface': 'caches',
     'cache_puppeteer': 'caches',
     'cache_uv': 'caches',
@@ -127,6 +129,14 @@ CACHES_DE_HERRAMIENTAS = (
     ('cache_precommit', 'Cache de pre-commit', '~/.cache/pre-commit', None),
     ('cache_act', 'Cache de act', '~/.cache/act', None),
 )
+
+# Outside the user's reach, so it runs with macOS's administrator dialog. A fixed
+# command and no path from anywhere else: the deletion gate rightly rejects
+# /Library, and this is the exception, one known folder that Simulator rebuilds.
+# The menu-bar app checks it against its own copy before asking for a password.
+CACHE_SIMULADORES_SISTEMA = '/Library/Developer/CoreSimulator/Caches'
+COMANDO_SIMULADORES_SISTEMA = (
+    f'find {CACHE_SIMULADORES_SISTEMA} -mindepth 1 -maxdepth 1 -exec rm -rf {{}} +')
 
 # Cache dirs that only feed rules the menu never offers (lists, Docker), or
 # that are protected anyway. Skipping them is what makes the quick mode take
@@ -156,6 +166,7 @@ def limpiezas_rapidas(recomendaciones: List[Dict]) -> List[Dict]:
     return [{'id': r['id'], 'titulo': r['type'], 'descripcion': r['description'],
              'space': r['space'], 'consecuencia': r['consecuencia'],
              'categoria': CATEGORIAS_RAPIDAS[r['id']],
+             'requiere_admin': r.get('requiere_admin', False),
              'command': r['command']} for r in elegidas]
 
 
@@ -391,7 +402,22 @@ class DiskAnalyzerCore:
         self.find_cache_locations(rapidos)
         return limpiezas_rapidas(self.generate_recommendations()
                                  + self._reglas_de_herramientas()
+                                 + self._reglas_con_admin()
                                  + self._reglas_docker_rapidas())
+
+    def _reglas_con_admin(self) -> List[Dict]:
+        """What needs a password. Measuring does not: the folder is readable."""
+        ruta = Path(CACHE_SIMULADORES_SISTEMA)
+        if not ruta.is_dir() or ruta.is_symlink():
+            return []
+        tam = self.get_directory_size(ruta)
+        if tam <= 100 * MB:
+            return []
+        return [{'id': 'simuladores_sistema', 'type': 'Cachés de simuladores',
+                 'description': CACHE_SIMULADORES_SISTEMA, 'space': tam,
+                 'efecto': 'borra', 'requiere_admin': True,
+                 'consecuencia': CONSECUENCIAS['simuladores_sistema'],
+                 'command': COMANDO_SIMULADORES_SISTEMA}]
 
     def _reglas_de_herramientas(self) -> List[Dict]:
         """One rule per tool in ~/.cache. Skipped when its own command is not

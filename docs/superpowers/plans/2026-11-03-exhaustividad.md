@@ -386,7 +386,7 @@ Hay cachés fuera del alcance del usuario, como `/Library/Developer/CoreSimulato
 
 - La contraseña la pide macOS: la app nunca la ve.
 - Lista cerrada de comandos fijos, sin rutas interpoladas.
-- Preferir `xcrun simctl` sobre `rm` cuando exista. Decidir si este riesgo compensa antes de implementarlo.
+- Decisión: compensa, porque es una sola carpeta que Simulator reconstruye. Sin Xcode completo `xcrun simctl` no está disponible, así que el comando es un `find` fijo.
 
 ## Fuera de este plan
 
