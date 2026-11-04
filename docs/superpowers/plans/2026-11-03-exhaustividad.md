@@ -363,7 +363,7 @@ El motor detecta archivos grandes y descargas antiguas, pero el menú solo enlaz
 ## E7.11: Limpiezas que piden permiso de administrador
 
 - [ ] **Issue:** [#46](https://github.com/ArtemioPadilla/Disk-Use-Analyzer/issues/46)
-- **PR:** pendiente
+- **PR:** [#59](https://github.com/ArtemioPadilla/Disk-Use-Analyzer/pull/59)
 - **Depende de:** E7.2 (#37)
 
 Hay cachés fuera del alcance del usuario, como `/Library/Developer/CoreSimulator/Caches`. La app ni las mide ni las ofrece.
@@ -372,15 +372,15 @@ Hay cachés fuera del alcance del usuario, como `/Library/Developer/CoreSimulato
 
 **Tareas**
 
-- [ ] Decidir si compensa
-- [ ] Comprobar qué es seguro con `simctl`
-- [ ] Pruebas de la lista cerrada
-- [ ] Ejecución con privilegios y menú
+- [x] Decidir si compensa
+- [x] Comprobar qué es seguro con `simctl`
+- [x] Pruebas de la lista cerrada
+- [x] Ejecución con privilegios y menú
 
 **Hecho cuando**
 
-- [ ] Se ofrecen con su tamaño y avisando que pedirán contraseña.
-- [ ] Cancelar el diálogo no cuenta como fallo.
+- [x] Se ofrecen con su tamaño y avisando que pedirán contraseña.
+- [x] Cancelar el diálogo no cuenta como fallo.
 
 **Seguridad**
 
