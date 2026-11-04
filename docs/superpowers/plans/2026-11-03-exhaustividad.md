@@ -106,7 +106,7 @@ La regla `npm` mide todo `~/.npm`, pero `npm cache clean --force` solo vacía `_
 ## E7.2: Desglosar ~/.cache por herramienta
 
 - [ ] **Issue:** [#37](https://github.com/ArtemioPadilla/Disk-Use-Analyzer/issues/37)
-- **PR:** pendiente
+- **PR:** [#50](https://github.com/ArtemioPadilla/Disk-Use-Analyzer/pull/50)
 - **Depende de:** E7.1 (#36)
 
 `~/.cache` cuenta en la fila Cachés del menú, pero la regla `cache_general` es `solo_lista`, así que no se ofrece nada. Puede ser la mayor parte de lo que muestra esa fila.
@@ -115,16 +115,16 @@ La regla `npm` mide todo `~/.npm`, pero `npm cache clean --force` solo vacía `_
 
 **Tareas**
 
-- [ ] Pruebas de cada regla con carpetas falsas
-- [ ] Reglas y rutas permitidas
-- [ ] `Limpiar todas` excluye `redescarga`
-- [ ] Revisar en el menú real
+- [x] Pruebas de cada regla con carpetas falsas
+- [x] Reglas y rutas permitidas
+- [x] `Limpiar todas` excluye `redescarga`
+- [x] Revisar en el menú real
 
 **Hecho cuando**
 
-- [ ] El submenú Cachés lista cada herramienta con su tamaño.
-- [ ] Lo que hay que volver a descargar va bajo su encabezado y no entra en «Limpiar todas» ni en «Liberar lo seguro».
-- [ ] La suma de la fila Cachés y lo ofrecido se pueden explicar: lo no ofrecido se nombra.
+- [x] El submenú Cachés lista cada herramienta con su tamaño.
+- [x] Lo que hay que volver a descargar va bajo su encabezado y no entra en «Limpiar todas» ni en «Liberar lo seguro».
+- [x] La suma de la fila Cachés y lo ofrecido se pueden explicar: lo no ofrecido se nombra.
 
 **Seguridad**
 
