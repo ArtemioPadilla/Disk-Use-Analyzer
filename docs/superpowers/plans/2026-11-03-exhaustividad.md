@@ -307,7 +307,7 @@ Con el daemon apagado la app no sabe qué hay en `Docker.raw`, y con él encendi
 ## E7.9: Apps pesadas y lo que dejan en Library
 
 - [ ] **Issue:** [#44](https://github.com/ArtemioPadilla/Disk-Use-Analyzer/issues/44)
-- **PR:** pendiente
+- **PR:** [#57](https://github.com/ArtemioPadilla/Disk-Use-Analyzer/pull/57)
 - **Depende de:** E7.7 (#42)
 
 Las apps pueden ocupar mucho, y algunas guardan muchos datos en `~/Library/Containers` que no se ven desde ningún lado.
@@ -316,16 +316,16 @@ Las apps pueden ocupar mucho, y algunas guardan muchos datos en `~/Library/Conta
 
 **Tareas**
 
-- [ ] Investigar la fuente de último uso
-- [ ] Pruebas de asociación con bundles falsos
-- [ ] Inventario
-- [ ] Menú
+- [x] Investigar la fuente de último uso
+- [x] Pruebas de asociación con bundles falsos
+- [x] Inventario
+- [x] Menú
 
 **Hecho cuando**
 
-- [ ] Se ve el tamaño real de cada app con sus datos.
-- [ ] La fecha de último uso se muestra solo si es fiable.
-- [ ] Nada se desinstala ni se borra desde la app.
+- [x] Se ve el tamaño real de cada app con sus datos.
+- [x] La fecha de último uso se muestra solo si es fiable.
+- [x] Nada se desinstala ni se borra desde la app.
 
 **Seguridad**
 
