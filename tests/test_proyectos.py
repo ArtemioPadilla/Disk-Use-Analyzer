@@ -251,3 +251,13 @@ def test_una_fecha_futura_no_da_una_edad_negativa(raiz):
     futuro = time.time() + 30 * 86400
     os.utime(pj, (futuro, futuro))
     assert _por_ruta(raiz)[str(nm)]['dias'] == 0
+
+
+def test_dos_artefactos_iguales_de_un_monorepo_se_distinguen(raiz):
+    repo = _repo(raiz / 'mono', 'node_modules\n')
+    for app in ('a', 'b'):
+        (repo / 'apps' / app).mkdir(parents=True)
+        (repo / 'apps' / app / 'package.json').write_text('{}')
+        _pesado(repo / 'apps' / app / 'node_modules')
+    titulos = {f['titulo'] for f in inventario([str(raiz)])}
+    assert titulos == {'mono · apps/a/node_modules', 'mono · apps/b/node_modules'}

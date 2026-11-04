@@ -46,9 +46,23 @@ const TITULOS: [&str; 14] = [
     "Revisar antes de borrar",
 ];
 
-/// Where a figure ends, in points from the start of the title. Also what
-/// keeps the rows of a section the same width.
+/// Where a figure ends, in points from the start of the title, at least. Also
+/// what keeps the rows of a section the same width.
 const FIN_CIFRAS: f64 = 230.0;
+/// Room for a figure, and points per character of a label: generous, since a label
+/// that passes the tab stop pushes its figure onto a line of its own.
+const ANCHO_CIFRA: f64 = 70.0;
+const PUNTOS_POR_LETRA: f64 = 7.2;
+
+/// Where the figures of a menu end, so that its longest label still fits.
+pub fn fin_cifras<'a>(titulos: impl Iterator<Item = &'a str>) -> f64 {
+    let mas_largo = titulos
+        .filter_map(|t| t.split_once('\t'))
+        .map(|(etiqueta, _)| etiqueta.chars().count())
+        .max()
+        .unwrap_or(0);
+    FIN_CIFRAS.max(mas_largo as f64 * PUNTOS_POR_LETRA + ANCHO_CIFRA)
+}
 const TAM_FUENTE: f64 = 13.0;
 /// A label row, matched by eye to the items macOS draws around it.
 const MARGEN_FILA: f64 = 14.0;
@@ -83,7 +97,7 @@ pub fn clasificar(titulo: &str, habilitado: bool, raiz: bool) -> Estilo {
     }
 }
 
-fn atribuido(titulo: &str, estilo: Estilo) -> Option<Retained<NSAttributedString>> {
+fn atribuido(titulo: &str, estilo: Estilo, fin: f64) -> Option<Retained<NSAttributedString>> {
     let fuente = match estilo {
         Estilo::Normal => return None,
         Estilo::Titulo => NSFont::boldSystemFontOfSize(TAM_FUENTE),
@@ -100,7 +114,7 @@ fn atribuido(titulo: &str, estilo: Estilo) -> Option<Retained<NSAttributedString
             NSTextTab::initWithTextAlignment_location_options(
                 NSTextTab::alloc(),
                 NSTextAlignment::Right,
-                FIN_CIFRAS,
+                fin,
                 &NSDictionary::new(),
             )
         };
@@ -164,6 +178,12 @@ fn poner_etiqueta(item: &NSMenuItem, texto: &NSAttributedString, mtm: MainThread
 }
 
 fn recorrer(menu: &NSMenu, raiz: bool, mtm: MainThreadMarker) {
+    let titulos: Vec<String> = menu
+        .itemArray()
+        .iter()
+        .map(|i| i.title().to_string())
+        .collect();
+    let fin = fin_cifras(titulos.iter().map(String::as_str));
     for item in menu.itemArray().iter() {
         let item: &NSMenuItem = &item;
         if item.isSeparatorItem() {
@@ -184,7 +204,7 @@ fn recorrer(menu: &NSMenu, raiz: bool, mtm: MainThreadMarker) {
         if matches!(estilo, Estilo::ConCifra | Estilo::Normal) && item.view().is_some() {
             item.setView(None);
         }
-        let Some(texto) = atribuido(&titulo, estilo) else {
+        let Some(texto) = atribuido(&titulo, estilo, fin) else {
             continue;
         };
         if estilo == Estilo::ConCifra {
@@ -214,6 +234,17 @@ pub fn aplicar(app: &AppHandle<Wry>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn las_cifras_dejan_sitio_a_la_etiqueta_mas_larga_del_menu() {
+        assert_eq!(
+            fin_cifras(["Docker\t1 GB", "Sin cifra"].into_iter()),
+            FIN_CIFRAS
+        );
+        let larga = format!("{}\t1 GB", "x".repeat(60));
+        let fin = fin_cifras([larga.as_str(), "Docker\t1 GB"].into_iter());
+        assert!(fin > 60.0 * 7.0 + 50.0, "{fin}");
+    }
 
     #[test]
     fn los_titulos_de_seccion_solo_cuentan_si_no_son_clicables() {
