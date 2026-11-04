@@ -1,6 +1,6 @@
 # E7 · Exhaustividad: plan de implementación
 
-Épica: [#47](https://github.com/ArtemioPadilla/Disk-Use-Analyzer/issues/47). Código en una pila de PR, #48 a #61, pendiente de revisión y merge. Una historia se marca al llegar a `main`.
+Épica: [#47](https://github.com/ArtemioPadilla/Disk-Use-Analyzer/issues/47). En `main` desde el 3 de noviembre de 2026, PR #48 a #61.
 
 **Objetivo:** recuperar más espacio sin perder nada irrecuperable, y que todo el disco
 tenga explicación.
@@ -37,25 +37,25 @@ otro lado, y la app apenas lo muestra:
 
 ## Orden
 
-1. [ ] [E7.12](https://github.com/ArtemioPadilla/Disk-Use-Analyzer/issues/35) (#35): CI con versiones fijas
-2. [ ] [E7.1](https://github.com/ArtemioPadilla/Disk-Use-Analyzer/issues/36) (#36): El motor promete borrar de npm lo que su comando no borra
-3. [ ] [E7.2](https://github.com/ArtemioPadilla/Disk-Use-Analyzer/issues/37) (#37): Desglosar ~/.cache por herramienta
-4. [ ] [E7.3](https://github.com/ArtemioPadilla/Disk-Use-Analyzer/issues/38) (#38): Motor: inventario de artefactos de proyectos (node_modules, .venv, target, .next)
-5. [ ] [E7.4](https://github.com/ArtemioPadilla/Disk-Use-Analyzer/issues/39) (#39): Menú: sección Proyectos
-6. [ ] [E7.5](https://github.com/ArtemioPadilla/Disk-Use-Analyzer/issues/40) (#40): Inventario y limpieza de worktrees de git
-7. [ ] [E7.6](https://github.com/ArtemioPadilla/Disk-Use-Analyzer/issues/41) (#41): Inventario de ambientes: conda, Python, Node y venvs
-8. [ ] [E7.7](https://github.com/ArtemioPadilla/Disk-Use-Analyzer/issues/42) (#42): Desglosar «Sistema y otros» y decir qué no se pudo medir
-9. [ ] [E7.8](https://github.com/ArtemioPadilla/Disk-Use-Analyzer/issues/43) (#43): Docker a fondo: imágenes y volúmenes por nombre
-10. [ ] [E7.9](https://github.com/ArtemioPadilla/Disk-Use-Analyzer/issues/44) (#44): Apps pesadas y lo que dejan en Library
-11. [ ] [E7.10](https://github.com/ArtemioPadilla/Disk-Use-Analyzer/issues/45) (#45): Archivos grandes en el menú, agrupados
-12. [ ] [E7.11](https://github.com/ArtemioPadilla/Disk-Use-Analyzer/issues/46) (#46): Limpiezas que piden permiso de administrador
+1. [x] [E7.12](https://github.com/ArtemioPadilla/Disk-Use-Analyzer/issues/35) (#35): CI con versiones fijas
+2. [x] [E7.1](https://github.com/ArtemioPadilla/Disk-Use-Analyzer/issues/36) (#36): El motor promete borrar de npm lo que su comando no borra
+3. [x] [E7.2](https://github.com/ArtemioPadilla/Disk-Use-Analyzer/issues/37) (#37): Desglosar ~/.cache por herramienta
+4. [x] [E7.3](https://github.com/ArtemioPadilla/Disk-Use-Analyzer/issues/38) (#38): Motor: inventario de artefactos de proyectos (node_modules, .venv, target, .next)
+5. [x] [E7.4](https://github.com/ArtemioPadilla/Disk-Use-Analyzer/issues/39) (#39): Menú: sección Proyectos
+6. [x] [E7.5](https://github.com/ArtemioPadilla/Disk-Use-Analyzer/issues/40) (#40): Inventario y limpieza de worktrees de git
+7. [x] [E7.6](https://github.com/ArtemioPadilla/Disk-Use-Analyzer/issues/41) (#41): Inventario de ambientes: conda, Python, Node y venvs
+8. [x] [E7.7](https://github.com/ArtemioPadilla/Disk-Use-Analyzer/issues/42) (#42): Desglosar «Sistema y otros» y decir qué no se pudo medir
+9. [x] [E7.8](https://github.com/ArtemioPadilla/Disk-Use-Analyzer/issues/43) (#43): Docker a fondo: imágenes y volúmenes por nombre
+10. [x] [E7.9](https://github.com/ArtemioPadilla/Disk-Use-Analyzer/issues/44) (#44): Apps pesadas y lo que dejan en Library
+11. [x] [E7.10](https://github.com/ArtemioPadilla/Disk-Use-Analyzer/issues/45) (#45): Archivos grandes en el menú, agrupados
+12. [x] [E7.11](https://github.com/ArtemioPadilla/Disk-Use-Analyzer/issues/46) (#46): Limpiezas que piden permiso de administrador
 
 E7.12 va primero porque cada PR siguiente depende de un CI estable. E7.1 y E7.2 son los
 más baratos; E7.3 a E7.5 son los que más espacio recuperan.
 
 ## E7.12: CI con versiones fijas
 
-- [ ] **Issue:** [#35](https://github.com/ArtemioPadilla/Disk-Use-Analyzer/issues/35)
+- [x] **Issue:** [#35](https://github.com/ArtemioPadilla/Disk-Use-Analyzer/issues/35)
 - **PR:** [#48](https://github.com/ArtemioPadilla/Disk-Use-Analyzer/pull/48)
 
 CI usa `rust-toolchain@stable` y `requirements-web.txt` sin tope. Rust 1.99 y Starlette 1.x ya pusieron `main` en rojo sin cambios de código, y local y CI prueban versiones distintas.
@@ -79,7 +79,7 @@ CI usa `rust-toolchain@stable` y `requirements-web.txt` sin tope. Rust 1.99 y St
 
 ## E7.1: El motor promete borrar de npm lo que su comando no borra
 
-- [ ] **Issue:** [#36](https://github.com/ArtemioPadilla/Disk-Use-Analyzer/issues/36)
+- [x] **Issue:** [#36](https://github.com/ArtemioPadilla/Disk-Use-Analyzer/issues/36)
 - **PR:** [#49](https://github.com/ArtemioPadilla/Disk-Use-Analyzer/pull/49)
 
 La regla `npm` mide todo `~/.npm`, pero `npm cache clean --force` solo vacía `_cacache`. `~/.npm/_npx` no se toca: el menú vuelve a ofrecerlo para siempre, y parece que la limpieza falló.
@@ -105,7 +105,7 @@ La regla `npm` mide todo `~/.npm`, pero `npm cache clean --force` solo vacía `_
 
 ## E7.2: Desglosar ~/.cache por herramienta
 
-- [ ] **Issue:** [#37](https://github.com/ArtemioPadilla/Disk-Use-Analyzer/issues/37)
+- [x] **Issue:** [#37](https://github.com/ArtemioPadilla/Disk-Use-Analyzer/issues/37)
 - **PR:** [#50](https://github.com/ArtemioPadilla/Disk-Use-Analyzer/pull/50)
 - **Depende de:** E7.1 (#36)
 
@@ -133,7 +133,7 @@ La regla `npm` mide todo `~/.npm`, pero `npm cache clean --force` solo vacía `_
 
 ## E7.3: Motor: inventario de artefactos de proyectos (node_modules, .venv, target, .next)
 
-- [ ] **Issue:** [#38](https://github.com/ArtemioPadilla/Disk-Use-Analyzer/issues/38)
+- [x] **Issue:** [#38](https://github.com/ArtemioPadilla/Disk-Use-Analyzer/issues/38)
 - **PR:** [#51](https://github.com/ArtemioPadilla/Disk-Use-Analyzer/pull/51)
 
 Lo regenerable más grande no son las cachés sino los artefactos de cada proyecto: `node_modules`, entornos virtuales y compilados. El motor solo detecta `node_modules` huérfanos, en el CLI y durante un escaneo completo.
@@ -163,7 +163,7 @@ Lo regenerable más grande no son las cachés sino los artefactos de cada proyec
 
 ## E7.4: Menú: sección Proyectos
 
-- [ ] **Issue:** [#39](https://github.com/ArtemioPadilla/Disk-Use-Analyzer/issues/39)
+- [x] **Issue:** [#39](https://github.com/ArtemioPadilla/Disk-Use-Analyzer/issues/39)
 - **PR:** [#52](https://github.com/ArtemioPadilla/Disk-Use-Analyzer/pull/52)
 - **Depende de:** E7.3 (#38)
 
@@ -191,7 +191,7 @@ El inventario de E7.3 no sirve si solo se ve en JSON. Hace falta una fila en el 
 
 ## E7.5: Inventario y limpieza de worktrees de git
 
-- [ ] **Issue:** [#40](https://github.com/ArtemioPadilla/Disk-Use-Analyzer/issues/40)
+- [x] **Issue:** [#40](https://github.com/ArtemioPadilla/Disk-Use-Analyzer/issues/40)
 - **PR:** [#53](https://github.com/ArtemioPadilla/Disk-Use-Analyzer/pull/53)
 - **Depende de:** E7.3 (#38)
 
@@ -222,7 +222,7 @@ Los worktrees se acumulan sin que se note: muchos los crean herramientas automá
 
 ## E7.6: Inventario de ambientes: conda, Python, Node y venvs
 
-- [ ] **Issue:** [#41](https://github.com/ArtemioPadilla/Disk-Use-Analyzer/issues/41)
+- [x] **Issue:** [#41](https://github.com/ArtemioPadilla/Disk-Use-Analyzer/issues/41)
 - **PR:** [#54](https://github.com/ArtemioPadilla/Disk-Use-Analyzer/pull/54)
 - **Depende de:** E7.3 (#38)
 
@@ -251,7 +251,7 @@ Coexisten varias instalaciones de Python y Node, y entornos que nadie usa. La ap
 
 ## E7.7: Desglosar «Sistema y otros» y decir qué no se pudo medir
 
-- [ ] **Issue:** [#42](https://github.com/ArtemioPadilla/Disk-Use-Analyzer/issues/42)
+- [x] **Issue:** [#42](https://github.com/ArtemioPadilla/Disk-Use-Analyzer/issues/42)
 - **PR:** [#55](https://github.com/ArtemioPadilla/Disk-Use-Analyzer/pull/55)
 
 «Sistema y otros» es lo que sobra, sin explicación. Además hay una parte que un escaneo sin permisos no ve, como la biblioteca de Fotos, Mail y Mensajes.
@@ -279,7 +279,7 @@ Coexisten varias instalaciones de Python y Node, y entornos que nadie usa. La ap
 
 ## E7.8: Docker a fondo: imágenes y volúmenes por nombre
 
-- [ ] **Issue:** [#43](https://github.com/ArtemioPadilla/Disk-Use-Analyzer/issues/43)
+- [x] **Issue:** [#43](https://github.com/ArtemioPadilla/Disk-Use-Analyzer/issues/43)
 - **PR:** [#56](https://github.com/ArtemioPadilla/Disk-Use-Analyzer/pull/56)
 
 Con el daemon apagado la app no sabe qué hay en `Docker.raw`, y con él encendido solo da dos totales. Tampoco se ha probado ninguna limpieza contra un Docker real.
@@ -306,7 +306,7 @@ Con el daemon apagado la app no sabe qué hay en `Docker.raw`, y con él encendi
 
 ## E7.9: Apps pesadas y lo que dejan en Library
 
-- [ ] **Issue:** [#44](https://github.com/ArtemioPadilla/Disk-Use-Analyzer/issues/44)
+- [x] **Issue:** [#44](https://github.com/ArtemioPadilla/Disk-Use-Analyzer/issues/44)
 - **PR:** [#57](https://github.com/ArtemioPadilla/Disk-Use-Analyzer/pull/57)
 - **Depende de:** E7.7 (#42)
 
@@ -334,7 +334,7 @@ Las apps pueden ocupar mucho, y algunas guardan muchos datos en `~/Library/Conta
 
 ## E7.10: Archivos grandes en el menú, agrupados
 
-- [ ] **Issue:** [#45](https://github.com/ArtemioPadilla/Disk-Use-Analyzer/issues/45)
+- [x] **Issue:** [#45](https://github.com/ArtemioPadilla/Disk-Use-Analyzer/issues/45)
 - **PR:** [#58](https://github.com/ArtemioPadilla/Disk-Use-Analyzer/pull/58)
 - **Depende de:** E7.3 (#38)
 
@@ -362,7 +362,7 @@ El motor detecta archivos grandes y descargas antiguas, pero el menú solo enlaz
 
 ## E7.11: Limpiezas que piden permiso de administrador
 
-- [ ] **Issue:** [#46](https://github.com/ArtemioPadilla/Disk-Use-Analyzer/issues/46)
+- [x] **Issue:** [#46](https://github.com/ArtemioPadilla/Disk-Use-Analyzer/issues/46)
 - **PR:** [#59](https://github.com/ArtemioPadilla/Disk-Use-Analyzer/pull/59)
 - **Depende de:** E7.2 (#37)
 
@@ -398,7 +398,8 @@ carpeta movida o en un disco sin montar.
 ## Sin probar con datos reales
 
 Para no borrar nada del usuario, estos caminos solo se probaron en repos temporales, con
-imágenes desechables o con simulaciones. Por eso los «Hecho cuando» siguen sin marcar:
+imágenes desechables o con simulaciones. Los «Hecho cuando» marcados se apoyan en esas pruebas,
+y los que dependen de datos reales siguen sin marcar. Se sigue en [#62](https://github.com/ArtemioPadilla/Disk-Use-Analyzer/issues/62):
 
 - limpiar proyectos, quitar worktrees y borrar entornos de conda;
 - `docker builder prune` y `docker container prune`;
