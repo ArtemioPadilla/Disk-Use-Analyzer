@@ -192,8 +192,7 @@ Objetivo: recuperar más espacio sin perder nada irrecuperable, y que todo el di
 explicación. Plan con tareas, issues y PR:
 [E7](superpowers/plans/2026-11-03-exhaustividad.md) · Épica: [#47](https://github.com/ArtemioPadilla/Disk-Use-Analyzer/issues/47).
 
-Implementada en una pila de PR (#48 a #61). Lo que no se ha probado con datos reales está en
-el plan.
+En `main` desde los PR #48 a #61. Lo que falta probar con datos reales está en #62.
 
 ## Decisiones abiertas
 
