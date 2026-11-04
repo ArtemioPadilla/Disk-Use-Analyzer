@@ -109,11 +109,16 @@ fn punto(cx: f32, cy: f32, r: f32, a: f32) -> (f32, f32) {
 
 /// Appends a clockwise arc as cubic Béziers of at most a quarter turn each.
 fn arco(pb: &mut PathBuilder, cx: f32, cy: f32, r: f32, desde: f32, barrido: f32) {
+    let (x0, y0) = punto(cx, cy, r, desde);
+    pb.move_to(x0, y0);
+    curvas(pb, cx, cy, r, desde, barrido);
+}
+
+/// The curves of a clockwise arc, from wherever the path already is at its start.
+fn curvas(pb: &mut PathBuilder, cx: f32, cy: f32, r: f32, desde: f32, barrido: f32) {
     let partes = (barrido / std::f32::consts::FRAC_PI_2).ceil().max(1.0) as usize;
     let paso = barrido / partes as f32;
     let k = 4.0 / 3.0 * (paso / 4.0).tan();
-    let (x0, y0) = punto(cx, cy, r, desde);
-    pb.move_to(x0, y0);
     for i in 0..partes {
         let a0 = desde + paso * i as f32;
         let a1 = a0 + paso;
@@ -166,6 +171,11 @@ const PIEZAS_ESTELA: u32 = 6;
 /// it, so successive frames read as clockwise motion.
 pub fn png_barrido(trozos: &[Trozo], n: u32) -> Option<Vec<u8>> {
     let mut lienzo = lienzo(trozos)?;
+    barrer(&mut lienzo, n);
+    lienzo.encode_png().ok()
+}
+
+fn barrer(lienzo: &mut Pixmap, n: u32) {
     let (c, r, trazo) = geometria();
     let vuelta = std::f32::consts::TAU;
     let cabeza = (n % FOTOGRAMAS) as f32 / FOTOGRAMAS as f32;
@@ -183,50 +193,49 @@ pub fn png_barrido(trozos: &[Trozo], n: u32) -> Option<Vec<u8>> {
             lienzo.stroke_path(&camino, &blanco, &trazo, Transform::identity(), None);
         }
     }
-    lienzo.encode_png().ok()
 }
 
-/// What fills the ring during a cleanup. Not one of the palette's colours, and
-/// visible on a light menu bar as well as a dark one, unlike white.
+/// The progress of a cleanup. Not one of the palette's colours, and visible on a
+/// light menu bar as well as a dark one, unlike white.
 const VERDE_LLENADO: Rgb = [52, 199, 89];
-/// How much of the disk's colours stays under the fill: enough to tell it is
-/// the same ring, not enough to read as part of the progress.
-const ALFA_FONDO_LLENADO: u32 = 70;
-/// The tip of the fill that pulses, as a share of the circle.
-const PUNTA_LLENADO: f32 = 0.05;
+/// The disc in the middle of the ring, with a gap between them.
+const RADIO_DISCO: f32 = 8.5;
 
-/// The ring filling clockwise from twelve o'clock, `fraccion` of the way, for
-/// frame `n` of `FOTOGRAMAS`. The tip pulses so that a step that frees nothing
-/// for a while still looks alive rather than hung.
+/// The sweep over the disk's ring, the same as during a scan, with the disc inside
+/// it filling like a pie, clockwise from twelve o'clock, `fraccion` of the way. The
+/// sweep says it is alive even during a step that frees nothing for a while; the
+/// disc says how far it has got; the ring's colours stay readable under the sweep.
+/// A solid disc, because a thinner ring is hard to read at this size.
 pub fn png_llenado(trozos: &[Trozo], fraccion: f64, n: u32) -> Option<Vec<u8>> {
-    let tenues: Vec<Trozo> = trozos
-        .iter()
-        .map(|t| Trozo {
-            alfa: (t.alfa as u32 * ALFA_FONDO_LLENADO / 255) as u8,
-            ..*t
-        })
-        .collect();
-    let mut lienzo = lienzo(&tenues)?;
-    let (c, r, trazo) = geometria();
+    let mut lienzo = lienzo(trozos)?;
+    let c = TAM as f32 / 2.0;
+    barrer(&mut lienzo, n);
     let vuelta = std::f32::consts::TAU;
     let f = fraccion.clamp(0.0, 1.0) as f32;
-    let mut trazar = |desde: f32, largo: f32, color: Rgb, alfa: u8| {
+    let mut cuna = |desde: f32, largo: f32, color: Rgb, alfa: u8| {
         let mut pb = PathBuilder::new();
-        arco(&mut pb, c, c, r, desde * vuelta, largo * vuelta);
+        let (x0, y0) = punto(c, c, RADIO_DISCO, desde * vuelta);
+        pb.move_to(c, c);
+        pb.line_to(x0, y0);
+        curvas(&mut pb, c, c, RADIO_DISCO, desde * vuelta, largo * vuelta);
+        pb.close();
         if let Some(camino) = pb.finish() {
             let mut pintura = Paint::default();
             pintura.set_color_rgba8(color[0], color[1], color[2], alfa);
             pintura.anti_alias = true;
-            lienzo.stroke_path(&camino, &pintura, &trazo, Transform::identity(), None);
+            lienzo.fill_path(
+                &camino,
+                &pintura,
+                FillRule::Winding,
+                Transform::identity(),
+                None,
+            );
         }
     };
+    cuna(0.0, 1.0, [128, 128, 128], 90);
     if f > 0.0 {
-        trazar(0.0, f, VERDE_LLENADO, 255);
+        cuna(0.0, f, VERDE_LLENADO, 255);
     }
-    let fase = (n % FOTOGRAMAS) as f32 / FOTOGRAMAS as f32 * vuelta;
-    let brillo = (fase.sin() + 1.0) / 2.0;
-    let desde = (f - PUNTA_LLENADO).max(0.0);
-    trazar(desde, PUNTA_LLENADO, BLANCO, (40.0 + brillo * 170.0) as u8);
     lienzo.encode_png().ok()
 }
 
@@ -354,37 +363,40 @@ mod tests {
     }
 
     #[test]
-    fn el_llenado_cubre_su_parte_en_orden_horario_y_deja_tenue_el_resto() {
-        // A little over half: three o'clock is well inside the fill, and the
-        // pulsing tip is past six o'clock, away from every point checked here.
-        let png = png_llenado(&todo_rojo(), 0.6, 0).unwrap();
-        assert!(es_verde(pixel(&png, 31, 18)), "{:?}", pixel(&png, 31, 18));
-        let nueve = pixel(&png, 4, 18);
+    fn el_disco_interior_se_llena_en_orden_horario_con_el_barrido_por_fuera() {
+        let png = png_llenado(&todo_rojo(), 0.6, 4).unwrap();
+        assert!(es_verde(pixel(&png, 24, 18)), "{:?}", pixel(&png, 24, 18));
+        let nueve = pixel(&png, 11, 18);
         assert!(!es_verde(nueve), "se llenó de más: {nueve:?}");
-        assert!(nueve[3] < 110, "el resto no quedó tenue: {nueve:?}");
+        // Outside, exactly what a scan shows for the same frame.
+        let barrido = png_barrido(&todo_rojo(), 4).unwrap();
+        for (x, y) in [(31, 18), (4, 18), (18, 31), (18, 4)] {
+            assert_eq!(pixel(&png, x, y), pixel(&barrido, x, y), "({x}, {y})");
+        }
     }
 
     #[test]
     fn sin_avance_no_hay_verde_y_completo_no_queda_hueco() {
         let cero = png_llenado(&todo_rojo(), 0.0, 0).unwrap();
-        assert!(!es_verde(pixel(&cero, 31, 18)));
-        assert!(!es_verde(pixel(&cero, 4, 18)));
+        assert!(!es_verde(pixel(&cero, 24, 18)));
+        assert!(!es_verde(pixel(&cero, 11, 18)));
         let lleno = png_llenado(&todo_rojo(), 1.0, 0).unwrap();
-        assert!(es_verde(pixel(&lleno, 31, 18)));
-        assert!(es_verde(pixel(&lleno, 18, 31)));
-        assert!(es_verde(pixel(&lleno, 4, 18)));
+        assert!(es_verde(pixel(&lleno, 24, 18)));
+        assert!(es_verde(pixel(&lleno, 18, 24)));
+        assert!(es_verde(pixel(&lleno, 11, 18)));
     }
 
     #[test]
-    fn la_punta_del_llenado_late_con_el_fotograma() {
-        // Frame 3 is the peak of the pulse and frame 9 its trough.
-        assert_ne!(
-            png_llenado(&todo_rojo(), 0.5, 3),
-            png_llenado(&todo_rojo(), 0.5, 9)
+    fn el_barrido_gira_durante_el_llenado_y_el_disco_no_cambia_con_el_fotograma() {
+        let (a, b) = (
+            png_llenado(&todo_rojo(), 0.5, 4).unwrap(),
+            png_llenado(&todo_rojo(), 0.5, 10).unwrap(),
         );
+        assert_ne!(a, b);
+        assert_eq!(pixel(&a, 24, 18), pixel(&b, 24, 18));
         assert_eq!(
-            png_llenado(&todo_rojo(), 0.5, 3),
-            png_llenado(&todo_rojo(), 0.5, 3 + FOTOGRAMAS)
+            png_llenado(&todo_rojo(), 0.5, 4),
+            png_llenado(&todo_rojo(), 0.5, 4 + FOTOGRAMAS)
         );
     }
 
