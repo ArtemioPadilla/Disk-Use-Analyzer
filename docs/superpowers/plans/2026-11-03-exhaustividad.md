@@ -134,7 +134,7 @@ La regla `npm` mide todo `~/.npm`, pero `npm cache clean --force` solo vacía `_
 ## E7.3: Motor: inventario de artefactos de proyectos (node_modules, .venv, target, .next)
 
 - [ ] **Issue:** [#38](https://github.com/ArtemioPadilla/Disk-Use-Analyzer/issues/38)
-- **PR:** pendiente
+- **PR:** [#51](https://github.com/ArtemioPadilla/Disk-Use-Analyzer/pull/51)
 
 Lo regenerable más grande no son las cachés sino los artefactos de cada proyecto: `node_modules`, entornos virtuales y compilados. El motor solo detecta `node_modules` huérfanos, en el CLI y durante un escaneo completo.
 
@@ -142,17 +142,17 @@ Lo regenerable más grande no son las cachés sino los artefactos de cada proyec
 
 **Tareas**
 
-- [ ] Decidir raíces por defecto y umbral de antigüedad
-- [ ] Pruebas de la verja: cada artefacto con y sin evidencia, incluidos nombres engañosos
-- [ ] Detector con carpetas falsas
-- [ ] Modo `--proyectos` y prueba de punta a punta
-- [ ] Medir el tiempo en la máquina real
+- [x] Decidir raíces por defecto y umbral de antigüedad
+- [x] Pruebas de la verja: cada artefacto con y sin evidencia, incluidos nombres engañosos
+- [x] Detector con carpetas falsas
+- [x] Modo `--proyectos` y prueba de punta a punta
+- [x] Medir el tiempo en la máquina real
 
 **Hecho cuando**
 
-- [ ] `--proyectos` devuelve el inventario sin duplicar los artefactos dentro de worktrees.
-- [ ] Cada artefacto lleva un comando generado por `analyzer/comandos.py`.
-- [ ] No hay artefacto que pase la verja sin su evidencia.
+- [x] `--proyectos` devuelve el inventario sin duplicar los artefactos dentro de worktrees.
+- [x] Cada artefacto lleva un comando generado por `analyzer/comandos.py`.
+- [x] No hay artefacto que pase la verja sin su evidencia.
 
 **Seguridad**
 

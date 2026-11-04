@@ -4619,6 +4619,8 @@ Ejemplos de uso:
     parser.add_argument('--quick', action='store_true',
                         help='Solo generar reporte sin análisis completo')
     
+    parser.add_argument('--proyectos', action='store_true',
+                        help='Listar en JSON lo que los proyectos pueden reconstruir')
     parser.add_argument('--informe', metavar='FICHERO',
                         help='Dejar además el informe HTML en este archivo')
     parser.add_argument('--progreso', metavar='FICHERO',
@@ -4632,6 +4634,11 @@ Ejemplos de uso:
     if args.limpieza_rapida:
         from disk_analyzer_core import DiskAnalyzerCore
         print(json.dumps(DiskAnalyzerCore(str(Path.home())).limpieza_rapida()))
+        return
+
+    if args.proyectos:
+        from analyzer.proyectos import inventario
+        print(json.dumps(inventario()))
         return
 
     # Si se solicita analizar todas las unidades en Windows
