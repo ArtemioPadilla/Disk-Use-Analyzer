@@ -1,5 +1,5 @@
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
 
 use tauri::image::Image;
@@ -314,6 +314,16 @@ struct Pintor {
     /// How full the ring is while a cleanup runs. `None` means the length of
     /// the work is unknown, which is what the sweep says.
     llenado: Mutex<Option<f64>>,
+    /// Asks for the category split to be measured again now. Holds one request:
+    /// several while a measure runs come to the same new measure.
+    remedir: mpsc::SyncSender<()>,
+}
+
+/// Waits for the next pass over the categories. True when it is the periodic one,
+/// which also lists what can be freed; a cleanup that asks for a pass has its own
+/// way of doing that, and listing it twice would run the slow measures for nothing.
+fn esperar_repaso(pedidos: &mpsc::Receiver<()>, tope: Duration) -> bool {
+    !matches!(pedidos.recv_timeout(tope), Ok(()))
 }
 
 impl Pintor {
@@ -777,9 +787,21 @@ pub fn run() {
                             liberador.pedir(
                                 que,
                                 move || al_empezar.animar(),
-                                move |fraccion| al_avanzar.llenar(fraccion),
+                                move |fraccion| {
+                                    al_avanzar.llenar(fraccion);
+                                    // The commands ended: what they freed is
+                                    // known to Docker and to `du` right now.
+                                    if fraccion.is_none() {
+                                        let _ = al_avanzar.remedir.try_send(());
+                                    }
+                                },
                                 move |hecho| {
                                     al_terminar.parar();
+                                    // Docker's image has finished shrinking, and
+                                    // what is not Docker comes out of its size.
+                                    if hecho.docker {
+                                        let _ = al_terminar.remedir.try_send(());
+                                    }
                                     let (titulo, cuerpo) = liberar::aviso_final(hecho);
                                     notificar::enviar(empaquetada, &titulo, &cuerpo);
                                     if let Some(uso) = disk::read() {
@@ -904,6 +926,7 @@ pub fn run() {
                     .build(app)?
             };
 
+            let (pide_remedir, pedidos_remedir) = mpsc::sync_channel(1);
             let pintor = Arc::new(Pintor {
                 tray,
                 ajustes: Arc::clone(&ajustes),
@@ -912,6 +935,7 @@ pub fn run() {
                 animando: AtomicUsize::new(0),
                 hilo_animacion: AtomicBool::new(false),
                 llenado: Mutex::new(None),
+                remedir: pide_remedir,
             });
             app.manage(Arc::clone(&pintor));
             if let Some(uso) = lectura_inicial.as_ref() {
@@ -925,6 +949,7 @@ pub fn run() {
             {
                 let pintor = Arc::clone(&pintor);
                 let liberador = Arc::clone(&liberador);
+                let mut listar = true;
                 std::thread::spawn(move || loop {
                     // Probed on every pass, not once: cheap, and it also
                     // notices the permission being revoked. Granting it
@@ -948,8 +973,10 @@ pub fn run() {
                     }
                     // After the split, not before: both run `du`, and the
                     // ring is what the user sees first.
-                    liberador.refrescar();
-                    std::thread::sleep(INTERVALO_CATEGORIAS);
+                    if listar {
+                        liberador.refrescar();
+                    }
+                    listar = esperar_repaso(&pedidos_remedir, INTERVALO_CATEGORIAS);
                 });
             }
 
@@ -1078,5 +1105,33 @@ mod tests {
         assert!(!es_app_empaquetada(Path::new(
             "/Users/u/repo/desktop/src-tauri/target/debug/desktop"
         )));
+    }
+}
+
+#[cfg(test)]
+mod tests_repaso {
+    use super::*;
+
+    #[test]
+    fn un_repaso_pedido_no_espera_al_periodico_ni_vuelve_a_listar() {
+        let (pide, pedidos) = mpsc::sync_channel(1);
+        pide.try_send(()).unwrap();
+        // A long limit: if the request were not seen, the test would hang here.
+        assert!(!esperar_repaso(&pedidos, Duration::from_secs(600)));
+    }
+
+    #[test]
+    fn el_repaso_periodico_tambien_lista_lo_que_se_puede_liberar() {
+        let (_pide, pedidos) = mpsc::sync_channel::<()>(1);
+        assert!(esperar_repaso(&pedidos, Duration::from_millis(1)));
+    }
+
+    #[test]
+    fn varios_pedidos_mientras_se_mide_acaban_en_un_solo_repaso() {
+        let (pide, pedidos) = mpsc::sync_channel(1);
+        pide.try_send(()).unwrap();
+        assert!(pide.try_send(()).is_err());
+        assert!(!esperar_repaso(&pedidos, Duration::from_millis(1)));
+        assert!(esperar_repaso(&pedidos, Duration::from_millis(1)));
     }
 }
