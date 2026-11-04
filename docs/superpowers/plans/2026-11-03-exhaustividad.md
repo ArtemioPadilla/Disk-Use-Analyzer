@@ -97,7 +97,7 @@ La regla `npm` mide todo `~/.npm`, pero `npm cache clean --force` solo vacía `_
 
 - [x] Tras limpiar `npm`, la regla deja de ofrecer espacio que no puede liberar.
 - [x] `_npx` aparece aparte, con su tamaño, y se puede limpiar.
-- [x] Lo liberado medido coincide con lo estimado salvo ruido de APFS.
+- [ ] Lo liberado medido coincide con lo estimado salvo ruido de APFS.
 
 **Seguridad**
 
@@ -270,7 +270,7 @@ Coexisten varias instalaciones de Python y Node, y entornos que nadie usa. La ap
 
 - [x] El submenú suma lo mismo que la fila, y «sin medir» es una cifra explícita.
 - [x] Sin Acceso total, dice qué falta y cómo darlo.
-- [x] Las cifras cuadran con el contenedor APFS con un margen documentado.
+- [ ] Las cifras cuadran con el contenedor APFS con un margen documentado.
 
 **Seguridad**
 
@@ -296,7 +296,7 @@ Con el daemon apagado la app no sabe qué hay en `Docker.raw`, y con él encendi
 **Hecho cuando**
 
 - [x] Se ve qué ocupa Docker por nombre.
-- [x] Las limpiezas de E4 están probadas contra un daemon real.
+- [ ] Las limpiezas de E4 están probadas contra un daemon real.
 - [x] El aviso final sobre el espacio refleja lo que realmente pasa.
 
 **Seguridad**
@@ -380,7 +380,7 @@ Hay cachés fuera del alcance del usuario, como `/Library/Developer/CoreSimulato
 **Hecho cuando**
 
 - [x] Se ofrecen con su tamaño y avisando que pedirán contraseña.
-- [x] Cancelar el diálogo no cuenta como fallo.
+- [ ] Cancelar el diálogo no cuenta como fallo.
 
 **Seguridad**
 
