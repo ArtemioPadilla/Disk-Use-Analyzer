@@ -838,6 +838,12 @@ impl Avance {
     }
 }
 
+/// How long to keep measuring after a Docker cleanup. Its disk image gives the
+/// space back on its own schedule: seen on a real daemon, nothing right after
+/// deleting an image and all of it within a minute and a half. Measuring at once
+/// would report that nothing was freed.
+const ESPERA_DOCKER: Duration = Duration::from_secs(120);
+
 /// How often the free space is measured during a run. Reading it costs next to
 /// nothing (see `POLL_INTERVAL` in `lib.rs`).
 const INTERVALO_AVANCE: Duration = Duration::from_secs(1);
@@ -846,6 +852,13 @@ const INTERVALO_AVANCE: Duration = Duration::from_secs(1);
 /// `al_avanzar` how it goes: when each one starts, and every second while it
 /// runs, since a single `rm -rf` of a big cache can take minutes.
 pub fn ejecutar<A>(elegidas: &[Limpieza], al_avanzar: A) -> Hecho
+where
+    A: Fn(&Avance) + Sync,
+{
+    ejecutar_con(elegidas, ESPERA_DOCKER, al_avanzar)
+}
+
+fn ejecutar_con<A>(elegidas: &[Limpieza], espera_docker: Duration, al_avanzar: A) -> Hecho
 where
     A: Fn(&Avance) + Sync,
 {
@@ -919,12 +932,26 @@ where
     // APFS frees blocks asynchronously; a moment's wait keeps the measured
     // figure from coming out short.
     std::thread::sleep(Duration::from_secs(1));
+    let docker = elegidas
+        .iter()
+        .any(|l| l.esta_en(Categoria::Docker) || l.categoria == CATEGORIA_DOCKER_DETALLE);
+    if docker && fallos.len() < elegidas.len() {
+        let inicio = Instant::now();
+        while inicio.elapsed() < espera_docker && medido() < objetivo {
+            std::thread::sleep(INTERVALO_AVANCE.min(espera_docker));
+            al_avanzar(&Avance {
+                paso: elegidas.len(),
+                pasos: elegidas.len(),
+                titulo: "Docker devolviendo el espacio".to_string(),
+                liberado: medido(),
+                objetivo,
+            });
+        }
+    }
     Hecho {
         liberado: medido(),
         fallos,
-        docker: elegidas
-            .iter()
-            .any(|l| l.esta_en(Categoria::Docker) || l.categoria == CATEGORIA_DOCKER_DETALLE),
+        docker,
     }
 }
 
@@ -1663,6 +1690,43 @@ mod tests {
         let del_primero = vistos.iter().filter(|v| v.0 == 1).count();
         assert!(del_primero >= 3, "al empezar y cada segundo: {vistos:?}");
         assert_eq!(vistos.last(), Some(&(2, 2, 2 * GB)));
+    }
+
+    #[test]
+    fn tras_limpiar_docker_sigue_midiendo_porque_tarda_en_devolver_el_espacio() {
+        let mut d = l("docker_build", REGENERA, 1 << 50);
+        d.categoria = "docker".into();
+        d.command = "true".into();
+        let vistos = Mutex::new(Vec::new());
+        let h = ejecutar_con(&[d], Duration::from_millis(1200), |a| {
+            vistos.lock().unwrap().push(a.titulo.clone());
+        });
+        assert!(h.docker);
+        assert!(vistos
+            .into_inner()
+            .unwrap()
+            .iter()
+            .any(|t| t == "Docker devolviendo el espacio"));
+    }
+
+    #[test]
+    fn si_docker_falla_no_espera_en_vano() {
+        let mut d = l("docker_build", REGENERA, 1 << 50);
+        d.categoria = "docker".into();
+        d.command = "exit 1".into();
+        let inicio = Instant::now();
+        ejecutar(&[d], |_| {});
+        assert!(inicio.elapsed() < Duration::from_secs(10));
+    }
+
+    #[test]
+    fn lo_demas_no_espera_a_docker() {
+        let mut c = l("logs", REGENERA, 1 << 50);
+        c.command = "true".into();
+        let inicio = Instant::now();
+        let h = ejecutar(&[c], |_| {});
+        assert!(!h.docker);
+        assert!(inicio.elapsed() < Duration::from_secs(10));
     }
 
     #[test]
