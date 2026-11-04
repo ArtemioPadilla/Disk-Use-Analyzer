@@ -400,9 +400,9 @@ impl Pintor {
         });
     }
 
-    /// Fills the inner ring and adds the percentage to the text beside it, or with
-    /// `None` goes back to the sweep and the usual text. Drawn by the thread
-    /// `animar` started. Called every second during a run, so the text also picks up
+    /// Fills the inner disc under the sweep and adds the percentage to the text
+    /// beside it, or with `None` goes back to the sweep alone and the usual text.
+    /// Drawn by the thread `animar` started. Called every second during a run, so the text also picks up
     /// the free space that `pintar` keeps up to date.
     fn llenar(&self, fraccion: Option<f64>) {
         *self.llenado.lock().unwrap() = fraccion;
