@@ -77,6 +77,11 @@ CONSECUENCIAS: Dict[str, str] = {
     'docker': 'redescarga',
     'docker_build': 'regenera',
     'docker_imagenes': 'redescarga',
+    'cache_huggingface': 'redescarga',
+    'cache_puppeteer': 'redescarga',
+    'cache_uv': 'regenera',
+    'cache_precommit': 'regenera',
+    'cache_act': 'regenera',
     'caches_de_apps': 'regenera',
     'cache_general': 'solo_lista',
     'xcode_deriveddata': 'regenera',
@@ -101,10 +106,27 @@ CATEGORIAS_RAPIDAS: Dict[str, str] = {
     'caches_de_apps': 'caches',
     'docker_build': 'docker',
     'docker_imagenes': 'docker',
+    'cache_huggingface': 'caches',
+    'cache_puppeteer': 'caches',
+    'cache_uv': 'caches',
+    'cache_precommit': 'caches',
+    'cache_act': 'caches',
     'papelera': 'tuyo',
     'simuladores': 'resto',
     'xcode_deriveddata': 'resto',
 }
+
+# What each tool leaves in ~/.cache: (rule, title, folder, own command). Named
+# folders only: ~/.cache as a whole mixes tools, and Hugging Face keeps the
+# user's login token beside its models, which is why the rule targets `hub`.
+# None as a command means emptying the folder through the deletion gate.
+CACHES_DE_HERRAMIENTAS = (
+    ('cache_huggingface', 'Modelos de Hugging Face', '~/.cache/huggingface/hub', None),
+    ('cache_puppeteer', 'Navegadores de Puppeteer', '~/.cache/puppeteer', None),
+    ('cache_uv', 'Cache de uv', '~/.cache/uv', 'uv cache clean'),
+    ('cache_precommit', 'Cache de pre-commit', '~/.cache/pre-commit', None),
+    ('cache_act', 'Cache de act', '~/.cache/act', None),
+)
 
 # Cache dirs that only feed rules the menu never offers (lists, Docker), or
 # that are protected anyway. Skipping them is what makes the quick mode take
@@ -367,7 +389,28 @@ class DiskAnalyzerCore:
         """
         rapidos = [d for d in CACHE_DIRS if not any(x in d for x in _NO_RAPIDOS)]
         self.find_cache_locations(rapidos)
-        return limpiezas_rapidas(self.generate_recommendations() + self._reglas_docker_rapidas())
+        return limpiezas_rapidas(self.generate_recommendations()
+                                 + self._reglas_de_herramientas()
+                                 + self._reglas_docker_rapidas())
+
+    def _reglas_de_herramientas(self) -> List[Dict]:
+        """One rule per tool in ~/.cache. Skipped when its own command is not
+        installed: offering it would only fail."""
+        reglas = []
+        for id_, titulo, carpeta, propio in CACHES_DE_HERRAMIENTAS:
+            ruta = Path(carpeta).expanduser()
+            if not ruta.is_dir() or ruta.is_symlink():
+                continue
+            if propio and shutil.which(propio.split()[0]) is None:
+                continue
+            tam = self.get_directory_size(ruta)
+            if tam <= 50 * MB:
+                continue
+            reglas.append({'id': id_, 'type': titulo, 'description': str(carpeta),
+                           'space': tam, 'efecto': 'irreversible' if propio else 'borra',
+                           'consecuencia': CONSECUENCIAS[id_],
+                           'command': propio or comandos.borrar_contenido([str(ruta)])})
+        return reglas
 
     def _reglas_docker_rapidas(self) -> List[Dict]:
         """What the menu offers for Docker, in two parts that do not overlap.
