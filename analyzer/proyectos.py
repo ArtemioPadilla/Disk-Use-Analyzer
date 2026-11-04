@@ -131,13 +131,30 @@ def _tamano(ruta: Path) -> int:
         return 0
 
 
+def raices_unicas(raices) -> List[Path]:
+    """The roots that exist, each once: on APFS `~/Projects` and `~/projects` are
+    usually the same folder, and walking it twice doubles every total."""
+    vistas = set()
+    salida = []
+    for raiz in raices:
+        ruta = Path(raiz).expanduser()
+        try:
+            if ruta.is_symlink() or not ruta.is_dir():
+                continue
+            st = ruta.stat()
+        except OSError:
+            continue
+        if (st.st_dev, st.st_ino) not in vistas:
+            vistas.add((st.st_dev, st.st_ino))
+            salida.append(ruta)
+    return salida
+
+
 def inventario(raices: Optional[List[str]] = None) -> List[Dict]:
     """Every artifact found, largest first."""
     vistos = set()
-    for raiz in (raices if raices is not None else ROOTS):
-        ruta = Path(raiz).expanduser()
-        if ruta.is_dir() and not ruta.is_symlink():
-            vistos.update(_buscar(ruta))
+    for ruta in raices_unicas(raices if raices is not None else ROOTS):
+        vistos.update(_buscar(ruta))
     rutas = sorted(vistos)
     with ThreadPoolExecutor(max_workers=6) as hilos:
         tamanos = list(hilos.map(_tamano, rutas))
@@ -163,7 +180,8 @@ def inventario(raices: Optional[List[str]] = None) -> List[Dict]:
             'artefacto': ruta.name,
             'ruta': str(ruta),
             'space': tam,
-            'dias': int((ahora - actividad) / 86400) if actividad else None,
+            # A file dated in the future must not give a negative age.
+            'dias': max(0, int((ahora - actividad) / 86400)) if actividad else None,
             'worktree': es_worktree,
             'reproducible': reproducible,
             'ignorado': ignorado,

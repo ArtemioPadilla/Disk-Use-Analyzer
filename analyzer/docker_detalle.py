@@ -65,11 +65,14 @@ def inventario() -> List[Dict]:
         # A miss here is harmless: without `-f`, Docker refuses by itself.
         ocupada = (nombre in en_uso or id_ in en_uso
                    or (i.get('Tag') == 'latest' and i.get('Repository') in en_uso))
-        filas.append({'id': f'docker:imagen:{id_}', 'titulo': nombre, 'descripcion': id_,
+        # By name, not by ID: an image with several tags is several rows, and
+        # Docker refuses to remove it by ID. Each row only unties its own tag.
+        objetivo = id_ if '<none>' in nombre else nombre
+        filas.append({'id': f'docker:imagen:{id_}:{nombre}', 'titulo': nombre, 'descripcion': id_,
                       'categoria': 'docker_detalle', 'consecuencia': 'redescarga',
                       'space': _bytes(i.get('Size', '0B')),
                       'motivo': EN_USO if ocupada else '',
-                      'command': '' if ocupada else f'docker image rm {escapar(id_)}'})
+                      'command': '' if ocupada else f'docker image rm {escapar(objetivo)}'})
     df = _docker('system', 'df', '-v', '--format', '{{json .}}')
     try:
         volumenes = json.loads(df).get('Volumes') or [] if df else []

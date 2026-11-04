@@ -32,7 +32,7 @@ def repo(tmp_path):
     return r
 
 
-def _uno(repo, en_uso=frozenset()):
+def _uno(repo, en_uso=frozenset({'/otro/sitio'})):
     filas = del_repo(repo, set(en_uso))
     assert len(filas) == 1
     return filas[0]
@@ -60,7 +60,7 @@ def test_limpio_y_mergeado_se_ofrece_y_se_quita_de_verdad(repo):
     assert '--force' not in f['command']
     subprocess.run(['/bin/sh', '-c', f['command']], check=True)
     assert not w.exists()
-    assert del_repo(repo, set()) == []
+    assert del_repo(repo, {'/otro/sitio'}) == []
     # The branch stays: only the working copy goes.
     g(repo, 'rev-parse', '--verify', 'w')
 
@@ -111,6 +111,93 @@ def test_bloqueado_no_se_ofrece(repo):
     w = _worktree(repo)
     g(repo, 'worktree', 'lock', str(w))
     assert _uno(repo)['motivo'] == 'está bloqueado'
+
+
+def _correr(comando, **kw):
+    return subprocess.run(['/bin/sh', '-c', comando], capture_output=True, **kw)
+
+
+def test_un_ignorado_que_no_se_reconstruye_no_se_ofrece(repo):
+    """`git worktree remove` borra los ignorados sin avisar, y un .env lo está."""
+    (repo / '.gitignore').write_text('.env\nnode_modules\n')
+    g(repo, 'add', '.')
+    g(repo, 'commit', '-qm', 'ignora')
+    w = _worktree(repo)
+    (w / '.env').write_text('secreto')
+    f = _uno(repo)
+    assert f['command'] == ''
+    assert f['motivo'] == 'tiene archivos ignorados que no se reconstruyen'
+    assert (w / '.env').exists()
+
+
+def test_lo_ignorado_que_se_reconstruye_no_impide_quitarlo(repo):
+    (repo / '.gitignore').write_text('.env\nnode_modules\n__pycache__\n')
+    g(repo, 'add', '.')
+    g(repo, 'commit', '-qm', 'ignora')
+    w = _worktree(repo)
+    (w / 'node_modules').mkdir()
+    (w / 'node_modules' / 'x').write_text('y')
+    f = _uno(repo, {'/otro/sitio'})
+    assert f['command']
+    assert _correr(f['command']).returncode == 0
+    assert not w.exists()
+
+
+def test_el_comando_se_niega_si_aparece_un_ignorado_valioso_despues(repo):
+    (repo / '.gitignore').write_text('.env\n')
+    g(repo, 'add', '.')
+    g(repo, 'commit', '-qm', 'ignora')
+    w = _worktree(repo)
+    f = _uno(repo, {'/otro/sitio'})
+    (w / '.env').write_text('secreto')
+    assert _correr(f['command']).returncode != 0
+    assert (w / '.env').exists()
+
+
+def test_un_commit_nuevo_tras_medir_impide_quitarlo(repo):
+    """Con HEAD separada, ese commit quedaría inalcanzable."""
+    w = repo.parent / 'suelto'
+    g(repo, 'worktree', 'add', '-q', '--detach', str(w))
+    f = _uno(repo, {'/otro/sitio'})
+    assert f['command']
+    (w / 'b').write_text('2')
+    g(w, 'add', '.')
+    g(w, 'commit', '-qm', 'nuevo')
+    assert _correr(f['command']).returncode != 0
+    assert (w / 'b').exists()
+
+
+def test_si_no_se_sabe_quien_trabaja_dentro_no_se_ofrece(repo):
+    _worktree(repo)
+    f = del_repo(repo, None)[0]
+    assert f['command'] == ''
+    assert 'no se pudo comprobar' in f['motivo']
+
+
+def test_una_carpeta_movida_con_commit_sin_mergear_no_se_poda(repo):
+    """Una carpeta ausente puede ser un disco sin montar: podar perdería el commit."""
+    w = repo.parent / 'suelto'
+    g(repo, 'worktree', 'add', '-q', '--detach', str(w))
+    (w / 'b').write_text('2')
+    g(w, 'add', '.')
+    g(w, 'commit', '-qm', 'solo aqui')
+    w.rename(repo.parent / 'movido')
+    f = _uno(repo)
+    assert f['command'] == ''
+    assert 'podría haberse movido' in f['motivo']
+
+
+def test_una_ausente_impide_podar_todas(repo):
+    """`prune` es de todo el repo: una dudosa basta para no ofrecerlo a ninguna."""
+    ok = _worktree(repo, 'con-rama')
+    suelto = repo.parent / 'suelto'
+    g(repo, 'worktree', 'add', '-q', '--detach', str(suelto))
+    (suelto / 'b').write_text('2')
+    g(suelto, 'add', '.')
+    g(suelto, 'commit', '-qm', 'solo aqui')
+    shutil.rmtree(ok)
+    shutil.rmtree(suelto)
+    assert all(f['command'] == '' for f in del_repo(repo, set()))
 
 
 def test_el_comando_revalida_si_algo_cambia_despues_de_medir(repo):

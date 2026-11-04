@@ -1,8 +1,7 @@
 """Las reglas que dejaban fuera el 80% de lo encontrado.
 
-Contexto medido en la máquina de referencia: 101,85 GB en cachés, pero solo
-17,6 GB recomendados y solo 4,01 GB de nivel 1. Docker (39,6 GB),
-~/Library/Caches (21,4 GB) y la papelera se quedaban fuera. Este módulo fija
+La mayor parte de lo que encontraba el escáner no se recomendaba: Docker,
+~/Library/Caches y la papelera se quedaban fuera. Este módulo fija
 las reglas que cierran ese hueco, más la verja de borrado
 (analyzer.protection.puede_borrarse) que hasta ahora nadie fuera de sus
 propios tests llamaba.

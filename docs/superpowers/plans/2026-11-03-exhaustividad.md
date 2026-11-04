@@ -1,6 +1,6 @@
 # E7 · Exhaustividad: plan de implementación
 
-Épica: [#47](https://github.com/ArtemioPadilla/Disk-Use-Analyzer/issues/47). Última actualización: 3 de noviembre de 2026.
+Épica: [#47](https://github.com/ArtemioPadilla/Disk-Use-Analyzer/issues/47). Código en una pila de PR, #48 a #61, pendiente de revisión y merge. Una historia se marca al llegar a `main`.
 
 **Objetivo:** recuperar más espacio sin perder nada irrecuperable, y que todo el disco
 tenga explicación.
@@ -387,6 +387,23 @@ Hay cachés fuera del alcance del usuario, como `/Library/Developer/CoreSimulato
 - La contraseña la pide macOS: la app nunca la ve.
 - Lista cerrada de comandos fijos, sin rutas interpoladas.
 - Decisión: compensa, porque es una sola carpeta que Simulator reconstruye. Sin Xcode completo `xcrun simctl` no está disponible, así que el comando es un `find` fijo.
+
+## Revisión final
+
+Un review de toda la pila encontró pérdidas de datos antes de llegar a `main`, corregidas con
+pruebas que las reproducen: `git worktree remove` borra ignorados como un `.env`; un commit
+hecho tras la medición quedaba inalcanzable; y `git worktree prune` podía actuar sobre una
+carpeta movida o en un disco sin montar.
+
+## Sin probar con datos reales
+
+Para no borrar nada del usuario, estos caminos solo se probaron en repos temporales, con
+imágenes desechables o con simulaciones. Por eso los «Hecho cuando» siguen sin marcar:
+
+- limpiar proyectos, quitar worktrees y borrar entornos de conda;
+- `docker builder prune` y `docker container prune`;
+- el diálogo de administrador;
+- los submenús en pantalla: solo se revisó el menú principal.
 
 ## Fuera de este plan
 

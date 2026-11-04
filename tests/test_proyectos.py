@@ -78,6 +78,14 @@ def test_nombres_corrientes_nunca_son_artefacto(raiz, nombre):
     assert not es_artefacto(str(carpeta))
 
 
+def test_un_symlink_llamado_node_modules_tampoco_cuenta(raiz):
+    real = _pesado(raiz / 'real')
+    enlace = raiz / 'p' / 'node_modules'
+    enlace.parent.mkdir()
+    enlace.symlink_to(real)
+    assert not es_artefacto(str(enlace))
+
+
 def test_un_symlink_con_nombre_de_artefacto_no_cuenta(raiz):
     real = _venv(raiz / 'real' / 'datos')
     enlace = raiz / 'p' / '.venv'
@@ -224,3 +232,22 @@ def test_la_api_devuelve_el_inventario_y_exige_token(raiz, monkeypatch):
     monkeypatch.delenv('DISK_ANALYZER_NO_AUTH')
     importlib.reload(disk_analyzer_web)
     assert TestClient(disk_analyzer_web.app).get('/api/proyectos').status_code == 401
+
+
+def test_una_raiz_repetida_con_otra_caja_no_duplica(raiz):
+    """En APFS ~/Projects y ~/projects suelen ser la misma carpeta."""
+    nm = _pesado(raiz / 'Web' / 'node_modules')
+    (raiz / 'Web' / 'package.json').write_text('{}')
+    a = inventario([str(raiz / 'Web'), str(raiz / 'WEB'), str(raiz / 'web')])
+    assert [x['ruta'] for x in a] == [str(nm)]
+
+
+def test_una_fecha_futura_no_da_una_edad_negativa(raiz):
+    import os
+    import time
+    nm = _pesado(raiz / 'web' / 'node_modules')
+    pj = raiz / 'web' / 'package.json'
+    pj.write_text('{}')
+    futuro = time.time() + 30 * 86400
+    os.utime(pj, (futuro, futuro))
+    assert _por_ruta(raiz)[str(nm)]['dias'] == 0

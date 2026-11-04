@@ -16,7 +16,15 @@ from pathlib import Path
 from typing import Dict, Iterator, List, Optional, Set
 
 from analyzer.comandos import escapar
-from analyzer.proyectos import PROFUNDIDAD_MAXIMA, ROOTS, _tamano
+from analyzer.proyectos import PROFUNDIDAD_MAXIMA, ROOTS, _tamano, raices_unicas
+
+
+# Ignored folders that are safe to lose with the worktree.
+SE_RECONSTRUYEN = frozenset((
+    'node_modules', '.venv', 'venv', 'target', '.next', 'dist', 'build', '__pycache__',
+    '.turbo', '.parcel-cache', '.pytest_cache', '.mypy_cache', '.ruff_cache', '.DS_Store',
+    'coverage', '.astro', '.svelte-kit', '.nuxt', '.vite', '.gradle', '.terraform',
+))
 
 
 def _git(arbol: Path, *args: str) -> Optional[str]:
@@ -61,20 +69,38 @@ def _rama_por_defecto(repo: Path) -> Optional[str]:
     return None
 
 
-def _directorios_en_uso() -> Set[str]:
+def _directorios_en_uso() -> Optional[Set[str]]:
     """Where running processes are working: a session may be inside a worktree
-    even with nothing to commit yet."""
+    even with nothing to commit yet. `None` if it cannot be known, which must
+    not read as "nobody": there is always some process with a working folder."""
     try:
         r = subprocess.run(['/usr/sbin/lsof', '-a', '-d', 'cwd', '-Fn'],
                            capture_output=True, text=True, timeout=30)
     except (OSError, subprocess.SubprocessError):
-        return set()
-    return {l[1:] for l in r.stdout.splitlines() if l.startswith('n')}
+        return None
+    filas = {l[1:] for l in r.stdout.splitlines() if l.startswith('n')}
+    return filas or None
 
 
 def _en_uso(ruta: Path, en_uso: Set[str]) -> bool:
     prefijo = f'{ruta}{os.sep}'
     return any(d == str(ruta) or d.startswith(prefijo) for d in en_uso)
+
+
+def _ignorados_que_se_pierden(ruta: Path) -> Optional[List[str]]:
+    """What `git worktree remove` would delete without warning: it refuses over
+    changes and untracked files, but not over ignored ones, and a `.env` is
+    ignored precisely because it matters. `None` if git cannot say."""
+    salida = _git(ruta, 'status', '--porcelain', '--ignored')
+    if salida is None:
+        return None
+    perdidos = []
+    for linea in salida.splitlines():
+        if linea.startswith('!! '):
+            nombre = linea[3:].strip('"').rstrip('/').rsplit('/', 1)[-1]
+            if nombre not in SE_RECONSTRUYEN and not nombre.endswith(('.pyc', '.log')):
+                perdidos.append(linea[3:])
+    return perdidos
 
 
 def _listar(repo: Path) -> List[Dict[str, str]]:
@@ -94,17 +120,54 @@ def _listar(repo: Path) -> List[Dict[str, str]]:
 
 
 def comando_quitar(repo: Path, ruta: Path, commit: str, por_defecto: str) -> str:
-    """Removes a worktree only if its commit is still merged. `git worktree
-    remove` refuses by itself if it has changes or untracked files."""
-    r, w = escapar(str(repo)), escapar(str(ruta))
-    return (f'git -C {r} merge-base --is-ancestor {escapar(commit)} {escapar(por_defecto)} '
+    """Removes a worktree, checking everything again first, because anything may
+    have changed since the measure. `git worktree remove` refuses by itself if
+    there are changes or untracked files; the rest is on this command:
+
+    - HEAD is still the commit that was measured (a new one might not be merged);
+    - that commit is still in the default branch;
+    - no process is working inside, and if that cannot be known, nothing goes;
+    - no ignored file has appeared that would be lost.
+    """
+    r, w, c = escapar(str(repo)), escapar(str(ruta)), escapar(commit)
+    n = escapar(f'n{ruta}')
+    permitidos = '|'.join(re.escape(x) for x in sorted(SE_RECONSTRUYEN))
+    filtro = escapar(f'^!! (.*/)?({permitidos})/?$|\\.(pyc|log)$')
+    return (f'test "$(git -C {w} rev-parse HEAD)" = {c} '
+            f'&& git -C {r} merge-base --is-ancestor {c} {escapar(por_defecto)} '
+            f'&& u="$(/usr/sbin/lsof -a -d cwd -Fn 2>/dev/null)" && test -n "$u" '
+            f'&& ! printf %s "$u" | grep -qF -- {n} '
+            f'&& ! git -C {w} status --porcelain --ignored | grep "^!! " | grep -qvE {filtro} '
             f'&& git -C {r} worktree remove {w}')
 
 
-def del_repo(repo: Path, en_uso: Set[str]) -> List[Dict]:
+def _prune_seguro(rotas: List[Dict[str, str]], repo: Path, por_defecto: Optional[str]) -> bool:
+    """`git worktree prune` acts on the whole repo, and a folder that is not there
+    may be on a disk that is not mounted, or moved. Only if every missing one is
+    away from any external disk and its commit survives: a branch keeps it, or it
+    is merged."""
+    for w in rotas:
+        if w.get('worktree', '').startswith('/Volumes/'):
+            return False
+        if 'locked' in w:
+            return False
+        if 'branch' in w:
+            continue
+        commit = w.get('HEAD', '')
+        if not (por_defecto and commit and _git(
+                repo, 'merge-base', '--is-ancestor', commit, por_defecto) is not None):
+            return False
+    return True
+
+
+def del_repo(repo: Path, en_uso: Optional[Set[str]]) -> List[Dict]:
     por_defecto = _rama_por_defecto(repo)
     salida = []
-    for w in _listar(repo):
+    worktrees = _listar(repo)
+    rotas = [w for w in worktrees
+             if 'prunable' in w or not Path(w.get('worktree', '')).is_dir()]
+    prune_seguro = _prune_seguro(rotas, repo, por_defecto)
+    for w in worktrees:
         ruta = Path(w.get('worktree', ''))
         rama = w.get('branch', '').replace('refs/heads/', '') or '(sin rama)'
         rota = 'prunable' in w or not ruta.is_dir()
@@ -127,9 +190,11 @@ def del_repo(repo: Path, en_uso: Set[str]) -> List[Dict]:
             'command': '',
         }
         if rota:
-            # Nothing of it is left but git's own bookkeeping.
-            fila['motivo'] = 'rota: la carpeta ya no está'
-            fila['command'] = f'git -C {escapar(str(repo))} worktree prune'
+            if prune_seguro:
+                # Nothing of it is left here but git's own bookkeeping.
+                fila['command'] = f'git -C {escapar(str(repo))} worktree prune'
+            else:
+                fila['motivo'] = 'su carpeta no está: podría haberse movido o estar en otro disco'
             salida.append(fila)
             continue
         fila['space'] = _tamano(ruta)
@@ -137,12 +202,14 @@ def del_repo(repo: Path, en_uso: Set[str]) -> List[Dict]:
         fila['cambios'] = len(estado.splitlines()) if estado else 0
         fecha = _git(ruta, 'log', '-1', '--format=%ct')
         if fecha:
-            fila['dias'] = int((time.time() - int(fecha)) / 86400)
+            # A commit dated in the future must not give a negative age.
+            fila['dias'] = max(0, int((time.time() - int(fecha)) / 86400))
         commit = w.get('HEAD', '')
         fila['mergeada'] = bool(
             por_defecto and commit
             and _git(repo, 'merge-base', '--is-ancestor', commit, por_defecto) is not None)
-        fila['en_uso'] = _en_uso(ruta, en_uso)
+        fila['en_uso'] = en_uso is not None and _en_uso(ruta, en_uso)
+        ignorados = _ignorados_que_se_pierden(ruta)
         if estado is None:
             fila['motivo'] = 'git no pudo leer su estado'
         elif fila['cambios']:
@@ -151,8 +218,14 @@ def del_repo(repo: Path, en_uso: Set[str]) -> List[Dict]:
             fila['motivo'] = 'no se sabe cuál es la rama principal'
         elif not fila['mergeada']:
             fila['motivo'] = 'la rama no está mergeada'
+        elif en_uso is None:
+            fila['motivo'] = 'no se pudo comprobar si hay algo trabajando dentro'
         elif fila['en_uso']:
             fila['motivo'] = 'hay un proceso trabajando dentro'
+        elif ignorados is None:
+            fila['motivo'] = 'git no pudo leer sus archivos ignorados'
+        elif ignorados:
+            fila['motivo'] = 'tiene archivos ignorados que no se reconstruyen'
         elif 'locked' in w:
             fila['motivo'] = 'está bloqueado'
         else:
@@ -165,10 +238,8 @@ def inventario(raices: Optional[List[str]] = None) -> List[Dict]:
     """Every linked worktree found, largest first."""
     en_uso = _directorios_en_uso()
     repos = set()
-    for raiz in (raices if raices is not None else ROOTS):
-        ruta = Path(raiz).expanduser()
-        if ruta.is_dir() and not ruta.is_symlink():
-            repos.update(_repos(ruta))
+    for ruta in raices_unicas(raices if raices is not None else ROOTS):
+        repos.update(_repos(ruta))
     salida: List[Dict] = []
     for repo in sorted(repos):
         salida.extend(del_repo(repo, en_uso))

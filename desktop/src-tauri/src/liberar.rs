@@ -674,6 +674,9 @@ const LINEAS_EN_CONFIRMACION: usize = 10;
 pub fn confirmacion(elegidas: &[Limpieza]) -> Confirmacion {
     let total: u64 = elegidas.iter().map(|l| l.space).sum();
     let permanente = elegidas.iter().any(Limpieza::es_permanente);
+    let entorno = elegidas
+        .iter()
+        .any(|l| l.es_permanente() && l.categoria == CATEGORIA_AMBIENTES);
     let mut lineas: Vec<String> = elegidas
         .iter()
         .take(LINEAS_EN_CONFIRMACION)
@@ -690,14 +693,17 @@ pub fn confirmacion(elegidas: &[Limpieza]) -> Confirmacion {
     let admin = elegidas.iter().any(|l| l.requiere_admin);
     let descarga = elegidas.iter().any(|l| l.consecuencia == REDESCARGA);
     let docker = elegidas.iter().any(|l| l.esta_en(Categoria::Docker));
-    let despues = if permanente {
+    let despues = if entorno {
+        "Se borra el entorno y todo lo instalado en él, y no se puede deshacer. Si no tienes \
+         cómo recrearlo, se pierde."
+    } else if permanente {
         "Lo que hay en la papelera se borra para siempre. Esto no se puede deshacer."
     } else if admin {
         "macOS te pedirá tu contraseña: la app no la ve. Es lo que Simulator reconstruye la \
          próxima vez que lo abras, y la primera vez irá más lento."
     } else if worktrees {
-        "Solo se quita la copia de trabajo: la rama y sus commits siguen en el repo. Si algo \
-         cambió desde la última medición, git se niega y no se quita."
+        "Solo se quita la copia de trabajo: la rama y sus commits siguen en el repo. Antes se \
+         comprueba de nuevo: si algo cambió desde la última medición, no se quita."
     } else if proyectos {
         "Tu código no se toca. Cuando vuelvas a esos proyectos habrá que reinstalar las \
          dependencias o volver a compilar."
@@ -712,7 +718,9 @@ pub fn confirmacion(elegidas: &[Limpieza]) -> Confirmacion {
          como mucho, la próxima vez que abras una app o compiles irá un poco más lento."
     };
     Confirmacion {
-        titulo: if permanente {
+        titulo: if entorno {
+            format!("¿Borrar este entorno ({})?", tamano(total))
+        } else if permanente {
             format!("¿Vaciar la papelera ({})?", tamano(total))
         } else {
             format!("¿Liberar unos {}?", tamano(total))
@@ -722,7 +730,9 @@ pub fn confirmacion(elegidas: &[Limpieza]) -> Confirmacion {
             lineas.join("\n"),
             despues
         ),
-        boton: if permanente {
+        boton: if entorno {
+            "Borrar entorno".into()
+        } else if permanente {
             "Vaciar la papelera".into()
         } else if worktrees {
             "Quitar".into()
@@ -881,6 +891,7 @@ fn bytes_imagen_docker() -> Option<u64> {
 /// reading, and whether time ran out with it possibly still going.
 fn esperar_que_encoja<L>(
     mut leer: L,
+    antes: Option<u64>,
     tope: Duration,
     quietud: Duration,
     pausa: Duration,
@@ -889,11 +900,9 @@ where
     L: FnMut() -> Option<u64>,
 {
     let inicio = Instant::now();
-    let primera = leer();
-    let mut minimo = primera;
+    let mut minimo = antes;
     let mut ultimo_cambio = None;
     while inicio.elapsed() < tope {
-        std::thread::sleep(pausa);
         let ahora = leer();
         if let (Some(a), Some(m)) = (ahora, minimo) {
             if a < m {
@@ -904,6 +913,7 @@ where
         if ultimo_cambio.is_some_and(|t: Instant| t.elapsed() >= quietud) {
             return (minimo, false);
         }
+        std::thread::sleep(pausa);
     }
     (minimo, ultimo_cambio.is_some())
 }
@@ -1030,6 +1040,8 @@ pub struct Liberador {
     desarrollo: Mutex<Vec<Limpieza>>,
     /// The rows that explain "Sistema y otros". Read-only.
     desglose: Mutex<Vec<String>>,
+    refrescando: AtomicBool,
+    refresco_pendiente: AtomicBool,
     ocupado: AtomicBool,
 }
 
@@ -1054,6 +1066,8 @@ impl Liberador {
             lista: Mutex::new(Vec::new()),
             desarrollo: Mutex::new(Vec::new()),
             desglose: Mutex::new(Vec::new()),
+            refrescando: AtomicBool::new(false),
+            refresco_pendiente: AtomicBool::new(false),
             ocupado: AtomicBool::new(false),
         });
         let texto = if l.motor.is_some() {
@@ -1123,23 +1137,48 @@ impl Liberador {
     /// Re-measures and rebuilds the menu. Blocking: call it off the main
     /// thread.
     pub fn refrescar(&self) {
+        // One at a time: two overlapping would interleave their rows. One asked
+        // for meanwhile runs again at the end, since the disk may have changed.
+        if self.refrescando.swap(true, Ordering::SeqCst) {
+            self.refresco_pendiente.store(true, Ordering::SeqCst);
+            return;
+        }
+        loop {
+            self.refrescar_una_vez();
+            if !self.refresco_pendiente.swap(false, Ordering::SeqCst) {
+                break;
+            }
+        }
+        self.refrescando.store(false, Ordering::SeqCst);
+    }
+
+    fn refrescar_una_vez(&self) {
         let Some(motor) = self.motor.as_ref() else {
             return;
         };
         if self.ocupado.load(Ordering::SeqCst) {
             return;
         }
-        match medir(motor) {
+        let medido = medir(motor);
+        // A cleanup may have started while measuring: its progress must stay.
+        if self.ocupado.load(Ordering::SeqCst) {
+            return;
+        }
+        let aviso = match medido {
             Ok(lista) => {
                 self.poner(&lista, None);
                 *self.lista.lock().unwrap() = lista;
+                None
             }
             // The reason goes to the log: a long line would widen the whole menu.
             Err(e) => {
                 eprintln!("No se pudo medir lo que se puede liberar: {e}");
+                // What was there may be gone: it is not offered from memory.
+                self.lista.lock().unwrap().clear();
                 self.poner(&[], Some("No se pudo medir"));
+                Some("No se pudo medir")
             }
-        }
+        };
         // Last, because it is the slowest: the rest of the menu is ready.
         let mut desarrollo = Vec::new();
         for modo in MODOS_DESARROLLO {
@@ -1153,7 +1192,7 @@ impl Liberador {
         }
         *self.desarrollo.lock().unwrap() = desarrollo;
         let lista = self.lista.lock().unwrap().clone();
-        self.poner(&lista, None);
+        self.poner(&lista, aviso);
     }
 
     /// Handles a click on `id` (without the prefix): confirm, run, report.
@@ -1200,10 +1239,13 @@ impl Liberador {
                         // Nothing is being deleted any more: the menu goes back
                         // to work while Docker takes its time.
                         yo.ocupado.store(false, Ordering::SeqCst);
-                        let lista = yo.lista.lock().unwrap().clone();
-                        yo.poner(&lista, None);
+                        // Measured again, not restored: the old list still
+                        // offers what was just deleted.
+                        let aparte = Arc::clone(&yo);
+                        std::thread::spawn(move || aparte.refrescar());
                         let (minimo, pendiente) = esperar_que_encoja(
                             bytes_imagen_docker,
+                            hecho.docker_antes,
                             TOPE_DOCKER,
                             QUIETUD_DOCKER,
                             INTERVALO_AVANCE,
@@ -1534,6 +1576,18 @@ mod tests {
     }
 
     #[test]
+    fn borrar_un_entorno_no_promete_que_se_pueda_recuperar() {
+        let mut e = l("env", PERMANENTE, GB);
+        e.categoria = CATEGORIA_AMBIENTES.into();
+        let c = confirmacion(&[e]);
+        assert_eq!(c.boton, "Borrar entorno");
+        assert!(c.permanente);
+        assert!(c.mensaje.contains("no se puede deshacer"));
+        assert!(!c.mensaje.contains("papelera"));
+        assert!(!c.titulo.contains("papelera"));
+    }
+
+    #[test]
     fn los_ambientes_solo_ofrecen_lo_que_tiene_comando() {
         let mut cache = l("pkgs", REDESCARGA, GB);
         cache.categoria = CATEGORIA_AMBIENTES.into();
@@ -1777,6 +1831,7 @@ mod tests {
     fn la_espera_termina_cuando_deja_de_encoger() {
         let (m, pendiente) = esperar_que_encoja(
             lecturas(vec![100, 100, 80, 60, 60]),
+            Some(100),
             Duration::from_secs(5),
             Duration::from_millis(20),
             POCO,
@@ -1793,6 +1848,7 @@ mod tests {
                 v -= 1;
                 Some(v)
             },
+            Some(1_000_000),
             Duration::from_millis(30),
             Duration::from_secs(5),
             POCO,
@@ -1805,6 +1861,7 @@ mod tests {
     fn si_nunca_encoge_no_promete_mas() {
         let (m, pendiente) = esperar_que_encoja(
             lecturas(vec![100]),
+            Some(100),
             Duration::from_millis(20),
             Duration::from_secs(5),
             POCO,
@@ -1814,9 +1871,23 @@ mod tests {
     }
 
     #[test]
+    fn si_ya_encogio_antes_de_la_primera_lectura_se_nota() {
+        let (m, pendiente) = esperar_que_encoja(
+            lecturas(vec![60]),
+            Some(100),
+            Duration::from_secs(5),
+            Duration::from_millis(10),
+            POCO,
+        );
+        assert_eq!(m, Some(60));
+        assert!(!pendiente);
+    }
+
+    #[test]
     fn que_crezca_mientras_tanto_no_cuenta_como_liberado() {
         let (m, _) = esperar_que_encoja(
             lecturas(vec![100, 150, 200]),
+            Some(100),
             Duration::from_millis(20),
             Duration::from_secs(5),
             POCO,

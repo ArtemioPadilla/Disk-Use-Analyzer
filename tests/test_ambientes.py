@@ -33,7 +33,7 @@ def _por_id(b):
 
 def test_la_cache_de_conda_se_limpia_con_conda(base):
     _pesado(base / 'pkgs')
-    fila = _por_id(base)['ambiente:ana conda-pkgs']
+    fila = _por_id(base)[f'ambiente:{base}-pkgs']
     assert fila['consecuencia'] == 'redescarga'
     subprocess.run(['/bin/sh', '-c', fila['command']], check=True)
     assert (base / 'bin' / 'llamada').read_text().strip() == 'clean --all -y'
@@ -42,8 +42,9 @@ def test_la_cache_de_conda_se_limpia_con_conda(base):
 def test_un_entorno_se_quita_con_conda_por_ruta_y_nombrado(base):
     env = _pesado(base / 'envs' / 'ml')
     (env / 'conda-meta').mkdir()
-    fila = _por_id(base)['ambiente:ana conda-env-ml']
+    fila = _por_id(base)[f'ambiente:{base}-env-ml']
     assert fila['titulo'] == 'Entorno conda ml'
+    assert fila['consecuencia'] == 'permanente', 'nada dice que se pueda reconstruir'
     assert fila['dias'] == 0
     subprocess.run(['/bin/sh', '-c', fila['command']], check=True)
     assert (base / 'bin' / 'llamada').read_text().strip() == f'env remove -y -p {env}'
@@ -51,7 +52,7 @@ def test_un_entorno_se_quita_con_conda_por_ruta_y_nombrado(base):
 
 def test_una_carpeta_en_envs_sin_conda_meta_no_es_un_entorno(base):
     _pesado(base / 'envs' / 'datos')
-    assert 'ambiente:ana conda-env-datos' not in _por_id(base)
+    assert f'ambiente:{base}-env-datos' not in _por_id(base)
 
 
 def test_una_ruta_con_comillas_no_inyecta_nada(base):
@@ -92,3 +93,14 @@ def test_lo_que_se_puede_limpiar_va_primero(base, tmp_path, monkeypatch):
     monkeypatch.setattr(ambientes, 'GLOBALES_NPM', str(grande))
     filas = ambientes.inventario((str(base),))
     assert filas[0]['command'] and not filas[1]['command']
+
+
+def test_dos_instalaciones_con_un_entorno_igual_no_comparten_id(base, tmp_path):
+    otra = tmp_path / 'otra' / base.name
+    (otra / 'bin').mkdir(parents=True)
+    (otra / 'bin' / 'conda').write_text('#!/bin/sh\n')
+    for b in (base, otra):
+        env = _pesado(b / 'envs' / 'ml')
+        (env / 'conda-meta').mkdir()
+    ids = [f['id'] for f in ambientes.inventario((str(base), str(otra)))]
+    assert len(ids) == len(set(ids)) == 2
