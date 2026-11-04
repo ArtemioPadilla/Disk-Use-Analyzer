@@ -12,7 +12,7 @@
 
 use std::os::unix::fs::MetadataExt;
 use std::process::{Command, Stdio};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -847,9 +847,28 @@ pub struct Avance {
     pub titulo: String,
     pub liberado: u64,
     pub objetivo: u64,
+    /// How far the run has got, for the bar: the most that was measured or
+    /// that the finished steps were estimated at. Never goes back. Not a figure
+    /// to show: a finished step may not have shown up on the disk yet, Docker's
+    /// image gives its space back later.
+    pub avanzado: u64,
 }
 
+/// A running cleanup never reads as finished, however far the estimate fell short.
+const TOPE_AVANCE: f64 = 0.99;
+
 impl Avance {
+    /// How much of the bar to fill, between 0 and `TOPE_AVANCE`.
+    pub fn fraccion(&self) -> f64 {
+        let f = if self.objetivo > 0 {
+            self.avanzado as f64 / self.objetivo as f64
+        } else {
+            // Nothing was estimated: all there is to go by is the steps.
+            self.paso.saturating_sub(1) as f64 / self.pasos.max(1) as f64
+        };
+        f.clamp(0.0, TOPE_AVANCE)
+    }
+
     /// One line for the menu. The estimate can fall short, so once the
     /// measured figure passes it only the measured figure is shown.
     pub fn texto(&self) -> String {
@@ -938,6 +957,7 @@ where
         (Some(a), Some(d)) => d.saturating_sub(a),
         _ => 0,
     };
+    let maximo = AtomicU64::new(0);
     let mut fallos = Vec::new();
     for (i, l) in elegidas.iter().enumerate() {
         if l.requiere_admin && guion_admin(l).is_none() {
@@ -947,13 +967,17 @@ where
             ));
             continue;
         }
+        let terminados: u64 = elegidas[..i].iter().map(|l| l.space).sum();
         let avisar = || {
+            let liberado = medido();
+            let alcanzado = liberado.max(terminados);
             al_avanzar(&Avance {
                 paso: i + 1,
                 pasos: elegidas.len(),
                 titulo: l.titulo.clone(),
-                liberado: medido(),
+                liberado,
                 objetivo,
+                avanzado: maximo.fetch_max(alcanzado, Ordering::SeqCst).max(alcanzado),
             })
         };
         avisar();
@@ -1267,9 +1291,10 @@ impl Liberador {
     /// Handles a click on `id` (without the prefix): confirm, run, report.
     /// `al_empezar` and `al_terminar` let the caller animate the icon and
     /// notify; both run on a worker thread.
-    pub fn pedir<E, T>(self: &Arc<Self>, id: &str, al_empezar: E, al_terminar: T)
+    pub fn pedir<E, A, T>(self: &Arc<Self>, id: &str, al_empezar: E, al_avanzar: A, al_terminar: T)
     where
         E: FnOnce() + Send + 'static,
+        A: Fn(Option<f64>) + Send + Sync + 'static,
         T: FnOnce(&Hecho) + Send + 'static,
     {
         let mut todas = self.lista.lock().unwrap().clone();
@@ -1301,9 +1326,15 @@ impl Liberador {
                 std::thread::spawn(move || {
                     al_empezar();
                     let mut hecho = ejecutar(&elegidas, |avance| {
-                        let _ = yo.fila_seguro.set_text(avance.texto());
-                        menu_nativo::aplicar(&yo.app);
+                        let texto = avance.texto();
+                        let fraccion = avance.fraccion();
+                        let _ = yo.fila_seguro.set_text(&texto);
+                        menu_nativo::aplicar_con_barra(&yo.app, &texto, fraccion);
+                        al_avanzar(Some(fraccion));
                     });
+                    // From here on nothing is known about how long it takes:
+                    // Docker gives the space back when it wants.
+                    al_avanzar(None);
                     if hecho.docker_antes.is_some() {
                         // Nothing is being deleted any more: the menu goes back
                         // to work while Docker takes its time.
@@ -1868,7 +1899,37 @@ mod tests {
             titulo: "Cache de npm".into(),
             liberado,
             objetivo,
+            avanzado: liberado,
         }
+    }
+
+    #[test]
+    fn la_barra_se_llena_con_lo_avanzado_sin_decir_nunca_que_acabo() {
+        assert_eq!(avance(1, 2, 0, 4 * GB).fraccion(), 0.0);
+        assert_eq!(avance(1, 2, GB, 4 * GB).fraccion(), 0.25);
+        // The estimate fell short, and there is still work under way.
+        assert_eq!(avance(1, 2, 9 * GB, 4 * GB).fraccion(), TOPE_AVANCE);
+    }
+
+    #[test]
+    fn sin_estimacion_la_barra_va_por_pasos() {
+        assert_eq!(avance(1, 4, 0, 0).fraccion(), 0.0);
+        assert_eq!(avance(3, 4, 0, 0).fraccion(), 0.5);
+    }
+
+    #[test]
+    fn la_barra_avanza_con_cada_paso_aunque_el_disco_aun_no_lo_refleje_y_no_retrocede() {
+        // Commands that free nothing: what moves the bar is the finished steps.
+        let mut a = l("a", REGENERA, 3 * GB);
+        let mut b = l("b", REGENERA, GB);
+        a.command = "true".into();
+        b.command = "true".into();
+        let vistas = Mutex::new(Vec::new());
+        ejecutar(&[a, b], |av| vistas.lock().unwrap().push(av.fraccion()));
+        let vistas = vistas.into_inner().unwrap();
+        assert!(vistas.len() >= 2, "{vistas:?}");
+        assert!(*vistas.last().unwrap() >= 0.75, "{vistas:?}");
+        assert!(vistas.windows(2).all(|p| p[0] <= p[1]), "{vistas:?}");
     }
 
     #[test]

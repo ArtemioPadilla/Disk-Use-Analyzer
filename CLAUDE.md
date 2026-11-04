@@ -244,8 +244,8 @@ The project has three interfaces: CLI, GUI, and Web.
   dialog, runs it, notifies the measured savings — it never builds a deletion
   command itself), `progreso.rs` (the status lines during a scan, from the
   engine's `--progreso` file), `menu_nativo.rs` (what Tauri's menu API cannot do:
-  bold titles, readable info rows, aligned figures and category dots, written on
-  the `NSMenu`; call `aplicar` after changing any menu text), `desglose.rs` (what
+  bold titles, readable info rows, aligned figures, category dots and the cleanup's
+  progress bar, written on the `NSMenu`; call `aplicar` after changing any menu text), `desglose.rs` (what
   "Sistema y otros" is made of; read-only)
 - **Build:** `cd desktop && npm run tauri build -- --bundles app`
 - **Tests:** `cargo test --manifest-path desktop/src-tauri/Cargo.toml` (also run by `make test`)

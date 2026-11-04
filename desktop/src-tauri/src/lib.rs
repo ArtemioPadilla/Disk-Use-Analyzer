@@ -311,6 +311,9 @@ struct Pintor {
     /// Whether the thread that draws the sweep is alive, so a quick
     /// stop-start never ends up with two of them.
     hilo_animacion: AtomicBool,
+    /// How full the ring is while a cleanup runs. `None` means the length of
+    /// the work is unknown, which is what the sweep says.
+    llenado: Mutex<Option<f64>>,
 }
 
 impl Pintor {
@@ -329,7 +332,10 @@ impl Pintor {
             ultimo.0 = trozos;
         }
         if ultimo.1 != titulo {
-            let _ = self.tray.set_title(Some(&titulo));
+            // The percentage stays while a cleanup runs; `llenar` puts this back.
+            if self.llenado.lock().unwrap().is_none() {
+                let _ = self.tray.set_title(Some(&titulo));
+            }
             ultimo.1 = titulo;
         }
     }
@@ -353,7 +359,11 @@ impl Pintor {
             let mut n = 0;
             while yo.animando.load(Ordering::SeqCst) > 0 {
                 let trozos = yo.ultimo.lock().unwrap().0.clone();
-                yo.poner_icono(anillo::png_barrido(&trozos, n));
+                let llenado = *yo.llenado.lock().unwrap();
+                yo.poner_icono(match llenado {
+                    Some(f) => anillo::png_llenado(&trozos, f, n),
+                    None => anillo::png_barrido(&trozos, n),
+                });
                 n = (n + 1) % anillo::FOTOGRAMAS;
                 std::thread::sleep(FOTOGRAMA);
             }
@@ -368,6 +378,17 @@ impl Pintor {
                 break;
             }
         });
+    }
+
+    /// Fills the ring and says the percentage beside it, or with `None` goes back
+    /// to the sweep and the usual text. Drawn by the thread `animar` started.
+    fn llenar(&self, fraccion: Option<f64>) {
+        *self.llenado.lock().unwrap() = fraccion;
+        let titulo = match fraccion {
+            Some(f) => format!("{} %", (f * 100.0).floor() as u32),
+            None => self.ultimo.lock().unwrap().1.clone(),
+        };
+        let _ = self.tray.set_title(Some(&titulo));
     }
 
     fn parar(&self) {
@@ -748,11 +769,15 @@ pub fn run() {
                             let Some(pintor) = app.try_state::<Arc<Pintor>>() else {
                                 return;
                             };
-                            let (al_empezar, al_terminar) =
-                                (Arc::clone(&pintor), Arc::clone(&pintor));
+                            let (al_empezar, al_avanzar, al_terminar) = (
+                                Arc::clone(&pintor),
+                                Arc::clone(&pintor),
+                                Arc::clone(&pintor),
+                            );
                             liberador.pedir(
                                 que,
                                 move || al_empezar.animar(),
+                                move |fraccion| al_avanzar.llenar(fraccion),
                                 move |hecho| {
                                     al_terminar.parar();
                                     let (titulo, cuerpo) = liberar::aviso_final(hecho);
@@ -886,6 +911,7 @@ pub fn run() {
                 ultimo: Mutex::new((Vec::new(), String::new())),
                 animando: AtomicUsize::new(0),
                 hilo_animacion: AtomicBool::new(false),
+                llenado: Mutex::new(None),
             });
             app.manage(Arc::clone(&pintor));
             if let Some(uso) = lectura_inicial.as_ref() {
