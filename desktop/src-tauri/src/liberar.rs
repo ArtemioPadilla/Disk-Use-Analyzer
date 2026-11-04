@@ -41,6 +41,9 @@ const WORKTREES_LIMPIOS: &str = "worktrees_limpios";
 const CATEGORIA_WORKTREES: &str = "worktrees";
 const CATEGORIA_AMBIENTES: &str = "ambientes";
 const CATEGORIA_DOCKER_DETALLE: &str = "docker_detalle";
+const CATEGORIA_APPS: &str = "apps";
+/// How many apps the submenu names.
+const APPS_EN_MENU: usize = 8;
 /// How many images and volumes the submenu names; the rest are small.
 const DOCKER_EN_MENU: usize = 8;
 /// Menu id suffix of "all the caches".
@@ -52,11 +55,14 @@ const EXTERNO_ALMACENAMIENTO: &str = "almacenamiento";
 const EXTERNO_MONITOR: &str = "monitor";
 const EXTERNO_DOCKER: &str = "docker";
 
+/// Prefix of the menu ids that show an app in Finder.
+pub const PREFIJO_VER_APP: &str = "ver_app:";
 /// Prefix of the menu ids that ask an app to quit.
 pub const PREFIJO_CERRAR: &str = "cerrar:";
 
 const TITULO_DESCARGA: &str = "Hay que volver a descargar";
 const TITULO_DESGLOSE: &str = "De qué está hecho";
+const TITULO_APPS: &str = "Apps con sus datos";
 
 const REGENERA: &str = "regenera";
 const REDESCARGA: &str = "redescarga";
@@ -125,6 +131,14 @@ pub fn medir_desarrollo(motor: &Motor, modo: &str) -> Result<Vec<Limpieza>, Stri
         .arg(motor.script())
         .arg(modo)
         .env("PATH", path_con_herramientas())
+        .env(
+            "DISK_ANALYZER_ACCESO_TOTAL",
+            if crate::analisis::hay_acceso_total_al_disco() {
+                "1"
+            } else {
+                "0"
+            },
+        )
         .stdin(Stdio::null())
         .output()
         .map_err(|e| format!("no se pudo lanzar el motor: {e}"))?;
@@ -316,6 +330,21 @@ pub fn filas(c: Categoria, lista: &[Limpieza], aviso: Option<&str>) -> Vec<Fila>
                 out.extend(propias.iter().map(|l| limpieza(l)));
             }
             out.push(Fila::Separador);
+            let mut apps: Vec<&Limpieza> = lista
+                .iter()
+                .filter(|l| l.categoria == CATEGORIA_APPS)
+                .collect();
+            apps.sort_by_key(|l| std::cmp::Reverse(l.space));
+            if !apps.is_empty() {
+                out.push(Fila::Texto(TITULO_APPS.into()));
+                out.extend(apps.iter().take(APPS_EN_MENU).map(|l| {
+                    accion(
+                        format!("{PREFIJO_VER_APP}{}", l.id),
+                        format!("{}\t{}", l.titulo, tamano(l.space)),
+                    )
+                }));
+                out.push(Fila::Separador);
+            }
             out.push(analizador("/", "Ver desglose en el analizador"));
             out.push(externo(
                 EXTERNO_ALMACENAMIENTO,
@@ -830,11 +859,12 @@ where
 }
 
 /// What the engine lists about development, slower than the caches.
-const MODOS_DESARROLLO: [&str; 4] = [
+const MODOS_DESARROLLO: [&str; 5] = [
     "--proyectos",
     "--worktrees",
     "--ambientes",
     "--docker-detalle",
+    "--apps",
 ];
 
 /// The cleanups' place in the menu and their current list.
@@ -912,6 +942,17 @@ impl Liberador {
         let _ = self.fila_seguro.set_enabled(activa);
         self.poner_desarrollo(aviso);
         menu_nativo::aplicar(&self.app);
+    }
+
+    /// Where an app of the list lives, to show it in Finder. Only what the
+    /// engine listed: a menu id is never taken for a path.
+    pub fn ruta_de_app(&self, id: &str) -> Option<String> {
+        self.desarrollo
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|l| l.id == id && l.categoria == CATEGORIA_APPS)
+            .map(|l| l.descripcion.clone())
     }
 
     /// Keeps what "Sistema y otros" is made of. It shows with the next
@@ -1337,6 +1378,18 @@ mod tests {
         assert!(f.contains(&Fila::Texto("T-brew\t2,0 GB".into())));
         assert_eq!(fila_ambientes(&lista), "Ambientes\t3,0 GB");
         assert!(elegir(&lista, TODO).is_empty());
+    }
+
+    #[test]
+    fn las_apps_solo_se_muestran_y_nunca_se_pueden_elegir_para_borrar() {
+        let mut a = l("app:/Applications/X.app", "solo_lista", 4 * GB);
+        a.categoria = CATEGORIA_APPS.into();
+        a.command = String::new();
+        let lista = vec![a];
+        let f = filas(Categoria::Resto, &lista, None);
+        assert!(ids(&f).contains(&"ver_app:app:/Applications/X.app".to_string()));
+        assert!(!ids(&f).iter().any(|i| i.starts_with(PREFIJO)));
+        assert!(elegir(&lista, "app:/Applications/X.app").is_empty());
     }
 
     #[test]

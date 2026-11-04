@@ -799,6 +799,10 @@ pub fn run() {
                                     }
                                 }
                             });
+                        } else if let Some(que) = id.strip_prefix(liberar::PREFIJO_VER_APP) {
+                            if let Some(ruta) = liberador.ruta_de_app(que) {
+                                let _ = tauri_plugin_opener::reveal_item_in_dir(ruta);
+                            }
                         } else if let Some(que) = id.strip_prefix(liberar::PREFIJO_CERRAR) {
                             let que = que.to_string();
                             app.dialog()

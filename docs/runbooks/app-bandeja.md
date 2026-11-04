@@ -288,6 +288,14 @@ Sin Acceso total al disco no se lee `~/Library`, porque macOS preguntaría carpe
 así que todo eso cae en «Sin medir». Con clones de APFS o mediciones de distintos momentos, lo
 medido puede pasarse de la fila; entonces no aparece «Sin medir».
 
+## Apps con sus datos
+
+El submenú de «Sistema y otros» nombra las apps que más ocupan, sumando sus datos de
+`~/Library` (`disk_analyzer.py --apps`). Solo informa y lleva a Finder: los datos de una app
+pueden ser irrecuperables. Los datos se atan a una app por identificador o nombre exacto, así
+que algunos pueden quedar sin contar. Sin Acceso total al disco solo cuenta el paquete de la
+app. No hay fecha de último uso: Spotlight no la dio para las apps probadas.
+
 ## Swap y Analizar desde el menú
 
 **Swap** no borra nada: el archivo de swap lo gestiona macOS. Su submenú ofrece
