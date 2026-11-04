@@ -11,17 +11,17 @@ comunes al pasar el cursor, sin perder las garantías de borrado del proyecto.
 
 ```
 Disco
-  6,9 GB libres de 460,4 GB
-  ● Docker            40 GB  ›
-  ● Cachés            26 GB  ›
-  ● Tus archivos     110 GB  ›
-  ● Sistema y otros  278 GB  ›
+  N GB libres de N GB
+  ● Docker            N GB  ›
+  ● Cachés            N GB  ›
+  ● Tus archivos     N GB  ›
+  ● Sistema y otros  N GB  ›
 Memoria
-  Swap               11,0 GB  ›
+  Swap               N GB  ›
 Análisis
   Analizar                    ›
   (estado o progreso, en una o dos líneas)
-Liberar lo seguro…   13,6 GB
+Liberar lo seguro…   N GB
 Abrir analizador completo  ⌘O
 Ajustes                       ›
 Salir de Disk Use Analyzer ⌘Q

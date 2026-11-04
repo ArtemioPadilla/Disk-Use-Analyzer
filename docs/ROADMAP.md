@@ -28,6 +28,7 @@ Estados: ✅ hecho · 🔶 en parte · ⬜ pendiente · ❓ pendiente de una dec
 | [E4 · App de barra de menús](#e4--app-de-barra-de-menús) | Rebanada A, analizador completo, puerto efímero | "Liberar lo seguro", rebanadas B y C | "Liberar lo seguro", **después** de E2 |
 | [E5 · Distribución](#e5--distribución) | App autocontenida, releases firmados ad hoc | Certificado, notarización, Intel | Certificado autofirmado |
 | [E6 · Salud del repo](#e6--salud-del-repo-y-del-proceso) | CI en tres suites, Fase 0 | `main` sin proteger, Dependabot apagado | Proteger `main` |
+| [E7 · Exhaustividad](#e7--exhaustividad) | Limpiezas por categoría en el menú | Proyectos, worktrees, ambientes, desglose de "Sistema y otros" | E7.12 y E7.1 |
 
 ## Orden recomendado
 
@@ -184,6 +185,12 @@ comentario de `puerto_libre` promete un reintento que nadie hace.
 Deuda menor: `/docs` y `/openapi.json` quedan sin autenticación.
 
 ---
+
+## E7 · Exhaustividad
+
+Objetivo: recuperar más espacio sin perder nada irrecuperable, y que todo el disco tenga
+explicación. Plan con tareas, issues y PR:
+[E7](superpowers/plans/2026-11-03-exhaustividad.md) · Épica: [#47](https://github.com/ArtemioPadilla/Disk-Use-Analyzer/issues/47).
 
 ## Decisiones abiertas
 

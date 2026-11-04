@@ -832,8 +832,7 @@ class DiskAnalyzerCore:
                 'space': self.docker_stats['reclaimable'], 'command': 'docker system prune -a -f',
                 'efecto': 'irreversible'})
 
-        # Cachés de aplicaciones: 21,4 GB medidos en la máquina de desarrollo y
-        # ninguna regla los miraba. Nivel 2 y no 1 porque algunas apps guardan
+        # Cachés de aplicaciones: pueden ocupar mucho y ninguna regla las miraba. Nivel 2 y no 1 porque algunas apps guardan
         # ahí cosas que tardan en regenerarse (índices, miniaturas).
         #
         # IMPORTANT: cache_types.GENERAL también agrupa

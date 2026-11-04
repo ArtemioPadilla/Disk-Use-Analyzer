@@ -87,9 +87,8 @@ fn alguna_legible(rutas: &[std::path::PathBuf]) -> bool {
 /// original — un escaneo del disco entero **siempre** topa con unas pocas
 /// carpetas de `root` (`/usr/sbin/authserver`, cachés de Apple, algún
 /// antivirus), así que tomar cualquier error de permisos como "falta el
-/// Acceso total al disco" daba un falso positivo permanente. Medido en la
-/// máquina de desarrollo, con el permiso ya concedido: 10 errores, ninguno
-/// de ellos de una ruta protegida por TCC.
+/// Acceso total al disco" daba un falso positivo permanente: los hay aun con
+/// el permiso concedido, y ninguno de ellos es de una ruta protegida por TCC.
 pub fn hay_acceso_total_al_disco() -> bool {
     let home = std::env::var_os("HOME").unwrap_or_default();
     let rutas: Vec<_> = SONDAS_ACCESO_TOTAL

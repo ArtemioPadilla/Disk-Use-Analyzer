@@ -1,7 +1,7 @@
 //! Swap usage, and which app is holding it.
 //!
 //! Swap lives in files on the same disk, so heavy memory pressure eats disk
-//! space: on the development machine it reached 23 GB and left 205 MB free.
+//! space, sometimes nearly all that was left.
 //! Nothing a cleanup deletes can recover that — only quitting the app that
 //! holds the swapped memory, or rebooting. Naming that app is the point here.
 //!

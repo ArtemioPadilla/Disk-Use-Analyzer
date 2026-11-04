@@ -298,7 +298,7 @@ install-web:
 	fi
 	@echo "$(BLUE)Instalando dependencias Python...$(NC)"
 	@. venv-web/bin/activate && pip install --upgrade pip >/dev/null 2>&1
-	@. venv-web/bin/activate && pip install -r requirements-web.txt
+	@. venv-web/bin/activate && pip install -r requirements-web.lock
 	@echo "$(BLUE)Instalando dependencias Node.js (Astro frontend)...$(NC)"
 	@if ! command -v node >/dev/null 2>&1; then \
 		echo "$(RED)Node.js no encontrado. Instálalo con: brew install node$(NC)"; \
