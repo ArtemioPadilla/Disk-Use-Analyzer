@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent, cleanup } from '@testing-library/react';
 import FileTable from './FileTable';
 
 const archivo = (path: string, size: number, age_days: number) => ({
@@ -19,6 +19,7 @@ describe('FileTable abierta con un enlace directo', () => {
     window.history.replaceState({}, '', '/files');
   });
   afterEach(() => {
+    cleanup();
     vi.unstubAllGlobals();
   });
 
@@ -30,6 +31,15 @@ describe('FileTable abierta con un enlace directo', () => {
       expect.anything(),
     ));
     await waitFor(() => expect(screen.queryByText('No files to display')).toBeNull());
+  });
+
+  it('entiende ?exts= para un grupo y se puede quitar', async () => {
+    window.history.replaceState({}, '', '/files?exts=.mp4,.mov');
+    conResultados([archivo('/Users/u/a.mp4', 5000, 1)]);
+    render(<FileTable />);
+    const quitar = await screen.findByText(/Quitar filtro: .mp4, .mov/);
+    fireEvent.click(quitar);
+    expect(screen.queryByText(/Quitar filtro/)).toBeNull();
   });
 
   it('entiende ?path= y ?orden=antiguedad', async () => {

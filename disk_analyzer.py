@@ -4627,6 +4627,10 @@ Ejemplos de uso:
                         help='Listar en JSON las imágenes y volúmenes de Docker')
     parser.add_argument('--apps', action='store_true',
                         help='Listar en JSON las apps con el tamaño de sus datos')
+    parser.add_argument('--archivos', action='store_true',
+                        help='Listar en JSON los archivos grandes del último análisis, por grupos')
+    parser.add_argument('--guardar-resultado', action='store_true',
+                        help='Dejar el análisis donde el analizador web lo encuentra')
     parser.add_argument('--worktrees', action='store_true',
                         help='Listar en JSON los worktrees de git y su estado')
     parser.add_argument('--informe', metavar='FICHERO',
@@ -4661,6 +4665,11 @@ Ejemplos de uso:
 
     if args.apps:
         from analyzer.apps import inventario
+        print(json.dumps(inventario()))
+        return
+
+    if args.archivos:
+        from analyzer.archivos import inventario
         print(json.dumps(inventario()))
         return
 
@@ -4733,6 +4742,13 @@ Ejemplos de uso:
             filename = f"{args.export}.json" if not args.export.endswith('.json') else args.export
             analyzer.export_json(report, filename)
     
+    if args.guardar_resultado:
+        from analyzer.archivos import guardar
+        try:
+            guardar(args.path, report)
+        except OSError as e:
+            print(f"No se pudo guardar el resultado: {e}", file=sys.stderr)
+
     if args.informe:
         # Replaced whole, so a failure keeps the previous report. A report is
         # not worth failing a scan that already finished: it only warns.

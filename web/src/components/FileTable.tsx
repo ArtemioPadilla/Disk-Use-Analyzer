@@ -16,6 +16,12 @@ export default function FileTable() {
 
   const [files, setFiles] = useState<LargeFile[]>([]);
   const [search, setSearch] = useState(initialSearch);
+  // A group of files from the menu-bar app's link: `?exts=.mp4,.mov`.
+  const [exts, setExts] = useState<string[]>(() =>
+    typeof window !== 'undefined'
+      ? (new URLSearchParams(window.location.search).get('exts') || '').split(',').filter(Boolean)
+      : [],
+  );
   const [sortKey, setSortKey] = useState<SortKey>(() =>
     typeof window !== 'undefined' &&
     new URLSearchParams(window.location.search).get('orden') === 'antiguedad'
@@ -51,7 +57,7 @@ export default function FileTable() {
   }, []);
 
   const filtered = useMemo(() => {
-    let result = files;
+    let result = exts.length ? files.filter(f => exts.includes(f.extension.toLowerCase())) : files;
     if (search) {
       const q = search.toLowerCase();
       result = result.filter(f => f.path.toLowerCase().includes(q) || f.extension.toLowerCase().includes(q));
@@ -62,7 +68,7 @@ export default function FileTable() {
       return mul * ((a[sortKey] as number) - (b[sortKey] as number));
     });
     return result;
-  }, [files, search, sortKey, sortDir]);
+  }, [files, search, sortKey, sortDir, exts]);
 
   const virtualizer = useVirtualizer({
     count: filtered.length,
@@ -116,6 +122,7 @@ export default function FileTable() {
   return (
     <div>
       <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '0.75rem', alignItems: 'center' }}>
+        {exts.length > 0 && <button onClick={() => setExts([])}>Quitar filtro: {exts.join(', ')}</button>}
         <input type="text" placeholder="Search files..." value={search} onChange={e => setSearch(e.target.value)}
           style={{ flex: 1, padding: '0.5rem 0.75rem', border: '1px solid var(--border)', borderRadius: '8px', background: 'var(--card-bg)', color: 'var(--text)', fontSize: '0.875rem' }} />
         <div style={{ display: 'flex', gap: '2px', borderRadius: '8px', border: '1px solid var(--border)', overflow: 'hidden' }}>
