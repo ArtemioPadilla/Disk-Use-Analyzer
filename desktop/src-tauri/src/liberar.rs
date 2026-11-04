@@ -869,20 +869,33 @@ impl Avance {
         f.clamp(0.0, TOPE_AVANCE)
     }
 
-    /// One line for the menu. The estimate can fall short, so once the
-    /// measured figure passes it only the measured figure is shown.
+    /// Which step it is on, without what the step is called.
+    pub fn encabezado(&self) -> String {
+        if self.pasos > 1 {
+            format!("Liberando {} de {}", self.paso, self.pasos)
+        } else {
+            "Liberando".to_string()
+        }
+    }
+
+    /// The estimate can fall short, so once the measured figure passes it only the
+    /// measured figure is shown.
+    pub fn cifras(&self) -> String {
+        if self.liberado > self.objetivo {
+            format!("{} liberados", tamano(self.liberado))
+        } else {
+            format!("{} de {}", tamano(self.liberado), tamano(self.objetivo))
+        }
+    }
+
+    /// All of it on one line: the row's title, and its tooltip.
     pub fn texto(&self) -> String {
         let cuenta = if self.pasos > 1 {
             format!("{} de {}: ", self.paso, self.pasos)
         } else {
             String::new()
         };
-        let cifras = if self.liberado > self.objetivo {
-            format!("{} liberados", tamano(self.liberado))
-        } else {
-            format!("{} de {}", tamano(self.liberado), tamano(self.objetivo))
-        };
-        format!("Liberando {cuenta}{} · {cifras}", self.titulo)
+        format!("Liberando {cuenta}{} · {}", self.titulo, self.cifras())
     }
 }
 
@@ -1329,7 +1342,16 @@ impl Liberador {
                         let texto = avance.texto();
                         let fraccion = avance.fraccion();
                         let _ = yo.fila_seguro.set_text(&texto);
-                        menu_nativo::aplicar_con_barra(&yo.app, &texto, fraccion);
+                        menu_nativo::aplicar_con_barra(
+                            &yo.app,
+                            &texto,
+                            menu_nativo::FilaProgreso {
+                                encabezado: avance.encabezado(),
+                                cifras: avance.cifras(),
+                                detalle: avance.titulo.clone(),
+                                fraccion,
+                            },
+                        );
                         al_avanzar(Some(fraccion));
                     });
                     // From here on nothing is known about how long it takes:
@@ -1901,6 +1923,14 @@ mod tests {
             objetivo,
             avanzado: liberado,
         }
+    }
+
+    #[test]
+    fn el_nombre_de_lo_que_se_limpia_no_va_en_la_linea_de_las_cifras() {
+        let a = avance(2, 4, 5 * GB, 12 * GB);
+        assert_eq!(a.encabezado(), "Liberando 2 de 4");
+        assert_eq!(a.cifras(), "5,0 GB de 12 GB");
+        assert_eq!(avance(1, 1, GB, GB).encabezado(), "Liberando");
     }
 
     #[test]
