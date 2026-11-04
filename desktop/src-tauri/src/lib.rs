@@ -557,6 +557,7 @@ pub fn run() {
             let paleta_menu = Submenu::with_items(app, "Colores", true, &como_menu(&paleta_items))?;
             let titulo_desarrollo = titulo("Desarrollo")?;
             let proyectos_menu = Submenu::new(app, "Proyectos\t…", true)?;
+            let worktrees_menu = Submenu::new(app, "Worktrees\t…", true)?;
             let seguro_item = MenuItem::with_id(
                 app,
                 format!("{}{}", liberar::PREFIJO, liberar::TODO),
@@ -590,6 +591,7 @@ pub fn run() {
                 &sep1 as &dyn IsMenuItem<tauri::Wry>,
                 &titulo_desarrollo,
                 &proyectos_menu,
+                &worktrees_menu,
                 &sep5,
                 &titulo_memoria,
                 &swap_menu,
@@ -627,6 +629,7 @@ pub fn run() {
                 filas_categorias.clone(),
                 seguro_item,
                 proyectos_menu,
+                worktrees_menu,
                 motor.clone(),
             );
 
