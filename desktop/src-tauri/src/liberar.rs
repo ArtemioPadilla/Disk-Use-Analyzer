@@ -1018,15 +1018,34 @@ where
     }
 }
 
-/// What the engine lists about development, slower than the caches.
-const MODOS_DESARROLLO: [&str; 6] = [
-    "--proyectos",
-    "--worktrees",
-    "--ambientes",
-    "--docker-detalle",
-    "--apps",
-    "--archivos",
+/// What the engine lists beyond the caches, and the categories each mode fills.
+/// Fastest first, so each section shows as soon as it is known.
+const MODOS_DESARROLLO: [(&str, &[&str]); 6] = [
+    ("--archivos", &[CATEGORIA_ARCHIVOS]),
+    ("--docker-detalle", &[CATEGORIA_DOCKER_DETALLE]),
+    ("--apps", &[CATEGORIA_APPS]),
+    ("--ambientes", &[CATEGORIA_AMBIENTES]),
+    ("--proyectos", &[CATEGORIA_PROYECTOS]),
+    ("--worktrees", &[CATEGORIA_WORKTREES]),
 ];
+const MIDIENDO: &str = "Midiendo…";
+
+/// Merges one mode's result into the list, in place of what it said before. A
+/// failed mode leaves the previous rows: they say less than a fresh measure, but
+/// more than nothing.
+fn con_resultado(lista: &mut Vec<Limpieza>, categorias: &[&str], nuevas: Vec<Limpieza>) {
+    lista.retain(|l| !categorias.contains(&l.categoria.as_str()));
+    lista.extend(nuevas);
+}
+
+/// A section's top-level row: its figure once measured, never a "0 MB" before.
+fn fila_o_espera(medida: bool, nombre: &str, fila: String) -> String {
+    if medida {
+        fila
+    } else {
+        format!("{nombre}\t…")
+    }
+}
 
 /// The cleanups' place in the menu and their current list.
 pub struct Liberador {
@@ -1044,6 +1063,10 @@ pub struct Liberador {
     desglose: Mutex<Vec<String>>,
     refrescando: AtomicBool,
     refresco_pendiente: AtomicBool,
+    /// The modes measured at least once.
+    medidos: Mutex<Vec<&'static str>>,
+    /// Whether the caches were measured at least once.
+    caches_medidas: AtomicBool,
     ocupado: AtomicBool,
 }
 
@@ -1070,6 +1093,8 @@ impl Liberador {
             desglose: Mutex::new(Vec::new()),
             refrescando: AtomicBool::new(false),
             refresco_pendiente: AtomicBool::new(false),
+            medidos: Mutex::new(Vec::new()),
+            caches_medidas: AtomicBool::new(false),
             ocupado: AtomicBool::new(false),
         });
         let texto = if l.motor.is_some() {
@@ -1120,20 +1145,53 @@ impl Liberador {
             .map(|l| l.descripcion.clone())
     }
 
-    /// Keeps what "Sistema y otros" is made of. It shows with the next
-    /// `refrescar`, which the same thread runs right after.
+    /// Keeps what "Sistema y otros" is made of, and shows it. It takes a while to
+    /// measure, so it arrives on its own, whenever it is ready; not during a
+    /// cleanup, or before the caches are known, when the next measure will show it.
     pub fn poner_desglose(&self, filas: Vec<String>) {
         *self.desglose.lock().unwrap() = filas;
+        if self.caches_medidas.load(Ordering::SeqCst) && !self.ocupado.load(Ordering::SeqCst) {
+            let lista = self.lista.lock().unwrap().clone();
+            self.poner(&lista, None);
+        }
     }
 
     fn poner_desarrollo(&self, aviso: Option<&str>) {
         let lista = self.desarrollo.lock().unwrap().clone();
-        let _ = self.proyectos.set_text(fila_proyectos(&lista));
-        poner_filas(&self.app, &self.proyectos, &filas_proyectos(&lista, aviso));
-        let _ = self.worktrees.set_text(fila_worktrees(&lista));
-        poner_filas(&self.app, &self.worktrees, &filas_worktrees(&lista, aviso));
-        let _ = self.ambientes.set_text(fila_ambientes(&lista));
-        poner_filas(&self.app, &self.ambientes, &filas_ambientes(&lista, aviso));
+        let medidos = self.medidos.lock().unwrap().clone();
+        let medido = |modo: &str| medidos.contains(&modo);
+        let espera = |modo: &str| aviso.or((!medido(modo)).then_some(MIDIENDO));
+
+        let _ = self.proyectos.set_text(fila_o_espera(
+            medido("--proyectos"),
+            "Proyectos",
+            fila_proyectos(&lista),
+        ));
+        poner_filas(
+            &self.app,
+            &self.proyectos,
+            &filas_proyectos(&lista, espera("--proyectos")),
+        );
+        let _ = self.worktrees.set_text(fila_o_espera(
+            medido("--worktrees"),
+            "Worktrees",
+            fila_worktrees(&lista),
+        ));
+        poner_filas(
+            &self.app,
+            &self.worktrees,
+            &filas_worktrees(&lista, espera("--worktrees")),
+        );
+        let _ = self.ambientes.set_text(fila_o_espera(
+            medido("--ambientes"),
+            "Ambientes",
+            fila_ambientes(&lista),
+        ));
+        poner_filas(
+            &self.app,
+            &self.ambientes,
+            &filas_ambientes(&lista, espera("--ambientes")),
+        );
     }
 
     /// Re-measures and rebuilds the menu. Blocking: call it off the main
@@ -1170,6 +1228,7 @@ impl Liberador {
             Ok(lista) => {
                 self.poner(&lista, None);
                 *self.lista.lock().unwrap() = lista;
+                self.caches_medidas.store(true, Ordering::SeqCst);
                 None
             }
             // The reason goes to the log: a long line would widen the whole menu.
@@ -1181,18 +1240,26 @@ impl Liberador {
                 Some("No se pudo medir")
             }
         };
-        // Last, because it is the slowest: the rest of the menu is ready.
-        let mut desarrollo = Vec::new();
-        for modo in MODOS_DESARROLLO {
-            match medir_desarrollo(motor, modo) {
-                Ok(lista) => desarrollo.extend(lista),
+        // Last, because it is the slowest: the rest of the menu is ready. One by
+        // one, because the slowest takes a good while and the others are useful now.
+        for (modo, categorias) in MODOS_DESARROLLO {
+            let medido = medir_desarrollo(motor, modo);
+            if self.ocupado.load(Ordering::SeqCst) {
+                return;
+            }
+            match medido {
+                Ok(nuevas) => {
+                    con_resultado(&mut self.desarrollo.lock().unwrap(), categorias, nuevas);
+                    let mut medidos = self.medidos.lock().unwrap();
+                    if !medidos.contains(&modo) {
+                        medidos.push(modo);
+                    }
+                }
                 Err(e) => eprintln!("No se pudo medir {modo}: {e}"),
             }
+            self.poner_desarrollo(aviso);
+            menu_nativo::aplicar(&self.app);
         }
-        if self.ocupado.load(Ordering::SeqCst) {
-            return;
-        }
-        *self.desarrollo.lock().unwrap() = desarrollo;
         let lista = self.lista.lock().unwrap().clone();
         self.poner(&lista, aviso);
     }
@@ -1669,6 +1736,30 @@ mod tests {
         assert!(confirmacion(&[a])
             .mensaje
             .contains("te pedirá tu contraseña"));
+    }
+
+    #[test]
+    fn antes_de_medir_una_seccion_no_dice_cero() {
+        assert_eq!(
+            fila_o_espera(false, "Proyectos", fila_proyectos(&[])),
+            "Proyectos\t…"
+        );
+        assert_eq!(
+            fila_o_espera(true, "Proyectos", fila_proyectos(&[])),
+            "Proyectos\t0 MB"
+        );
+    }
+
+    #[test]
+    fn cada_medicion_solo_reemplaza_lo_suyo() {
+        let mut lista = vec![proyecto("viejo", None, GB), worktree("w", "", GB)];
+        con_resultado(
+            &mut lista,
+            &[CATEGORIA_PROYECTOS],
+            vec![proyecto("nuevo", None, GB)],
+        );
+        let ids: Vec<&str> = lista.iter().map(|l| l.id.as_str()).collect();
+        assert_eq!(ids, vec!["w", "nuevo"]);
     }
 
     #[test]
