@@ -109,11 +109,16 @@ fn punto(cx: f32, cy: f32, r: f32, a: f32) -> (f32, f32) {
 
 /// Appends a clockwise arc as cubic Béziers of at most a quarter turn each.
 fn arco(pb: &mut PathBuilder, cx: f32, cy: f32, r: f32, desde: f32, barrido: f32) {
+    let (x0, y0) = punto(cx, cy, r, desde);
+    pb.move_to(x0, y0);
+    curvas(pb, cx, cy, r, desde, barrido);
+}
+
+/// The curves of a clockwise arc, from wherever the path already is at its start.
+fn curvas(pb: &mut PathBuilder, cx: f32, cy: f32, r: f32, desde: f32, barrido: f32) {
     let partes = (barrido / std::f32::consts::FRAC_PI_2).ceil().max(1.0) as usize;
     let paso = barrido / partes as f32;
     let k = 4.0 / 3.0 * (paso / 4.0).tan();
-    let (x0, y0) = punto(cx, cy, r, desde);
-    pb.move_to(x0, y0);
     for i in 0..partes {
         let a0 = desde + paso * i as f32;
         let a1 = a0 + paso;
@@ -186,54 +191,52 @@ pub fn png_barrido(trozos: &[Trozo], n: u32) -> Option<Vec<u8>> {
     lienzo.encode_png().ok()
 }
 
-/// The progress ring of a cleanup. Not one of the palette's colours, and visible
-/// on a light menu bar as well as a dark one, unlike white.
+/// The progress of a cleanup. Not one of the palette's colours, and visible on a
+/// light menu bar as well as a dark one, unlike white.
 const VERDE_LLENADO: Rgb = [52, 199, 89];
-/// The progress ring sits inside the disk's, with a gap between them.
-const RADIO_INTERIOR: f32 = 6.5;
-const GROSOR_INTERIOR: f32 = 4.0;
+/// The disc in the middle of the ring, with a gap between them.
+const RADIO_DISCO: f32 = 8.5;
 /// The tip of the fill that pulses, as a share of the circle.
 const PUNTA_LLENADO: f32 = 0.05;
 
-/// The disk's ring as usual, with a smaller ring inside it filling clockwise from
-/// twelve o'clock, `fraccion` of the way, for frame `n` of `FOTOGRAMAS`. Inside, so
-/// that the state of the disk stays readable during the cleanup. The tip pulses so
-/// that a step that frees nothing for a while still looks alive rather than hung.
+/// The disk's ring as usual, with the disc inside it filling like a pie, clockwise
+/// from twelve o'clock, `fraccion` of the way, for frame `n` of `FOTOGRAMAS`. Inside,
+/// so that the state of the disk stays readable during the cleanup; a solid disc,
+/// because a thinner ring is hard to read at this size. The tip pulses so that a
+/// step that frees nothing for a while still looks alive rather than hung.
 pub fn png_llenado(trozos: &[Trozo], fraccion: f64, n: u32) -> Option<Vec<u8>> {
     let mut lienzo = lienzo(trozos)?;
     let c = TAM as f32 / 2.0;
-    let trazo = Stroke {
-        width: GROSOR_INTERIOR,
-        line_cap: LineCap::Butt,
-        ..Stroke::default()
-    };
     let vuelta = std::f32::consts::TAU;
     let f = fraccion.clamp(0.0, 1.0) as f32;
-    let mut trazar = |desde: f32, largo: f32, color: Rgb, alfa: u8| {
+    let mut cuna = |desde: f32, largo: f32, color: Rgb, alfa: u8| {
         let mut pb = PathBuilder::new();
-        arco(
-            &mut pb,
-            c,
-            c,
-            RADIO_INTERIOR,
-            desde * vuelta,
-            largo * vuelta,
-        );
+        let (x0, y0) = punto(c, c, RADIO_DISCO, desde * vuelta);
+        pb.move_to(c, c);
+        pb.line_to(x0, y0);
+        curvas(&mut pb, c, c, RADIO_DISCO, desde * vuelta, largo * vuelta);
+        pb.close();
         if let Some(camino) = pb.finish() {
             let mut pintura = Paint::default();
             pintura.set_color_rgba8(color[0], color[1], color[2], alfa);
             pintura.anti_alias = true;
-            lienzo.stroke_path(&camino, &pintura, &trazo, Transform::identity(), None);
+            lienzo.fill_path(
+                &camino,
+                &pintura,
+                FillRule::Winding,
+                Transform::identity(),
+                None,
+            );
         }
     };
-    trazar(0.0, 1.0, [128, 128, 128], 90);
+    cuna(0.0, 1.0, [128, 128, 128], 90);
     if f > 0.0 {
-        trazar(0.0, f, VERDE_LLENADO, 255);
+        cuna(0.0, f, VERDE_LLENADO, 255);
     }
     let fase = (n % FOTOGRAMAS) as f32 / FOTOGRAMAS as f32 * vuelta;
     let brillo = (fase.sin() + 1.0) / 2.0;
     let desde = (f - PUNTA_LLENADO).max(0.0);
-    trazar(desde, PUNTA_LLENADO, BLANCO, (40.0 + brillo * 170.0) as u8);
+    cuna(desde, PUNTA_LLENADO, BLANCO, (40.0 + brillo * 170.0) as u8);
     lienzo.encode_png().ok()
 }
 
@@ -361,7 +364,7 @@ mod tests {
     }
 
     #[test]
-    fn el_llenado_va_por_dentro_en_orden_horario_y_no_toca_el_anillo_del_disco() {
+    fn el_disco_interior_se_llena_en_orden_horario_y_no_toca_el_anillo_del_disco() {
         // A little over half: three o'clock is well inside the fill, and the
         // pulsing tip is past six o'clock, away from every point checked here.
         let png = png_llenado(&todo_rojo(), 0.6, 0).unwrap();
