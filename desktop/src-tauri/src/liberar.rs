@@ -40,6 +40,9 @@ const CATEGORIA_PROYECTOS: &str = "proyectos";
 const WORKTREES_LIMPIOS: &str = "worktrees_limpios";
 const CATEGORIA_WORKTREES: &str = "worktrees";
 const CATEGORIA_AMBIENTES: &str = "ambientes";
+const CATEGORIA_DOCKER_DETALLE: &str = "docker_detalle";
+/// How many images and volumes the submenu names; the rest are small.
+const DOCKER_EN_MENU: usize = 8;
 /// Menu id suffix of "all the caches".
 const TODAS_CACHES: &str = "caches";
 
@@ -47,6 +50,7 @@ const EXTERNO_CACHES: &str = "caches";
 const EXTERNO_DESCARGAS: &str = "descargas";
 const EXTERNO_ALMACENAMIENTO: &str = "almacenamiento";
 const EXTERNO_MONITOR: &str = "monitor";
+const EXTERNO_DOCKER: &str = "docker";
 
 /// Prefix of the menu ids that ask an app to quit.
 pub const PREFIJO_CERRAR: &str = "cerrar:";
@@ -120,6 +124,7 @@ pub fn medir_desarrollo(motor: &Motor, modo: &str) -> Result<Vec<Limpieza>, Stri
         .current_dir(motor.cwd())
         .arg(motor.script())
         .arg(modo)
+        .env("PATH", path_con_herramientas())
         .stdin(Stdio::null())
         .output()
         .map_err(|e| format!("no se pudo lanzar el motor: {e}"))?;
@@ -208,6 +213,13 @@ pub fn filas(c: Categoria, lista: &[Limpieza], aviso: Option<&str>) -> Vec<Fila>
                     "Nada que limpiar, o Docker está apagado".into(),
                 ));
             }
+            let detalle: Vec<&Limpieza> = lista
+                .iter()
+                .filter(|l| l.categoria == CATEGORIA_DOCKER_DETALLE)
+                .collect();
+            if detalle.is_empty() {
+                out.push(externo(EXTERNO_DOCKER, "Encender Docker"));
+            }
             if !vuelve.is_empty() {
                 out.push(Fila::Texto("Vuelve solo".into()));
                 out.extend(vuelve.iter().map(|l| limpieza(l)));
@@ -220,6 +232,29 @@ pub fn filas(c: Categoria, lista: &[Limpieza], aviso: Option<&str>) -> Vec<Fila>
                 out.extend(descarga.iter().map(|l| limpieza(l)));
                 out.push(Fila::Texto("También borra contenedores parados".into()));
                 out.push(Fila::Texto("Los volúmenes no se tocan".into()));
+            }
+            let (imagenes, volumenes): (Vec<&&Limpieza>, Vec<&&Limpieza>) =
+                detalle.iter().partition(|l| l.consecuencia == REDESCARGA);
+            if !imagenes.is_empty() {
+                out.push(Fila::Separador);
+                out.push(Fila::Texto("Imágenes".into()));
+                for l in imagenes.iter().take(DOCKER_EN_MENU) {
+                    if l.command.is_empty() {
+                        out.push(Fila::Texto(format!("{}\t{}", l.titulo, tamano(l.space))));
+                    } else {
+                        out.push(limpieza(l));
+                    }
+                }
+            }
+            if !volumenes.is_empty() {
+                out.push(Fila::Separador);
+                out.push(Fila::Texto("Volúmenes: guardan datos, no se tocan".into()));
+                out.extend(
+                    volumenes
+                        .iter()
+                        .take(DOCKER_EN_MENU)
+                        .map(|l| Fila::Texto(format!("{}\t{}", l.titulo, tamano(l.space)))),
+                );
             }
             out.push(Fila::Separador);
             out.push(analizador("/", "Abrir analizador completo"));
@@ -538,6 +573,7 @@ pub fn externo_de(id: &str, home: &str) -> Option<String> {
     match id {
         EXTERNO_CACHES => Some(format!("{home}/Library/Caches")),
         EXTERNO_DESCARGAS => Some(format!("{home}/Downloads")),
+        EXTERNO_DOCKER => Some("/Applications/Docker.app".to_string()),
         EXTERNO_MONITOR => Some("/System/Applications/Utilities/Activity Monitor.app".to_string()),
         EXTERNO_ALMACENAMIENTO => {
             Some("x-apple.systempreferences:com.apple.settings.Storage".to_string())
@@ -787,12 +823,19 @@ where
     Hecho {
         liberado: medido(),
         fallos,
-        docker: elegidas.iter().any(|l| l.esta_en(Categoria::Docker)),
+        docker: elegidas
+            .iter()
+            .any(|l| l.esta_en(Categoria::Docker) || l.categoria == CATEGORIA_DOCKER_DETALLE),
     }
 }
 
 /// What the engine lists about development, slower than the caches.
-const MODOS_DESARROLLO: [&str; 3] = ["--proyectos", "--worktrees", "--ambientes"];
+const MODOS_DESARROLLO: [&str; 4] = [
+    "--proyectos",
+    "--worktrees",
+    "--ambientes",
+    "--docker-detalle",
+];
 
 /// The cleanups' place in the menu and their current list.
 pub struct Liberador {
@@ -845,8 +888,10 @@ impl Liberador {
 
     /// Rebuilds every submenu and the top-level row.
     fn poner(&self, lista: &[Limpieza], aviso: Option<&str>) {
+        let mut con_desarrollo = lista.to_vec();
+        con_desarrollo.extend(self.desarrollo.lock().unwrap().iter().cloned());
         for (c, submenu) in &self.categorias {
-            let mut todas = filas(*c, lista, aviso);
+            let mut todas = filas(*c, &con_desarrollo, aviso);
             if *c == Categoria::Resto {
                 let desglose = self.desglose.lock().unwrap();
                 if !desglose.is_empty() {
@@ -917,8 +962,8 @@ impl Liberador {
             return;
         }
         *self.desarrollo.lock().unwrap() = desarrollo;
-        self.poner_desarrollo(None);
-        menu_nativo::aplicar(&self.app);
+        let lista = self.lista.lock().unwrap().clone();
+        self.poner(&lista, None);
     }
 
     /// Handles a click on `id` (without the prefix): confirm, run, report.
@@ -1075,6 +1120,45 @@ mod tests {
         let f = filas(Categoria::Docker, &[], None);
         assert!(matches!(&f[0], Fila::Texto(t) if t.contains("apagado")));
         assert!(!ids(&f).iter().any(|i| i.starts_with(PREFIJO)));
+    }
+
+    #[test]
+    fn docker_nombra_imagenes_y_deja_los_volumenes_sin_accion() {
+        let detalle = |id: &str, cons: &str, cmd: &str| {
+            let mut d = l(id, cons, GB);
+            d.categoria = CATEGORIA_DOCKER_DETALLE.into();
+            d.command = cmd.into();
+            d
+        };
+        let lista = vec![
+            detalle("libre", REDESCARGA, "docker image rm x"),
+            detalle("usada", REDESCARGA, ""),
+            detalle("vol", "solo_lista", ""),
+        ];
+        let f = filas(Categoria::Docker, &lista, None);
+        let acciones = ids(&f);
+        assert!(acciones.contains(&"liberar:libre".to_string()));
+        assert!(!acciones
+            .iter()
+            .any(|i| i.contains("usada") || i.contains("vol")));
+        assert!(f.contains(&Fila::Texto("T-vol\t1,0 GB".into())));
+        assert!(!acciones.contains(&"externo:docker".to_string()));
+        assert!(elegir(&lista, "vol").is_empty());
+    }
+
+    #[test]
+    fn con_docker_apagado_ofrece_encenderlo_solo_con_un_clic() {
+        let f = filas(Categoria::Docker, &[], None);
+        assert!(ids(&f).contains(&"externo:docker".to_string()));
+    }
+
+    #[test]
+    fn la_confirmacion_de_una_imagen_no_habla_de_contenedores() {
+        let mut d = l("img", REDESCARGA, GB);
+        d.categoria = CATEGORIA_DOCKER_DETALLE.into();
+        let c = confirmacion(&[d]);
+        assert_eq!(c.boton, "Borrar");
+        assert!(!c.mensaje.contains("contenedores"));
     }
 
     #[test]
