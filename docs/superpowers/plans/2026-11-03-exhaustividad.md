@@ -335,7 +335,7 @@ Las apps pueden ocupar mucho, y algunas guardan muchos datos en `~/Library/Conta
 ## E7.10: Archivos grandes en el menú, agrupados
 
 - [ ] **Issue:** [#45](https://github.com/ArtemioPadilla/Disk-Use-Analyzer/issues/45)
-- **PR:** pendiente
+- **PR:** [#58](https://github.com/ArtemioPadilla/Disk-Use-Analyzer/pull/58)
 - **Depende de:** E7.3 (#38)
 
 El motor detecta archivos grandes y descargas antiguas, pero el menú solo enlaza al analizador, que necesita un análisis previo cargado en la web. Los análisis del menú no pasan por el servidor web.
@@ -344,16 +344,16 @@ El motor detecta archivos grandes y descargas antiguas, pero el menú solo enlaz
 
 **Tareas**
 
-- [ ] Importar análisis del menú a las sesiones web
-- [ ] Clasificación por grupos con pruebas
-- [ ] Menú y enlaces con filtro
-- [ ] Probar el recorrido completo
+- [x] Importar análisis del menú a las sesiones web
+- [x] Clasificación por grupos con pruebas
+- [x] Menú y enlaces con filtro
+- [x] Probar el recorrido completo
 
 **Hecho cuando**
 
-- [ ] El menú dice cuánto ocupa cada grupo.
-- [ ] Desde ahí se llega a la lista y se elige uno por uno.
-- [ ] Un análisis del menú se ve en el analizador.
+- [x] El menú dice cuánto ocupa cada grupo.
+- [x] Desde ahí se llega a la lista y se elige uno por uno.
+- [x] Un análisis del menú se ve en el analizador.
 
 **Seguridad**
 
