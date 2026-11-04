@@ -305,8 +305,12 @@ puede tardar en bajar, o no bajar hasta reiniciar.
 
 **Analizar** escanea el disco completo (⌘R), la carpeta personal o una carpeta a
 elegir. **Ver último resultado** abre el informe HTML del último análisis del menú
-(`~/.disk-analyzer/ultimo-informe.html`). No es el analizador web: esos análisis no
-pasan por el servidor, así que el analizador no los conoce.
+(`~/.disk-analyzer/ultimo-informe.html`). Cada análisis del menú también deja su resultado
+en `~/.disk-analyzer/results`, reemplazando el anterior del menú, y así lo ve el analizador web.
+
+**Tus archivos** agrupa los archivos grandes de ese último análisis (`disk_analyzer.py
+--archivos`): videos, imágenes de disco, instaladores, datos y comprimidos. Cada grupo abre su
+lista en el analizador, donde se eligen uno por uno y van a la papelera.
 
 ## El formato del menú
 

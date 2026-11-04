@@ -42,6 +42,7 @@ const CATEGORIA_WORKTREES: &str = "worktrees";
 const CATEGORIA_AMBIENTES: &str = "ambientes";
 const CATEGORIA_DOCKER_DETALLE: &str = "docker_detalle";
 const CATEGORIA_APPS: &str = "apps";
+const CATEGORIA_ARCHIVOS: &str = "archivos";
 /// How many apps the submenu names.
 const APPS_EN_MENU: usize = 8;
 /// How many images and volumes the submenu names; the rest are small.
@@ -84,6 +85,9 @@ pub struct Limpieza {
     /// Why it is not offered, when it has no command.
     #[serde(default)]
     pub motivo: String,
+    /// The analyzer's page for it, when it has one.
+    #[serde(default)]
+    pub destino: String,
 }
 
 impl Limpieza {
@@ -317,6 +321,17 @@ pub fn filas(c: Categoria, lista: &[Limpieza], aviso: Option<&str>) -> Vec<Fila>
                 "/files?path=/Downloads/&orden=antiguedad",
                 "Descargas más antiguas",
             ));
+            let mut grupos: Vec<&Limpieza> = lista
+                .iter()
+                .filter(|l| l.categoria == CATEGORIA_ARCHIVOS)
+                .collect();
+            grupos.sort_by_key(|l| std::cmp::Reverse(l.space));
+            for g in grupos {
+                out.push(accion(
+                    format!("{PREFIJO_ANALIZADOR}{}", g.destino),
+                    format!("{}\t{}", g.titulo, tamano(g.space)),
+                ));
+            }
             out.push(Fila::Texto("Se abren en el analizador".into()));
             out.push(Fila::Separador);
             out.push(externo(EXTERNO_DESCARGAS, "Abrir Descargas en Finder"));
@@ -859,12 +874,13 @@ where
 }
 
 /// What the engine lists about development, slower than the caches.
-const MODOS_DESARROLLO: [&str; 5] = [
+const MODOS_DESARROLLO: [&str; 6] = [
     "--proyectos",
     "--worktrees",
     "--ambientes",
     "--docker-detalle",
     "--apps",
+    "--archivos",
 ];
 
 /// The cleanups' place in the menu and their current list.
@@ -1079,6 +1095,7 @@ mod tests {
             command: format!("echo {id}"),
             dias: None,
             motivo: String::new(),
+            destino: String::new(),
         }
     }
 
@@ -1390,6 +1407,19 @@ mod tests {
         assert!(ids(&f).contains(&"ver_app:app:/Applications/X.app".to_string()));
         assert!(!ids(&f).iter().any(|i| i.starts_with(PREFIJO)));
         assert!(elegir(&lista, "app:/Applications/X.app").is_empty());
+    }
+
+    #[test]
+    fn los_grupos_de_archivos_llevan_al_analizador_y_nunca_borran() {
+        let mut g = l("grupo:Videos", "solo_lista", 4 * GB);
+        g.categoria = CATEGORIA_ARCHIVOS.into();
+        g.titulo = "Videos (3)".into();
+        g.command = String::new();
+        g.destino = "/files?exts=.mp4,.mov".into();
+        let f = filas(Categoria::Tuyo, &[g.clone()], None);
+        assert!(ids(&f).contains(&"ir:/files?exts=.mp4,.mov".to_string()));
+        assert!(elegir(&[g], "grupo:Videos").is_empty());
+        assert!(!ids(&f).iter().any(|i| i.contains("grupo")));
     }
 
     #[test]

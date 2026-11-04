@@ -486,6 +486,7 @@ fn comando_analisis(motor: &Motor, ruta: &Path) -> Result<Comando, String> {
         .arg(&progreso_path)
         .arg("--informe")
         .arg(&informe)
+        .arg("--guardar-resultado")
         .stdin(Stdio::null())
         // stdout is high-volume progress text nobody reads from a tray
         // menu; piping it without ever draining it risks filling the OS
