@@ -315,8 +315,10 @@ Cada categoría del menú abre sus acciones al pasar el cursor, con su tamaño:
 
 - **Docker**: la caché de build, que vuelve sola, y las imágenes sin usar con los
   contenedores parados, que hay que volver a descargar. Nada toca los volúmenes. Con el
-  daemon apagado no ofrece nada. Docker guarda todo en una imagen de disco, así que lo
-  liberado puede tardar en verse.
+  daemon apagado solo ofrece encenderlo, con un clic. Con él encendido nombra las imágenes,
+  que se quitan una a una con `docker image rm` sin forzar, y los volúmenes, que solo se
+  listan. Docker guarda todo en una imagen de disco, así que lo liberado puede tardar en verse;
+  cuánto tarda está sin medir.
 - **Cachés**: cada caché por separado y, con más de una, **Limpiar todas**.
 - **Tus archivos**: la papelera, bajo **No vuelve**, y enlaces a los archivos más
   grandes y las descargas más antiguas en el analizador, donde se elige uno por uno.
