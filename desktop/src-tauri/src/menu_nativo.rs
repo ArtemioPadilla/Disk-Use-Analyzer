@@ -15,7 +15,7 @@ use objc2::runtime::AnyObject;
 use objc2::AnyThread;
 use objc2_app_kit::{
     NSAttributedStringAttachmentConveniences, NSColor, NSFont, NSFontAttributeName,
-    NSFontWeightRegular, NSForegroundColorAttributeName, NSMenu, NSMenuItem,
+    NSFontWeightRegular, NSForegroundColorAttributeName, NSLineBreakMode, NSMenu, NSMenuItem,
     NSMutableParagraphStyle, NSParagraphStyleAttributeName, NSProgressIndicator,
     NSProgressIndicatorStyle, NSTextAlignment, NSTextAttachment, NSTextField, NSTextTab, NSView,
 };
@@ -68,10 +68,15 @@ const TAM_FUENTE: f64 = 13.0;
 const MARGEN_FILA: f64 = 14.0;
 const ALTO_FILA: f64 = 24.0;
 const LADO_PUNTO: f64 = 16.0;
-/// The progress bar under a row's label, and the narrowest it is drawn, so that
-/// it does not change width with the text above it.
+/// The progress row. Its width never depends on its text, or the whole menu would
+/// change width every time a name or a figure does.
+const ANCHO_PROGRESO: f64 = 272.0;
+const ANCHO_CIFRAS_PROGRESO: f64 = 130.0;
 const ALTO_BARRA: f64 = 10.0;
-const ANCHO_MINIMO_BARRA: f64 = 280.0;
+const ALTO_LINEA: f64 = 17.0;
+const ALTO_DETALLE: f64 = 15.0;
+const TAM_DETALLE: f64 = 11.0;
+const ALTO_PROGRESO: f64 = 3.0 + ALTO_BARRA + 1.0 + ALTO_DETALLE + ALTO_LINEA + 3.0;
 /// What a text attachment reads as in a plain title.
 const ADJUNTO: char = '\u{fffc}';
 
@@ -159,9 +164,18 @@ fn con_punto(item: &NSMenuItem, texto: &NSAttributedString) -> Retained<NSAttrib
     linea.into_super()
 }
 
-/// The label a row already carries, if it still says `titulo`.
+/// The label a row already carries, if it still says `titulo`. The progress row
+/// splits its text over several labels and keeps the whole of it as its tooltip.
 fn ya_dice(item: &NSMenuItem, titulo: &str) -> bool {
-    item.view()
+    let vista = item.view();
+    if vista
+        .as_ref()
+        .and_then(|v| v.toolTip())
+        .is_some_and(|t| t.to_string() == titulo)
+    {
+        return true;
+    }
+    vista
         .and_then(|v| v.subviews().firstObject())
         .and_then(|e| e.downcast::<NSTextField>().ok())
         .is_some_and(|l| l.stringValue().to_string() == titulo)
@@ -181,41 +195,94 @@ fn poner_etiqueta(item: &NSMenuItem, texto: &NSAttributedString, mtm: MainThread
     item.setView(Some(&fila));
 }
 
-/// A label with a determinate bar under it. Each call builds it again, like a
-/// label whose text changed; `ya_dice` keeps it through a plain `aplicar`.
-fn poner_barra(
-    item: &NSMenuItem,
-    texto: &NSAttributedString,
-    fraccion: f64,
+/// What the progress row says, line by line.
+pub struct FilaProgreso {
+    /// Which step it is on; what is being cleaned goes on a line of its own, because
+    /// names come in any length.
+    pub encabezado: String,
+    pub cifras: String,
+    pub detalle: String,
+    pub fraccion: f64,
+}
+
+/// A one-line label with a fixed frame, which cuts what does not fit.
+fn linea(
+    texto: &str,
+    fuente: &NSFont,
+    marco: NSRect,
     mtm: MainThreadMarker,
-) {
-    let etiqueta = NSTextField::labelWithAttributedString(texto, mtm);
-    etiqueta.sizeToFit();
-    let tam = etiqueta.frame().size;
-    etiqueta.setFrameOrigin(NSPoint::new(
-        MARGEN_FILA,
-        ALTO_BARRA + (ALTO_FILA - tam.height) / 2.0,
-    ));
-    let ancho = tam.width.max(ANCHO_MINIMO_BARRA);
+) -> Retained<NSTextField> {
+    let etiqueta = NSTextField::labelWithString(&NSString::from_str(texto), mtm);
+    etiqueta.setFont(Some(fuente));
+    etiqueta.setLineBreakMode(NSLineBreakMode::ByTruncatingMiddle);
+    etiqueta.setFrame(marco);
+    etiqueta
+}
+
+/// Two lines of text and a determinate bar. Each call builds it again, like a label
+/// whose text changed; `ya_dice` keeps it through a plain `aplicar`.
+fn poner_barra(item: &NSMenuItem, titulo: &str, p: &FilaProgreso, mtm: MainThreadMarker) {
     let barra = NSProgressIndicator::initWithFrame(
         mtm.alloc(),
         NSRect::new(
-            NSPoint::new(MARGEN_FILA, 2.0),
-            NSSize::new(ancho, ALTO_BARRA),
+            NSPoint::new(MARGEN_FILA, 3.0),
+            NSSize::new(ANCHO_PROGRESO, ALTO_BARRA),
         ),
     );
     barra.setStyle(NSProgressIndicatorStyle::Bar);
     barra.setIndeterminate(false);
     barra.setMinValue(0.0);
     barra.setMaxValue(1.0);
-    barra.setDoubleValue(fraccion.clamp(0.0, 1.0));
-    let marco = NSRect::new(
-        NSPoint::new(0.0, 0.0),
-        NSSize::new(ancho + 2.0 * MARGEN_FILA, ALTO_FILA + ALTO_BARRA),
+    barra.setDoubleValue(p.fraccion.clamp(0.0, 1.0));
+
+    let y_detalle = 3.0 + ALTO_BARRA + 1.0;
+    let detalle = linea(
+        &p.detalle,
+        &NSFont::systemFontOfSize(TAM_DETALLE),
+        NSRect::new(
+            NSPoint::new(MARGEN_FILA, y_detalle),
+            NSSize::new(ANCHO_PROGRESO, ALTO_DETALLE),
+        ),
+        mtm,
     );
-    let fila = NSView::initWithFrame(mtm.alloc(), marco);
-    fila.addSubview(&etiqueta);
+    detalle.setTextColor(Some(&NSColor::secondaryLabelColor()));
+
+    let y_linea = y_detalle + ALTO_DETALLE;
+    let ancho_encabezado = ANCHO_PROGRESO - ANCHO_CIFRAS_PROGRESO;
+    let encabezado = linea(
+        &p.encabezado,
+        &NSFont::menuFontOfSize(TAM_FUENTE),
+        NSRect::new(
+            NSPoint::new(MARGEN_FILA, y_linea),
+            NSSize::new(ancho_encabezado, ALTO_LINEA),
+        ),
+        mtm,
+    );
+    let fuente_cifras =
+        unsafe { NSFont::monospacedDigitSystemFontOfSize_weight(TAM_FUENTE, NSFontWeightRegular) };
+    let cifras = linea(
+        &p.cifras,
+        &fuente_cifras,
+        NSRect::new(
+            NSPoint::new(MARGEN_FILA + ancho_encabezado, y_linea),
+            NSSize::new(ANCHO_CIFRAS_PROGRESO, ALTO_LINEA),
+        ),
+        mtm,
+    );
+    cifras.setAlignment(NSTextAlignment::Right);
+
+    let fila = NSView::initWithFrame(
+        mtm.alloc(),
+        NSRect::new(
+            NSPoint::new(0.0, 0.0),
+            NSSize::new(ANCHO_PROGRESO + 2.0 * MARGEN_FILA, ALTO_PROGRESO),
+        ),
+    );
+    fila.addSubview(&encabezado);
+    fila.addSubview(&cifras);
+    fila.addSubview(&detalle);
     fila.addSubview(&barra);
+    fila.setToolTip(Some(&NSString::from_str(titulo)));
     item.setView(Some(&fila));
 }
 
@@ -273,9 +340,9 @@ pub fn aplicar(app: &AppHandle<Wry>) {
     });
 }
 
-/// `aplicar`, plus a progress bar under the top-level row that says `titulo`.
-/// The bar goes away by itself when the row's text next changes.
-pub fn aplicar_con_barra(app: &AppHandle<Wry>, titulo: &str, fraccion: f64) {
+/// `aplicar`, with the top-level row that says `titulo` drawn as the progress row.
+/// It goes back to a plain row by itself when its text next changes.
+pub fn aplicar_con_barra(app: &AppHandle<Wry>, titulo: &str, progreso: FilaProgreso) {
     let Some(bandeja) = app.tray_by_id(ID_BANDEJA) else {
         return;
     };
@@ -287,16 +354,15 @@ pub fn aplicar_con_barra(app: &AppHandle<Wry>, titulo: &str, fraccion: f64) {
         let Some(menu) = item.menu(mtm) else {
             return;
         };
-        recorrer(&menu, true, mtm);
-        let Some(texto) = atribuido(&titulo, Estilo::Informativo, FIN_CIFRAS) else {
-            return;
-        };
+        // Before formatting the rest: otherwise the row would first get a label as
+        // wide as its text, and the menu could change width for a moment.
         for fila in menu.itemArray().iter() {
             if fila.title().to_string() == titulo {
-                poner_barra(&fila, &texto, fraccion, mtm);
+                poner_barra(&fila, &titulo, &progreso, mtm);
                 break;
             }
         }
+        recorrer(&menu, true, mtm);
     });
 }
 
