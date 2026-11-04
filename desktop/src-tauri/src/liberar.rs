@@ -36,6 +36,9 @@ pub const TODO: &str = "todo";
 /// Menu id suffix of "the projects nobody has touched for a while".
 const PROYECTOS_OLVIDADOS: &str = "proyectos_olvidados";
 const CATEGORIA_PROYECTOS: &str = "proyectos";
+/// Menu id suffix of "the worktrees that lose nothing".
+const WORKTREES_LIMPIOS: &str = "worktrees_limpios";
+const CATEGORIA_WORKTREES: &str = "worktrees";
 /// Menu id suffix of "all the caches".
 const TODAS_CACHES: &str = "caches";
 
@@ -66,6 +69,9 @@ pub struct Limpieza {
     /// Days since the project was touched, for what comes from a project.
     #[serde(default)]
     pub dias: Option<u64>,
+    /// Why it is not offered, when it has no command.
+    #[serde(default)]
+    pub motivo: String,
 }
 
 impl Limpieza {
@@ -79,6 +85,10 @@ impl Limpieza {
 
     fn esta_en_proyectos(&self) -> bool {
         self.categoria == CATEGORIA_PROYECTOS
+    }
+
+    fn esta_en_worktrees(&self) -> bool {
+        self.categoria == CATEGORIA_WORKTREES
     }
 }
 
@@ -99,14 +109,15 @@ pub fn leer(json: &str) -> Result<Vec<Limpieza>, String> {
         .collect())
 }
 
-/// Asks the engine for what a project can rebuild. It walks the usual project
-/// folders and measures each artifact, so it takes a while: call it off the main
-/// thread. Rows without a command stay in the list, to say they exist.
-pub fn medir_proyectos(motor: &Motor) -> Result<Vec<Limpieza>, String> {
+/// Asks the engine about projects or worktrees (`--proyectos`, `--worktrees`).
+/// It walks the usual project folders and measures what it finds, so it takes a
+/// while: call it off the main thread. Rows without a command stay in the list,
+/// to say they exist.
+pub fn medir_desarrollo(motor: &Motor, modo: &str) -> Result<Vec<Limpieza>, String> {
     let salida = Command::new(motor.python())
         .current_dir(motor.cwd())
         .arg(motor.script())
-        .arg("--proyectos")
+        .arg(modo)
         .stdin(Stdio::null())
         .output()
         .map_err(|e| format!("no se pudo lanzar el motor: {e}"))?;
@@ -351,6 +362,67 @@ pub fn filas_proyectos(lista: &[Limpieza], aviso: Option<&str>) -> Vec<Fila> {
     out
 }
 
+/// The top-level row for worktrees.
+pub fn fila_worktrees(lista: &[Limpieza]) -> String {
+    let (n, total) = lista
+        .iter()
+        .filter(|l| l.esta_en_worktrees())
+        .fold((0, 0), |(n, t), l| (n + 1, t + l.space));
+    format!("Worktrees ({n})\t{}", tamano(total))
+}
+
+/// The worktrees submenu: what can go because it loses nothing, and how many
+/// stay and why.
+pub fn filas_worktrees(lista: &[Limpieza], aviso: Option<&str>) -> Vec<Fila> {
+    let mut out = Vec::new();
+    if let Some(a) = aviso {
+        out.push(Fila::Texto(a.to_string()));
+    }
+    let mut limpios: Vec<&Limpieza> = lista
+        .iter()
+        .filter(|l| l.esta_en_worktrees() && !l.command.is_empty())
+        .collect();
+    limpios.sort_by_key(|l| std::cmp::Reverse(l.space));
+    if aviso.is_none() && limpios.len() > 1 {
+        let total: u64 = limpios.iter().map(|l| l.space).sum();
+        out.push(accion(
+            format!("{PREFIJO}{WORKTREES_LIMPIOS}"),
+            format!(
+                "Quitar los {} que no pierden nada…\t{}",
+                limpios.len(),
+                tamano(total)
+            ),
+        ));
+        out.push(Fila::Separador);
+    }
+    if aviso.is_none() && limpios.is_empty() {
+        out.push(Fila::Texto(
+            "Ninguno se puede quitar sin perder algo".into(),
+        ));
+    }
+    out.extend(limpios.iter().map(|l| limpieza(l)));
+    let mut motivos: Vec<(String, usize)> = Vec::new();
+    for l in lista
+        .iter()
+        .filter(|l| l.esta_en_worktrees() && l.command.is_empty())
+    {
+        match motivos.iter_mut().find(|(m, _)| *m == l.motivo) {
+            Some((_, n)) => *n += 1,
+            None => motivos.push((l.motivo.clone(), 1)),
+        }
+    }
+    motivos.sort_by_key(|(_, n)| std::cmp::Reverse(*n));
+    if !motivos.is_empty() {
+        out.push(Fila::Separador);
+        out.extend(
+            motivos
+                .into_iter()
+                .map(|(m, n)| Fila::Texto(format!("{n}: {m}"))),
+        );
+    }
+    out
+}
+
 /// The swap submenu. Nothing can delete swap: it only shrinks when the app
 /// holding it quits, or with a restart, and the last lines say so.
 pub fn filas_swap(cerrables: &[(String, u64)]) -> Vec<Fila> {
@@ -395,7 +467,10 @@ pub fn poner_filas(app: &AppHandle, submenu: &Submenu<Wry>, filas: &[Fila]) {
 /// itself, without a download behind it: never the Trash, never Docker.
 fn seguras(lista: &[Limpieza]) -> impl Iterator<Item = &Limpieza> {
     lista.iter().filter(|l| {
-        l.consecuencia == REGENERA && !l.esta_en(Categoria::Docker) && !l.esta_en_proyectos()
+        l.consecuencia == REGENERA
+            && (l.esta_en(Categoria::Caches)
+                || l.esta_en(Categoria::Resto)
+                || l.esta_en(Categoria::Tuyo))
     })
 }
 
@@ -438,6 +513,11 @@ pub fn elegir(lista: &[Limpieza], id: &str) -> Vec<Limpieza> {
     match id {
         TODO => seguras(lista).cloned().collect(),
         PROYECTOS_OLVIDADOS => olvidados(lista).cloned().collect(),
+        WORKTREES_LIMPIOS => lista
+            .iter()
+            .filter(|l| l.esta_en_worktrees() && !l.command.is_empty())
+            .cloned()
+            .collect(),
         TODAS_CACHES => lista
             .iter()
             .filter(|l| l.esta_en(Categoria::Caches) && l.consecuencia == REGENERA)
@@ -478,10 +558,14 @@ pub fn confirmacion(elegidas: &[Limpieza]) -> Confirmacion {
         ));
     }
     let proyectos = elegidas.iter().any(Limpieza::esta_en_proyectos);
+    let worktrees = elegidas.iter().any(Limpieza::esta_en_worktrees);
     let descarga = elegidas.iter().any(|l| l.consecuencia == REDESCARGA);
     let docker = elegidas.iter().any(|l| l.esta_en(Categoria::Docker));
     let despues = if permanente {
         "Lo que hay en la papelera se borra para siempre. Esto no se puede deshacer."
+    } else if worktrees {
+        "Solo se quita la copia de trabajo: la rama y sus commits siguen en el repo. Si algo \
+         cambió desde la última medición, git se niega y no se quita."
     } else if proyectos {
         "Tu código no se toca. Cuando vuelvas a esos proyectos habrá que reinstalar las \
          dependencias o volver a compilar."
@@ -508,6 +592,8 @@ pub fn confirmacion(elegidas: &[Limpieza]) -> Confirmacion {
         ),
         boton: if permanente {
             "Vaciar la papelera".into()
+        } else if worktrees {
+            "Quitar".into()
         } else if descarga && docker {
             "Borrar imágenes".into()
         } else if descarga {
@@ -667,12 +753,16 @@ where
     }
 }
 
+/// What the engine lists about development, slower than the caches.
+const MODOS_DESARROLLO: [&str; 2] = ["--proyectos", "--worktrees"];
+
 /// The cleanups' place in the menu and their current list.
 pub struct Liberador {
     app: AppHandle,
     categorias: Vec<(Categoria, Submenu<Wry>)>,
     fila_seguro: MenuItem<Wry>,
     proyectos: Submenu<Wry>,
+    worktrees: Submenu<Wry>,
     motor: Option<Motor>,
     lista: Mutex<Vec<Limpieza>>,
     /// What comes from the slower measures: projects and the like.
@@ -686,6 +776,7 @@ impl Liberador {
         categorias: Vec<(Categoria, Submenu<Wry>)>,
         fila_seguro: MenuItem<Wry>,
         proyectos: Submenu<Wry>,
+        worktrees: Submenu<Wry>,
         motor: Option<Motor>,
     ) -> Arc<Self> {
         let l = Arc::new(Liberador {
@@ -693,6 +784,7 @@ impl Liberador {
             categorias,
             fila_seguro,
             proyectos,
+            worktrees,
             motor,
             lista: Mutex::new(Vec::new()),
             desarrollo: Mutex::new(Vec::new()),
@@ -726,6 +818,8 @@ impl Liberador {
         let lista = self.desarrollo.lock().unwrap().clone();
         let _ = self.proyectos.set_text(fila_proyectos(&lista));
         poner_filas(&self.app, &self.proyectos, &filas_proyectos(&lista, aviso));
+        let _ = self.worktrees.set_text(fila_worktrees(&lista));
+        poner_filas(&self.app, &self.worktrees, &filas_worktrees(&lista, aviso));
     }
 
     /// Re-measures and rebuilds the menu. Blocking: call it off the main
@@ -749,14 +843,17 @@ impl Liberador {
             }
         }
         // Last, because it is the slowest: the rest of the menu is ready.
-        let medidos = medir_proyectos(motor);
+        let mut desarrollo = Vec::new();
+        for modo in MODOS_DESARROLLO {
+            match medir_desarrollo(motor, modo) {
+                Ok(lista) => desarrollo.extend(lista),
+                Err(e) => eprintln!("No se pudo medir {modo}: {e}"),
+            }
+        }
         if self.ocupado.load(Ordering::SeqCst) {
             return;
         }
-        match medidos {
-            Ok(lista) => *self.desarrollo.lock().unwrap() = lista,
-            Err(e) => eprintln!("No se pudo medir los proyectos: {e}"),
-        }
+        *self.desarrollo.lock().unwrap() = desarrollo;
         self.poner_desarrollo(None);
         menu_nativo::aplicar(&self.app);
     }
@@ -832,6 +929,7 @@ mod tests {
             },
             command: format!("echo {id}"),
             dias: None,
+            motivo: String::new(),
         }
     }
 
@@ -1028,6 +1126,53 @@ mod tests {
             "1 sin ofrecer: podrían no reconstruirse".into()
         )));
         assert_eq!(fila_proyectos(&lista), "Proyectos\t6,0 GB");
+    }
+
+    fn worktree(id: &str, motivo: &str, space: u64) -> Limpieza {
+        let mut w = l(id, REGENERA, space);
+        w.categoria = CATEGORIA_WORKTREES.into();
+        w.motivo = motivo.into();
+        if !motivo.is_empty() {
+            w.command = String::new();
+        }
+        w
+    }
+
+    #[test]
+    fn solo_se_quitan_los_worktrees_que_no_pierden_nada() {
+        let lista = vec![
+            worktree("a", "", GB),
+            worktree("b", "", 2 * GB),
+            worktree("c", "tiene cambios sin commit", 9 * GB),
+            worktree("d", "la rama no está mergeada", GB),
+            worktree("e", "la rama no está mergeada", GB),
+        ];
+        let f = filas_worktrees(&lista, None);
+        assert_eq!(
+            ids(&f),
+            vec!["liberar:worktrees_limpios", "liberar:b", "liberar:a"]
+        );
+        assert!(f.contains(&Fila::Texto("2: la rama no está mergeada".into())));
+        assert!(f.contains(&Fila::Texto("1: tiene cambios sin commit".into())));
+
+        let elegidos: Vec<String> = elegir(&lista, WORKTREES_LIMPIOS)
+            .into_iter()
+            .map(|x| x.id)
+            .collect();
+        assert_eq!(elegidos, vec!["a", "b"]);
+        assert_eq!(fila_worktrees(&lista), "Worktrees (5)\t14 GB");
+    }
+
+    #[test]
+    fn los_worktrees_no_entran_en_liberar_lo_seguro() {
+        assert!(elegir(&[worktree("a", "", GB)], TODO).is_empty());
+    }
+
+    #[test]
+    fn la_confirmacion_de_un_worktree_dice_que_la_rama_sigue() {
+        let c = confirmacion(&[worktree("a", "", GB)]);
+        assert_eq!(c.boton, "Quitar");
+        assert!(c.mensaje.contains("la rama y sus commits siguen"));
     }
 
     #[test]

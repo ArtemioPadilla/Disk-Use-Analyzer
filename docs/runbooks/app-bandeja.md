@@ -259,6 +259,17 @@ proyecto no dice cómo reconstruirlo. Para borrarlo, `puede_borrarse` exige evid
 al nombre (`analyzer/protection.py::es_artefacto`). **Liberar lo seguro** no incluye nada de
 esto: reinstalar es trabajo.
 
+## Worktrees
+
+**Worktrees** lista los worktrees de git de esas mismas carpetas
+(`disk_analyzer.py --worktrees`). Solo ofrece quitar los limpios, con la rama mergeada y sin
+un proceso trabajando dentro, y los demás dicen por qué se quedan. Un squash cuenta como no
+mergeado, porque el commit no es alcanzable desde la rama principal: ese worktree se queda
+aunque el trabajo ya esté dentro.
+
+Quitar usa `git worktree remove` sin `--force`, tras comprobar de nuevo que sigue mergeado.
+La rama no se borra. Un worktree roto se limpia con `git worktree prune`.
+
 ## Swap y Analizar desde el menú
 
 **Swap** no borra nada: el archivo de swap lo gestiona macOS. Su submenú ofrece
