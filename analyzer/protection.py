@@ -121,6 +121,29 @@ def _coincide_con_permitidas(file_path: str) -> bool:
     return any(ruta_cf == p.lower() or ruta_cf.startswith(p.lower() + '/') for p in permitidas)
 
 
+def es_artefacto(file_path: str) -> bool:
+    """Si una carpeta es lo que un proyecto reconstruye por sí solo.
+
+    Decisión de producto (épica E7): `node_modules` basta con el nombre, porque
+    nadie llama así a otra cosa. Los demás nombres son demasiado corrientes
+    --una carpeta `target` puede ser de cualquiera-- y exigen la evidencia que
+    los delata como artefacto. `dist` y `build` quedan fuera a propósito: no hay
+    evidencia que los distinga de datos del usuario. Un symlink nunca cuenta.
+    """
+    ruta = Path(file_path)
+    if ruta.name == 'node_modules':
+        return True
+    if ruta.is_symlink() or not ruta.is_dir():
+        return False
+    if ruta.name in ('.venv', 'venv'):
+        return (ruta / 'pyvenv.cfg').is_file()
+    if ruta.name == 'target':
+        return (ruta.parent / 'Cargo.toml').is_file()
+    if ruta.name == '.next':
+        return (ruta.parent / 'package.json').is_file()
+    return False
+
+
 def puede_borrarse(file_path: str) -> bool:
     """Si una ruta puede ser objetivo de un borrado automático.
 
@@ -145,16 +168,11 @@ def puede_borrarse(file_path: str) -> bool:
         return False
 
     # Segundo eje de la verja: por NOMBRE, no por ubicación. `_coincide_con_permitidas`
-    # es una whitelist de rutas fijas -- pero detect_smart_recommendations()
-    # encuentra `node_modules` huérfanos en rutas arbitrarias del usuario
-    # (cualquier proyecto, en cualquier parte), así que no hay una ubicación
-    # fija que añadir ahí. `node_modules` se regenera con `npm install`: el
-    # nombre por sí solo basta para considerarlo seguro, siempre que
-    # `is_protected_path` ya lo haya dejado pasar (arriba). Deliberadamente
-    # estrecho -- SOLO este nombre exacto, nada de listas de patrones
-    # abiertas. No añadir más casos de este eje sin una decisión de producto
-    # explícita (ver tests/test_puede_borrarse.py).
-    if Path(ruta).name == 'node_modules':
+    # es una whitelist de rutas fijas -- pero estos artefactos viven en rutas
+    # arbitrarias del usuario (cualquier proyecto, en cualquier parte), así que
+    # no hay una ubicación fija que añadir ahí. Ver `es_artefacto`: solo se
+    # consideran seguros si `is_protected_path` ya los ha dejado pasar (arriba).
+    if es_artefacto(ruta):
         return True
 
     for cruda in RUTAS_DE_DATOS_DE_USUARIO:
