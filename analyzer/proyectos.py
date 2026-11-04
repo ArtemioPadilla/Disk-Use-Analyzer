@@ -172,7 +172,8 @@ def inventario(raices: Optional[List[str]] = None) -> List[Dict]:
         nombre = (arbol or ruta.parent).name
         salida.append({
             'id': f'proyecto:{ruta}',
-            'titulo': f'{nombre} · {ruta.name}',
+            # The path inside the project: a monorepo has several of the same name.
+            'titulo': f'{nombre} · {ruta.relative_to(arbol or ruta.parent)}',
             'descripcion': str(ruta),
             'categoria': 'proyectos',
             'proyecto': nombre,
