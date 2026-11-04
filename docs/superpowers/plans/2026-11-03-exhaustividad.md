@@ -192,7 +192,7 @@ El inventario de E7.3 no sirve si solo se ve en JSON. Hace falta una fila en el 
 ## E7.5: Inventario y limpieza de worktrees de git
 
 - [ ] **Issue:** [#40](https://github.com/ArtemioPadilla/Disk-Use-Analyzer/issues/40)
-- **PR:** pendiente
+- **PR:** [#53](https://github.com/ArtemioPadilla/Disk-Use-Analyzer/pull/53)
 - **Depende de:** E7.3 (#38)
 
 Los worktrees se acumulan sin que se note: muchos los crean herramientas automáticas, y algunos pueden quedar rotos.
@@ -201,17 +201,17 @@ Los worktrees se acumulan sin que se note: muchos los crean herramientas automá
 
 **Tareas**
 
-- [ ] Pruebas con repos git temporales: limpio, sucio, sin mergear, squash, roto
-- [ ] Inventario
-- [ ] Comando de limpieza con revalidación
-- [ ] Menú y confirmación
-- [ ] Revisar en repos reales sin quitar nada, y luego uno
+- [x] Pruebas con repos git temporales: limpio, sucio, sin mergear, squash, roto
+- [x] Inventario
+- [x] Comando de limpieza con revalidación
+- [x] Menú y confirmación
+- [x] Revisar en repos reales sin quitar nada, y luego uno
 
 **Hecho cuando**
 
-- [ ] Se ve qué worktrees existen en cada repo y su estado.
-- [ ] Solo se ofrece quitar los que no pierden nada, y se explica por qué los demás no.
-- [ ] Los worktrees rotos se pueden limpiar.
+- [x] Se ve qué worktrees existen en cada repo y su estado.
+- [x] Solo se ofrece quitar los que no pierden nada, y se explica por qué los demás no.
+- [x] Los worktrees rotos se pueden limpiar.
 
 **Seguridad**
 
