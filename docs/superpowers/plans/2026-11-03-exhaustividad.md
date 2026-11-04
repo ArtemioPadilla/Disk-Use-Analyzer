@@ -252,7 +252,7 @@ Coexisten varias instalaciones de Python y Node, y entornos que nadie usa. La ap
 ## E7.7: Desglosar «Sistema y otros» y decir qué no se pudo medir
 
 - [ ] **Issue:** [#42](https://github.com/ArtemioPadilla/Disk-Use-Analyzer/issues/42)
-- **PR:** pendiente
+- **PR:** [#55](https://github.com/ArtemioPadilla/Disk-Use-Analyzer/pull/55)
 
 «Sistema y otros» es lo que sobra, sin explicación. Además hay una parte que un escaneo sin permisos no ve, como la biblioteca de Fotos, Mail y Mensajes.
 
@@ -260,17 +260,17 @@ Coexisten varias instalaciones de Python y Node, y entornos que nadie usa. La ap
 
 **Tareas**
 
-- [ ] Pruebas del reparto y de que la suma cuadra
-- [ ] Medir volúmenes APFS
-- [ ] Medir carpetas protegidas solo con permiso
-- [ ] Submenú
-- [ ] Confirmar qué hay en el hueco en la máquina real
+- [x] Pruebas del reparto y de que la suma cuadra
+- [x] Medir volúmenes APFS
+- [x] Medir carpetas protegidas solo con permiso
+- [x] Submenú
+- [x] Confirmar qué hay en el hueco en la máquina real
 
 **Hecho cuando**
 
-- [ ] El submenú suma lo mismo que la fila, y «sin medir» es una cifra explícita.
-- [ ] Sin Acceso total, dice qué falta y cómo darlo.
-- [ ] Las cifras cuadran con el contenedor APFS con un margen documentado.
+- [x] El submenú suma lo mismo que la fila, y «sin medir» es una cifra explícita.
+- [x] Sin Acceso total, dice qué falta y cómo darlo.
+- [x] Las cifras cuadran con el contenedor APFS con un margen documentado.
 
 **Seguridad**
 
