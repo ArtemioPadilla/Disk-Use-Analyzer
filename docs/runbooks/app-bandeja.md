@@ -296,6 +296,15 @@ pueden ser irrecuperables. Los datos se atan a una app por identificador o nombr
 que algunos pueden quedar sin contar. Sin Acceso total al disco solo cuenta el paquete de la
 app. No hay fecha de último uso: Spotlight no la dio para las apps probadas.
 
+## Limpiezas que piden contraseña
+
+**Cachés de simuladores** (`/Library/Developer/CoreSimulator/Caches`) aparece en «Sistema y
+otros» y corre con el diálogo de administrador de macOS: la app no ve la contraseña. Es una
+lista cerrada: el comando viene del motor y la app lo compara con su propia copia
+(`CON_ADMIN` en `liberar.rs`) antes de pedir nada, y una prueba comprueba que coinciden.
+Es una excepción a `puede_borrarse`, que rechaza `/Library` con razón. Cancelar el diálogo no
+cuenta como fallo, y nada de esto entra en **Liberar lo seguro**.
+
 ## Swap y Analizar desde el menú
 
 **Swap** no borra nada: el archivo de swap lo gestiona macOS. Su submenú ofrece

@@ -14,7 +14,8 @@ from pathlib import Path
 
 from analyzer import cache_types
 from disk_analyzer_core import (
-    CATEGORIAS_RAPIDAS, CONSECUENCIAS, DiskAnalyzerCore, limpiezas_rapidas,
+    CATEGORIAS_RAPIDAS, COMANDO_SIMULADORES_SISTEMA, CONSECUENCIAS, DiskAnalyzerCore,
+    limpiezas_rapidas,
 )
 
 RAIZ = Path(__file__).resolve().parent.parent
@@ -61,7 +62,7 @@ def test_lo_que_vuelve_solo_va_primero_y_la_papelera_al_final():
     recs = [_rec('papelera'), _rec('logs', space=1 * MB), _rec('caches_de_apps', space=9 * MB)]
     salida = limpiezas_rapidas(recs)
     assert [r['id'] for r in salida] == ['caches_de_apps', 'logs', 'papelera']
-    assert set(salida[0]) == {'id', 'titulo', 'descripcion', 'space', 'consecuencia', 'categoria', 'command'}
+    assert set(salida[0]) == {'id', 'titulo', 'descripcion', 'space', 'consecuencia', 'categoria', 'requiere_admin', 'command'}
 
 
 def test_la_cli_mide_un_home_y_devuelve_json_con_comandos_que_pasan_la_verja():
@@ -89,6 +90,8 @@ def _comprobar_cli(home: Path):
 
     assert proc.returncode == 0, proc.stderr
     salida = json.loads(proc.stdout)
+    # What needs a password depends on the machine, not on this fake HOME.
+    salida = [r for r in salida if not r['requiere_admin']]
     assert [r['id'] for r in salida] == ['logs']
     assert str(logs) in salida[0]['command']
     assert salida[0]['space'] >= 12 * MB
@@ -217,3 +220,23 @@ def test_sin_el_comando_de_la_herramienta_no_se_ofrece(tmp_path, monkeypatch):
         assert DiskAnalyzerCore(str(casa))._reglas_de_herramientas() == []
     finally:
         shutil.rmtree(casa)
+
+
+def test_lo_que_pide_contrasena_es_un_comando_fijo_que_se_declara(monkeypatch):
+    recs = [_rec('simuladores_sistema', requiere_admin=True,
+                 command=COMANDO_SIMULADORES_SISTEMA)]
+    regla, = limpiezas_rapidas(recs)
+    assert regla['requiere_admin'] is True
+    assert regla['categoria'] == 'resto'
+    assert regla['command'].startswith('find /Library/Developer/CoreSimulator/Caches -mindepth 1')
+
+
+def test_lo_demas_no_pide_contrasena():
+    regla, = limpiezas_rapidas([_rec('logs')])
+    assert regla['requiere_admin'] is False
+
+
+def test_la_copia_del_comando_en_la_app_no_se_desincroniza():
+    """La app comprueba el comando contra su propia copia antes de pedir contraseña."""
+    rust = (RAIZ / 'desktop' / 'src-tauri' / 'src' / 'liberar.rs').read_text()
+    assert f'"{COMANDO_SIMULADORES_SISTEMA}"' in rust

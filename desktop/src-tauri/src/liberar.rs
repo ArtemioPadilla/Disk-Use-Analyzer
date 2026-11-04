@@ -88,6 +88,9 @@ pub struct Limpieza {
     /// The analyzer's page for it, when it has one.
     #[serde(default)]
     pub destino: String,
+    /// It needs macOS's administrator dialog.
+    #[serde(default)]
+    pub requiere_admin: bool,
 }
 
 impl Limpieza {
@@ -200,9 +203,14 @@ fn accion(id: String, texto: impl Into<String>) -> Fila {
 }
 
 fn limpieza(l: &Limpieza) -> Fila {
+    let aviso = if l.requiere_admin {
+        " (pide contraseña)"
+    } else {
+        ""
+    };
     accion(
         format!("{PREFIJO}{}", l.id),
-        format!("{}…\t{}", l.titulo, tamano(l.space)),
+        format!("{}{aviso}…\t{}", l.titulo, tamano(l.space)),
     )
 }
 
@@ -585,6 +593,7 @@ pub fn poner_filas(app: &AppHandle, submenu: &Submenu<Wry>, filas: &[Fila]) {
 fn seguras(lista: &[Limpieza]) -> impl Iterator<Item = &Limpieza> {
     lista.iter().filter(|l| {
         l.consecuencia == REGENERA
+            && !l.requiere_admin
             && (l.esta_en(Categoria::Caches)
                 || l.esta_en(Categoria::Resto)
                 || l.esta_en(Categoria::Tuyo))
@@ -677,10 +686,14 @@ pub fn confirmacion(elegidas: &[Limpieza]) -> Confirmacion {
     }
     let proyectos = elegidas.iter().any(Limpieza::esta_en_proyectos);
     let worktrees = elegidas.iter().any(Limpieza::esta_en_worktrees);
+    let admin = elegidas.iter().any(|l| l.requiere_admin);
     let descarga = elegidas.iter().any(|l| l.consecuencia == REDESCARGA);
     let docker = elegidas.iter().any(|l| l.esta_en(Categoria::Docker));
     let despues = if permanente {
         "Lo que hay en la papelera se borra para siempre. Esto no se puede deshacer."
+    } else if admin {
+        "macOS te pedirá tu contraseña: la app no la ve. Es lo que Simulator reconstruye la \
+         próxima vez que lo abras, y la primera vez irá más lento."
     } else if worktrees {
         "Solo se quita la copia de trabajo: la rama y sus commits siguen en el repo. Si algo \
          cambió desde la última medición, git se niega y no se quita."
@@ -772,6 +785,30 @@ fn path_con_herramientas() -> String {
     )
 }
 
+/// The only commands allowed to run as administrator, with the rule each belongs
+/// to. A closed list: whatever the engine says, nothing else gets a password.
+const CON_ADMIN: [(&str, &str); 1] = [(
+    "simuladores_sistema",
+    "find /Library/Developer/CoreSimulator/Caches -mindepth 1 -maxdepth 1 -exec rm -rf {} +",
+)];
+
+/// What macOS says when the user cancels its password dialog.
+const CANCELADO_POR_EL_USUARIO: &str = "-128";
+
+/// The AppleScript that runs a command with the administrator dialog. macOS asks
+/// for the password; the app never sees it. `None` for anything not on the list.
+pub fn guion_admin(l: &Limpieza) -> Option<String> {
+    CON_ADMIN
+        .iter()
+        .any(|(id, cmd)| l.id == *id && l.command == *cmd)
+        .then(|| {
+            format!(
+                "do shell script \"{}\" with administrator privileges",
+                l.command
+            )
+        })
+}
+
 /// How far a run has got. `liberado` is measured on the disk, like the final
 /// figure; `objetivo` is the engine's estimate.
 #[derive(Debug, Clone, PartialEq)]
@@ -820,6 +857,13 @@ where
     };
     let mut fallos = Vec::new();
     for (i, l) in elegidas.iter().enumerate() {
+        if l.requiere_admin && guion_admin(l).is_none() {
+            fallos.push((
+                l.titulo.clone(),
+                "no está en la lista permitida".to_string(),
+            ));
+            continue;
+        }
         let avisar = || {
             al_avanzar(&Avance {
                 paso: i + 1,
@@ -842,9 +886,16 @@ where
                     }
                 }
             });
-            let r = Command::new("/bin/sh")
-                .arg("-c")
-                .arg(&l.command)
+            let mut orden = if l.requiere_admin {
+                let mut o = Command::new("/usr/bin/osascript");
+                o.arg("-e").arg(guion_admin(l).unwrap_or_default());
+                o
+            } else {
+                let mut o = Command::new("/bin/sh");
+                o.arg("-c").arg(&l.command);
+                o
+            };
+            let r = orden
                 .env("PATH", path_con_herramientas())
                 .stdin(Stdio::null())
                 .stdout(Stdio::null())
@@ -854,6 +905,10 @@ where
         });
         match r {
             Ok(o) if o.status.success() => {}
+            // Cancelling the password dialog is a decision, not a failure.
+            Ok(o)
+                if l.requiere_admin
+                    && String::from_utf8_lossy(&o.stderr).contains(CANCELADO_POR_EL_USUARIO) => {}
             Ok(o) => fallos.push((
                 l.titulo.clone(),
                 ultima_linea(&o.stderr).unwrap_or_else(|| format!("salió con {}", o.status)),
@@ -1096,6 +1151,7 @@ mod tests {
             dias: None,
             motivo: String::new(),
             destino: String::new(),
+            requiere_admin: false,
         }
     }
 
@@ -1420,6 +1476,46 @@ mod tests {
         assert!(ids(&f).contains(&"ir:/files?exts=.mp4,.mov".to_string()));
         assert!(elegir(&[g], "grupo:Videos").is_empty());
         assert!(!ids(&f).iter().any(|i| i.contains("grupo")));
+    }
+
+    fn con_admin(id: &str, command: &str) -> Limpieza {
+        let mut a = l(id, REGENERA, 4 * GB);
+        a.categoria = "resto".into();
+        a.requiere_admin = true;
+        a.command = command.into();
+        a
+    }
+
+    #[test]
+    fn solo_la_lista_cerrada_llega_al_dialogo_de_administrador() {
+        let (id, cmd) = CON_ADMIN[0];
+        let guion = guion_admin(&con_admin(id, cmd)).unwrap();
+        assert!(guion.ends_with("with administrator privileges"));
+        assert!(guion.contains(cmd));
+        assert_eq!(guion_admin(&con_admin(id, "rm -rf /")), None);
+        assert_eq!(guion_admin(&con_admin("otra", cmd)), None);
+    }
+
+    #[test]
+    fn un_comando_fuera_de_la_lista_no_ejecuta_nada() {
+        let h = ejecutar(
+            &[con_admin("otra", "touch /tmp/no-debe-existir-e711")],
+            |_| {},
+        );
+        assert!(!std::path::Path::new("/tmp/no-debe-existir-e711").exists());
+        assert_eq!(h.fallos.len(), 1, "un guion vacío no finge haber limpiado");
+    }
+
+    #[test]
+    fn lo_que_pide_contrasena_no_entra_en_liberar_lo_seguro_y_lo_avisa() {
+        let (id, cmd) = CON_ADMIN[0];
+        let a = con_admin(id, cmd);
+        assert!(elegir(std::slice::from_ref(&a), TODO).is_empty());
+        let f = filas(Categoria::Resto, std::slice::from_ref(&a), None);
+        assert!(matches!(&f[0], Fila::Accion { texto, .. } if texto.contains("pide contraseña")));
+        assert!(confirmacion(&[a])
+            .mensaje
+            .contains("te pedirá tu contraseña"));
     }
 
     #[test]

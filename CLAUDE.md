@@ -53,6 +53,18 @@ places that delete:
 `/api/files/delete` deliberately still uses `is_protected_path`: it is a
 single file the user picked, and on macOS it moves to the Finder trash.
 
+The gate has a second axis for what projects rebuild, which lives in arbitrary
+folders: `protection.py::es_artefacto`. `node_modules` passes by name alone. The
+others need evidence beside the name: `target` needs a `Cargo.toml`, `.next` a
+`package.json`, `.venv`/`venv` a `pyvenv.cfg` inside. `dist` and `build` stay out on
+purpose, because nothing tells them from the user's data. There is one exception to
+the gate, a fixed command for `/Library/Developer/CoreSimulator/Caches` that runs with
+macOS's administrator dialog; the app checks it against its own closed list
+(`CON_ADMIN` in `liberar.rs`) before asking for a password.
+
+Git worktrees never go through a path deletion: only `git worktree remove` without
+`--force`, after checking again that the commit is merged.
+
 **Two rules that exist because breaking them cost real data:**
 
 1. **No cleanup rule filters by `cache_types` alone — always scope by path too.**
@@ -62,6 +74,11 @@ single file the user picked, and on macOS it moves to the Finder trash.
 2. **`cache_types.classify()` must never see the username.** It matches
    substrings, so a user named `logan` had `~/Downloads` classified as system
    logs — and `make clean-cache` deleted it permanently.
+
+## Public repo: no measured data
+
+Nothing measured on a real machine goes in issues, PRs, commits, comments or docs:
+no sizes, no project, app or file names, not even as "on a real machine, N GB".
 
 ## Build and Test Commands
 
@@ -228,7 +245,8 @@ The project has three interfaces: CLI, GUI, and Web.
   command itself), `progreso.rs` (the status lines during a scan, from the
   engine's `--progreso` file), `menu_nativo.rs` (what Tauri's menu API cannot do:
   bold titles, readable info rows, aligned figures and category dots, written on
-  the `NSMenu`; call `aplicar` after changing any menu text)
+  the `NSMenu`; call `aplicar` after changing any menu text), `desglose.rs` (what
+  "Sistema y otros" is made of; read-only)
 - **Build:** `cd desktop && npm run tauri build -- --bundles app`
 - **Tests:** `cargo test --manifest-path desktop/src-tauri/Cargo.toml` (also run by `make test`)
 - **Bundled engine:** the `.app` ships its own trimmed CPython
