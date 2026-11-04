@@ -223,7 +223,7 @@ Los worktrees se acumulan sin que se note: muchos los crean herramientas automá
 ## E7.6: Inventario de ambientes: conda, Python, Node y venvs
 
 - [ ] **Issue:** [#41](https://github.com/ArtemioPadilla/Disk-Use-Analyzer/issues/41)
-- **PR:** pendiente
+- **PR:** [#54](https://github.com/ArtemioPadilla/Disk-Use-Analyzer/pull/54)
 - **Depende de:** E7.3 (#38)
 
 Coexisten varias instalaciones de Python y Node, y entornos que nadie usa. La app no los muestra. El CLI detecta entornos conda obsoletos, pero solo en algunas rutas y no llega al menú.
@@ -232,17 +232,17 @@ Coexisten varias instalaciones de Python y Node, y entornos que nadie usa. La ap
 
 **Tareas**
 
-- [ ] Pruebas de detección con árboles falsos
-- [ ] Inventario
-- [ ] Limpiezas con comando propio
-- [ ] Menú
-- [ ] Probar con las instalaciones reales sin borrar
+- [x] Pruebas de detección con árboles falsos
+- [x] Inventario
+- [x] Limpiezas con comando propio
+- [x] Menú
+- [x] Probar con las instalaciones reales sin borrar
 
 **Hecho cuando**
 
-- [ ] Una vista dice qué ambientes hay, de dónde vienen y cuánto ocupan.
-- [ ] Se ofrece limpiar solo lo regenerable, como `conda clean`.
-- [ ] Quitar un entorno pide confirmación y lo nombra.
+- [x] Una vista dice qué ambientes hay, de dónde vienen y cuánto ocupan.
+- [x] Se ofrece limpiar solo lo regenerable, como `conda clean`.
+- [x] Quitar un entorno pide confirmación y lo nombra.
 
 **Seguridad**
 
