@@ -80,7 +80,7 @@ CI usa `rust-toolchain@stable` y `requirements-web.txt` sin tope. Rust 1.99 y St
 ## E7.1: El motor promete borrar de npm lo que su comando no borra
 
 - [ ] **Issue:** [#36](https://github.com/ArtemioPadilla/Disk-Use-Analyzer/issues/36)
-- **PR:** pendiente
+- **PR:** [#49](https://github.com/ArtemioPadilla/Disk-Use-Analyzer/pull/49)
 
 La regla `npm` mide todo `~/.npm`, pero `npm cache clean --force` solo vacía `_cacache`. `~/.npm/_npx` no se toca: el menú vuelve a ofrecerlo para siempre, y parece que la limpieza falló.
 
@@ -88,16 +88,16 @@ La regla `npm` mide todo `~/.npm`, pero `npm cache clean --force` solo vacía `_
 
 **Tareas**
 
-- [ ] Prueba que falla: con `_cacache` y `_npx` falsos, `npm` solo mide `_cacache`
-- [ ] Separar la medición de `npm` y crear la regla `npx`
-- [ ] Ampliar la verja a `~/.npm/_npx` con su prueba
-- [ ] Probar en la máquina real: limpiar y confirmar que no se vuelve a ofrecer
+- [x] Prueba que falla: con `_cacache` y `_npx` falsos, `npm` solo mide `_cacache`
+- [x] Separar la medición de `npm` y crear la regla `npx`
+- [x] Ampliar la verja a `~/.npm/_npx` con su prueba
+- [x] Probar en la máquina real: limpiar y confirmar que no se vuelve a ofrecer
 
 **Hecho cuando**
 
-- [ ] Tras limpiar `npm`, la regla deja de ofrecer espacio que no puede liberar.
-- [ ] `_npx` aparece aparte, con su tamaño, y se puede limpiar.
-- [ ] Lo liberado medido coincide con lo estimado salvo ruido de APFS.
+- [x] Tras limpiar `npm`, la regla deja de ofrecer espacio que no puede liberar.
+- [x] `_npx` aparece aparte, con su tamaño, y se puede limpiar.
+- [x] Lo liberado medido coincide con lo estimado salvo ruido de APFS.
 
 **Seguridad**
 
