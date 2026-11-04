@@ -56,7 +56,7 @@ más baratos; E7.3 a E7.5 son los que más espacio recuperan.
 ## E7.12: CI con versiones fijas
 
 - [ ] **Issue:** [#35](https://github.com/ArtemioPadilla/Disk-Use-Analyzer/issues/35)
-- **PR:** pendiente
+- **PR:** [#48](https://github.com/ArtemioPadilla/Disk-Use-Analyzer/pull/48)
 
 CI usa `rust-toolchain@stable` y `requirements-web.txt` sin tope. Rust 1.99 y Starlette 1.x ya pusieron `main` en rojo sin cambios de código, y local y CI prueban versiones distintas.
 
@@ -64,14 +64,14 @@ CI usa `rust-toolchain@stable` y `requirements-web.txt` sin tope. Rust 1.99 y St
 
 **Tareas**
 
-- [ ] Fijar Rust y actualizar el toolchain local
-- [ ] Fijar Python, resolviendo avisos de obsolescencia
-- [ ] Documentar cómo subir versiones
+- [x] Fijar Rust y actualizar el toolchain local
+- [x] Fijar Python, resolviendo avisos de obsolescencia
+- [x] Documentar cómo subir versiones
 
 **Hecho cuando**
 
-- [ ] Local y CI usan las mismas versiones.
-- [ ] Una versión nueva de una dependencia no rompe `main` por sí sola.
+- [x] Local y CI usan las mismas versiones.
+- [x] Una versión nueva de una dependencia no rompe `main` por sí sola.
 
 **Seguridad**
 
