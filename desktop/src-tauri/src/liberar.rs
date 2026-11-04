@@ -33,6 +33,9 @@ pub const PREFIJO_ANALIZADOR: &str = "ir:";
 pub const PREFIJO_EXTERNO: &str = "externo:";
 /// Menu id suffix of "everything safe", from any category.
 pub const TODO: &str = "todo";
+/// Menu id suffix of "the projects nobody has touched for a while".
+const PROYECTOS_OLVIDADOS: &str = "proyectos_olvidados";
+const CATEGORIA_PROYECTOS: &str = "proyectos";
 /// Menu id suffix of "all the caches".
 const TODAS_CACHES: &str = "caches";
 
@@ -60,6 +63,9 @@ pub struct Limpieza {
     pub consecuencia: String,
     pub categoria: String,
     pub command: String,
+    /// Days since the project was touched, for what comes from a project.
+    #[serde(default)]
+    pub dias: Option<u64>,
 }
 
 impl Limpieza {
@@ -69,6 +75,10 @@ impl Limpieza {
 
     fn esta_en(&self, c: Categoria) -> bool {
         self.categoria == clave(c)
+    }
+
+    fn esta_en_proyectos(&self) -> bool {
+        self.categoria == CATEGORIA_PROYECTOS
     }
 }
 
@@ -87,6 +97,23 @@ pub fn leer(json: &str) -> Result<Vec<Limpieza>, String> {
                 && !(l.categoria == "docker" && l.command.contains("volume"))
         })
         .collect())
+}
+
+/// Asks the engine for what a project can rebuild. It walks the usual project
+/// folders and measures each artifact, so it takes a while: call it off the main
+/// thread. Rows without a command stay in the list, to say they exist.
+pub fn medir_proyectos(motor: &Motor) -> Result<Vec<Limpieza>, String> {
+    let salida = Command::new(motor.python())
+        .current_dir(motor.cwd())
+        .arg(motor.script())
+        .arg("--proyectos")
+        .stdin(Stdio::null())
+        .output()
+        .map_err(|e| format!("no se pudo lanzar el motor: {e}"))?;
+    if !salida.status.success() {
+        return Err(ultima_linea(&salida.stderr).unwrap_or_else(|| "el motor falló".into()));
+    }
+    serde_json::from_slice(&salida.stdout).map_err(|e| format!("respuesta ilegible: {e}"))
 }
 
 /// Asks the engine what can be freed. Takes about ten seconds: it measures
@@ -254,6 +281,76 @@ pub fn filas(c: Categoria, lista: &[Limpieza], aviso: Option<&str>) -> Vec<Fila>
     out
 }
 
+/// Past this, a project counts as forgotten: long enough that reinstalling is
+/// no bother, and short enough to catch what is really stale.
+pub const DIAS_OLVIDADO: u64 = 30;
+/// How many projects the submenu lists; the rest are one click away.
+const PROYECTOS_EN_MENU: usize = 12;
+
+fn olvidados(lista: &[Limpieza]) -> impl Iterator<Item = &Limpieza> {
+    lista.iter().filter(|l| {
+        l.esta_en_proyectos() && !l.command.is_empty() && l.dias.is_some_and(|d| d >= DIAS_OLVIDADO)
+    })
+}
+
+/// The top-level row for projects.
+pub fn fila_proyectos(lista: &[Limpieza]) -> String {
+    let total: u64 = lista
+        .iter()
+        .filter(|l| l.esta_en_proyectos())
+        .map(|l| l.space)
+        .sum();
+    format!("Proyectos\t{}", tamano(total))
+}
+
+/// The projects submenu: what has been forgotten for a while, the largest
+/// ones, and how many are not offered and why.
+pub fn filas_proyectos(lista: &[Limpieza], aviso: Option<&str>) -> Vec<Fila> {
+    let mut out = Vec::new();
+    if let Some(a) = aviso {
+        out.push(Fila::Texto(a.to_string()));
+    }
+    let total_olvidado: u64 = olvidados(lista).map(|l| l.space).sum();
+    if aviso.is_none() && total_olvidado > 0 {
+        out.push(accion(
+            format!("{PREFIJO}{PROYECTOS_OLVIDADOS}"),
+            format!(
+                "Limpiar sin tocar hace {DIAS_OLVIDADO} días…\t{}",
+                tamano(total_olvidado)
+            ),
+        ));
+        out.push(Fila::Separador);
+    }
+    let mut ofrecibles: Vec<&Limpieza> = lista
+        .iter()
+        .filter(|l| l.esta_en_proyectos() && !l.command.is_empty())
+        .collect();
+    ofrecibles.sort_by_key(|l| std::cmp::Reverse(l.space));
+    let total = ofrecibles.len();
+    for l in ofrecibles.into_iter().take(PROYECTOS_EN_MENU) {
+        let hace = l.dias.map(|d| format!(" ({d} d)")).unwrap_or_default();
+        out.push(accion(
+            format!("{PREFIJO}{}", l.id),
+            format!("{}{hace}…\t{}", l.titulo, tamano(l.space)),
+        ));
+    }
+    if aviso.is_none() && total == 0 {
+        out.push(Fila::Texto("Nada que limpiar en tus proyectos".into()));
+    }
+    let sin_ofrecer = lista
+        .iter()
+        .filter(|l| l.esta_en_proyectos() && l.command.is_empty())
+        .count();
+    if sin_ofrecer > 0 {
+        out.push(Fila::Texto(format!(
+            "{sin_ofrecer} sin ofrecer: podrían no reconstruirse"
+        )));
+    }
+    out.push(Fila::Separador);
+    out.push(analizador("/projects", "Ver todos en el analizador"));
+    out
+}
+
 /// The swap submenu. Nothing can delete swap: it only shrinks when the app
 /// holding it quits, or with a restart, and the last lines say so.
 pub fn filas_swap(cerrables: &[(String, u64)]) -> Vec<Fila> {
@@ -297,9 +394,9 @@ pub fn poner_filas(app: &AppHandle, submenu: &Submenu<Wry>, filas: &[Fila]) {
 /// "Liberar lo seguro" and what it adds up to. It runs what comes back by
 /// itself, without a download behind it: never the Trash, never Docker.
 fn seguras(lista: &[Limpieza]) -> impl Iterator<Item = &Limpieza> {
-    lista
-        .iter()
-        .filter(|l| l.consecuencia == REGENERA && !l.esta_en(Categoria::Docker))
+    lista.iter().filter(|l| {
+        l.consecuencia == REGENERA && !l.esta_en(Categoria::Docker) && !l.esta_en_proyectos()
+    })
 }
 
 /// The text of the top-level "Liberar lo seguro" row, and whether it can be
@@ -340,12 +437,17 @@ pub fn externo_de(id: &str, home: &str) -> Option<String> {
 pub fn elegir(lista: &[Limpieza], id: &str) -> Vec<Limpieza> {
     match id {
         TODO => seguras(lista).cloned().collect(),
+        PROYECTOS_OLVIDADOS => olvidados(lista).cloned().collect(),
         TODAS_CACHES => lista
             .iter()
             .filter(|l| l.esta_en(Categoria::Caches) && l.consecuencia == REGENERA)
             .cloned()
             .collect(),
-        _ => lista.iter().filter(|l| l.id == id).cloned().collect(),
+        _ => lista
+            .iter()
+            .filter(|l| l.id == id && !l.command.is_empty())
+            .cloned()
+            .collect(),
     }
 }
 
@@ -358,17 +460,31 @@ pub struct Confirmacion {
     pub permanente: bool,
 }
 
+/// A dialog taller than the screen hides its own buttons.
+const LINEAS_EN_CONFIRMACION: usize = 10;
+
 pub fn confirmacion(elegidas: &[Limpieza]) -> Confirmacion {
     let total: u64 = elegidas.iter().map(|l| l.space).sum();
     let permanente = elegidas.iter().any(Limpieza::es_permanente);
-    let lineas: Vec<String> = elegidas
+    let mut lineas: Vec<String> = elegidas
         .iter()
+        .take(LINEAS_EN_CONFIRMACION)
         .map(|l| format!("• {} — {}", l.titulo, tamano(l.space)))
         .collect();
+    if elegidas.len() > LINEAS_EN_CONFIRMACION {
+        lineas.push(format!(
+            "• y {} más",
+            elegidas.len() - LINEAS_EN_CONFIRMACION
+        ));
+    }
+    let proyectos = elegidas.iter().any(Limpieza::esta_en_proyectos);
     let descarga = elegidas.iter().any(|l| l.consecuencia == REDESCARGA);
     let docker = elegidas.iter().any(|l| l.esta_en(Categoria::Docker));
     let despues = if permanente {
         "Lo que hay en la papelera se borra para siempre. Esto no se puede deshacer."
+    } else if proyectos {
+        "Tu código no se toca. Cuando vuelvas a esos proyectos habrá que reinstalar las \
+         dependencias o volver a compilar."
     } else if descarga && !docker {
         "Habrá que volver a descargarlo cuando lo necesites, y según lo que sea puede tardar \
          y gastar datos."
@@ -556,8 +672,11 @@ pub struct Liberador {
     app: AppHandle,
     categorias: Vec<(Categoria, Submenu<Wry>)>,
     fila_seguro: MenuItem<Wry>,
+    proyectos: Submenu<Wry>,
     motor: Option<Motor>,
     lista: Mutex<Vec<Limpieza>>,
+    /// What comes from the slower measures: projects and the like.
+    desarrollo: Mutex<Vec<Limpieza>>,
     ocupado: AtomicBool,
 }
 
@@ -566,14 +685,17 @@ impl Liberador {
         app: AppHandle,
         categorias: Vec<(Categoria, Submenu<Wry>)>,
         fila_seguro: MenuItem<Wry>,
+        proyectos: Submenu<Wry>,
         motor: Option<Motor>,
     ) -> Arc<Self> {
         let l = Arc::new(Liberador {
             app,
             categorias,
             fila_seguro,
+            proyectos,
             motor,
             lista: Mutex::new(Vec::new()),
+            desarrollo: Mutex::new(Vec::new()),
             ocupado: AtomicBool::new(false),
         });
         let texto = if l.motor.is_some() {
@@ -596,7 +718,14 @@ impl Liberador {
         };
         let _ = self.fila_seguro.set_text(texto);
         let _ = self.fila_seguro.set_enabled(activa);
+        self.poner_desarrollo(aviso);
         menu_nativo::aplicar(&self.app);
+    }
+
+    fn poner_desarrollo(&self, aviso: Option<&str>) {
+        let lista = self.desarrollo.lock().unwrap().clone();
+        let _ = self.proyectos.set_text(fila_proyectos(&lista));
+        poner_filas(&self.app, &self.proyectos, &filas_proyectos(&lista, aviso));
     }
 
     /// Re-measures and rebuilds the menu. Blocking: call it off the main
@@ -619,6 +748,17 @@ impl Liberador {
                 self.poner(&[], Some("No se pudo medir"));
             }
         }
+        // Last, because it is the slowest: the rest of the menu is ready.
+        let medidos = medir_proyectos(motor);
+        if self.ocupado.load(Ordering::SeqCst) {
+            return;
+        }
+        match medidos {
+            Ok(lista) => *self.desarrollo.lock().unwrap() = lista,
+            Err(e) => eprintln!("No se pudo medir los proyectos: {e}"),
+        }
+        self.poner_desarrollo(None);
+        menu_nativo::aplicar(&self.app);
     }
 
     /// Handles a click on `id` (without the prefix): confirm, run, report.
@@ -629,7 +769,9 @@ impl Liberador {
         E: FnOnce() + Send + 'static,
         T: FnOnce(&Hecho) + Send + 'static,
     {
-        let elegidas = elegir(&self.lista.lock().unwrap(), id);
+        let mut todas = self.lista.lock().unwrap().clone();
+        todas.extend(self.desarrollo.lock().unwrap().iter().cloned());
+        let elegidas = elegir(&todas, id);
         if elegidas.is_empty() || self.ocupado.load(Ordering::SeqCst) {
             return;
         }
@@ -689,6 +831,7 @@ mod tests {
                 "caches".into()
             },
             command: format!("echo {id}"),
+            dias: None,
         }
     }
 
@@ -827,6 +970,75 @@ mod tests {
         assert_eq!(c.boton, "Borrar");
         assert!(c.mensaje.contains("volver a descargarlo"));
         assert!(!c.mensaje.contains("contenedores"));
+    }
+
+    fn proyecto(id: &str, dias: Option<u64>, space: u64) -> Limpieza {
+        let mut p = l(id, REGENERA, space);
+        p.categoria = CATEGORIA_PROYECTOS.into();
+        p.dias = dias;
+        p
+    }
+
+    #[test]
+    fn limpiar_olvidados_no_toca_lo_reciente_ni_lo_que_no_se_ofrece() {
+        let mut sin_comando = proyecto("c", Some(90), GB);
+        sin_comando.command = String::new();
+        let lista = vec![
+            proyecto("viejo", Some(40), GB),
+            proyecto("nuevo", Some(2), GB),
+            proyecto("sin_fecha", None, GB),
+            sin_comando,
+        ];
+        let ids_elegidos: Vec<String> = elegir(&lista, PROYECTOS_OLVIDADOS)
+            .into_iter()
+            .map(|x| x.id)
+            .collect();
+        assert_eq!(ids_elegidos, vec!["viejo"]);
+    }
+
+    #[test]
+    fn un_proyecto_sin_comando_no_se_puede_elegir_ni_por_id() {
+        let mut p = proyecto("c", Some(90), GB);
+        p.command = String::new();
+        assert!(elegir(&[p], "c").is_empty());
+    }
+
+    #[test]
+    fn los_proyectos_no_entran_en_liberar_lo_seguro() {
+        let lista = vec![proyecto("p", Some(90), 4 * GB), l("logs", REGENERA, GB)];
+        assert_eq!(elegir(&lista, TODO).len(), 1);
+        assert_eq!(fila_seguro(&lista).0, "Liberar lo seguro…\t1,0 GB");
+    }
+
+    #[test]
+    fn el_submenu_de_proyectos_lista_y_dice_lo_que_no_ofrece() {
+        let mut sin_comando = proyecto("c", Some(90), GB);
+        sin_comando.command = String::new();
+        let lista = vec![
+            proyecto("a", Some(40), 2 * GB),
+            proyecto("b", Some(1), 3 * GB),
+            sin_comando,
+        ];
+        let f = filas_proyectos(&lista, None);
+        let i = ids(&f);
+        assert_eq!(i[0], "liberar:proyectos_olvidados");
+        assert_eq!(i[1], "liberar:b", "el mayor primero");
+        assert_eq!(i.last().unwrap(), "ir:/projects");
+        assert!(f.contains(&Fila::Texto(
+            "1 sin ofrecer: podrían no reconstruirse".into()
+        )));
+        assert_eq!(fila_proyectos(&lista), "Proyectos\t6,0 GB");
+    }
+
+    #[test]
+    fn la_confirmacion_no_crece_sin_limite_y_dice_que_el_codigo_no_se_toca() {
+        let lista: Vec<Limpieza> = (0..15)
+            .map(|i| proyecto(&format!("p{i}"), Some(90), GB))
+            .collect();
+        let c = confirmacion(&lista);
+        assert!(c.mensaje.contains("y 5 más"));
+        assert!(c.mensaje.contains("Tu código no se toca"));
+        assert_eq!(c.boton, "Liberar");
     }
 
     #[test]

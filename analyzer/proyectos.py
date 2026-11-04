@@ -152,8 +152,13 @@ def inventario(raices: Optional[List[str]] = None) -> List[Dict]:
         reproducible = _reproducible(ruta)
         actividad = _ultima_actividad(ruta, arbol)
         comando = comandos.borrar_rutas([str(ruta)]) if ignorado and reproducible else ''
+        nombre = (arbol or ruta.parent).name
         salida.append({
-            'proyecto': (arbol or ruta.parent).name,
+            'id': f'proyecto:{ruta}',
+            'titulo': f'{nombre} · {ruta.name}',
+            'descripcion': str(ruta),
+            'categoria': 'proyectos',
+            'proyecto': nombre,
             'ruta_proyecto': str(arbol or ruta.parent),
             'artefacto': ruta.name,
             'ruta': str(ruta),

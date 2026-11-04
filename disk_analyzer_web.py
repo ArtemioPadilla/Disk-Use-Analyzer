@@ -777,6 +777,13 @@ async def get_digest():
         "agents_log": agents_log[-10:],
     }
 
+@app.get("/api/proyectos")
+async def get_proyectos():
+    """What development projects can rebuild. Read-only: it deletes nothing."""
+    from analyzer.proyectos import inventario
+    return {"proyectos": await asyncio.to_thread(inventario)}
+
+
 @app.get("/api/analysis/latest")
 async def get_latest_results():
     """Get the most recent completed analysis results."""
