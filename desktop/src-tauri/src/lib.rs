@@ -319,6 +319,16 @@ struct Pintor {
     remedir: mpsc::SyncSender<()>,
 }
 
+/// The text beside the ring: the usual one, plus how far a cleanup has got. The
+/// usual one stays, since the free space is what a cleanup is there to change.
+fn titulo_con_avance(habitual: &str, fraccion: Option<f64>) -> String {
+    match fraccion {
+        Some(f) if habitual.is_empty() => format!("{} %", (f * 100.0).floor() as u32),
+        Some(f) => format!("{habitual} · {} %", (f * 100.0).floor() as u32),
+        None => habitual.to_string(),
+    }
+}
+
 /// Waits for the next pass over the categories. True when it is the periodic one,
 /// which also lists what can be freed; a cleanup that asks for a pass has its own
 /// way of doing that, and listing it twice would run the slow measures for nothing.
@@ -342,7 +352,7 @@ impl Pintor {
             ultimo.0 = trozos;
         }
         if ultimo.1 != titulo {
-            // The percentage stays while a cleanup runs; `llenar` puts this back.
+            // While a cleanup runs `llenar` writes the title, with this in it.
             if self.llenado.lock().unwrap().is_none() {
                 let _ = self.tray.set_title(Some(&titulo));
             }
@@ -390,15 +400,16 @@ impl Pintor {
         });
     }
 
-    /// Fills the ring and says the percentage beside it, or with `None` goes back
-    /// to the sweep and the usual text. Drawn by the thread `animar` started.
+    /// Fills the inner ring and adds the percentage to the text beside it, or with
+    /// `None` goes back to the sweep and the usual text. Drawn by the thread
+    /// `animar` started. Called every second during a run, so the text also picks up
+    /// the free space that `pintar` keeps up to date.
     fn llenar(&self, fraccion: Option<f64>) {
         *self.llenado.lock().unwrap() = fraccion;
-        let titulo = match fraccion {
-            Some(f) => format!("{} %", (f * 100.0).floor() as u32),
-            None => self.ultimo.lock().unwrap().1.clone(),
-        };
-        let _ = self.tray.set_title(Some(&titulo));
+        let habitual = self.ultimo.lock().unwrap().1.clone();
+        let _ = self
+            .tray
+            .set_title(Some(&titulo_con_avance(&habitual, fraccion)));
     }
 
     fn parar(&self) {
@@ -1111,6 +1122,13 @@ mod tests {
 #[cfg(test)]
 mod tests_repaso {
     use super::*;
+
+    #[test]
+    fn durante_una_limpieza_el_titulo_conserva_lo_habitual_y_suma_el_porcentaje() {
+        assert_eq!(titulo_con_avance("35 GB", Some(0.426)), "35 GB · 42 %");
+        assert_eq!(titulo_con_avance("", Some(0.42)), "42 %");
+        assert_eq!(titulo_con_avance("35 GB", None), "35 GB");
+    }
 
     #[test]
     fn un_repaso_pedido_no_espera_al_periodico_ni_vuelve_a_listar() {

@@ -186,33 +186,39 @@ pub fn png_barrido(trozos: &[Trozo], n: u32) -> Option<Vec<u8>> {
     lienzo.encode_png().ok()
 }
 
-/// What fills the ring during a cleanup. Not one of the palette's colours, and
-/// visible on a light menu bar as well as a dark one, unlike white.
+/// The progress ring of a cleanup. Not one of the palette's colours, and visible
+/// on a light menu bar as well as a dark one, unlike white.
 const VERDE_LLENADO: Rgb = [52, 199, 89];
-/// How much of the disk's colours stays under the fill: enough to tell it is
-/// the same ring, not enough to read as part of the progress.
-const ALFA_FONDO_LLENADO: u32 = 70;
+/// The progress ring sits inside the disk's, with a gap between them.
+const RADIO_INTERIOR: f32 = 6.5;
+const GROSOR_INTERIOR: f32 = 4.0;
 /// The tip of the fill that pulses, as a share of the circle.
 const PUNTA_LLENADO: f32 = 0.05;
 
-/// The ring filling clockwise from twelve o'clock, `fraccion` of the way, for
-/// frame `n` of `FOTOGRAMAS`. The tip pulses so that a step that frees nothing
-/// for a while still looks alive rather than hung.
+/// The disk's ring as usual, with a smaller ring inside it filling clockwise from
+/// twelve o'clock, `fraccion` of the way, for frame `n` of `FOTOGRAMAS`. Inside, so
+/// that the state of the disk stays readable during the cleanup. The tip pulses so
+/// that a step that frees nothing for a while still looks alive rather than hung.
 pub fn png_llenado(trozos: &[Trozo], fraccion: f64, n: u32) -> Option<Vec<u8>> {
-    let tenues: Vec<Trozo> = trozos
-        .iter()
-        .map(|t| Trozo {
-            alfa: (t.alfa as u32 * ALFA_FONDO_LLENADO / 255) as u8,
-            ..*t
-        })
-        .collect();
-    let mut lienzo = lienzo(&tenues)?;
-    let (c, r, trazo) = geometria();
+    let mut lienzo = lienzo(trozos)?;
+    let c = TAM as f32 / 2.0;
+    let trazo = Stroke {
+        width: GROSOR_INTERIOR,
+        line_cap: LineCap::Butt,
+        ..Stroke::default()
+    };
     let vuelta = std::f32::consts::TAU;
     let f = fraccion.clamp(0.0, 1.0) as f32;
     let mut trazar = |desde: f32, largo: f32, color: Rgb, alfa: u8| {
         let mut pb = PathBuilder::new();
-        arco(&mut pb, c, c, r, desde * vuelta, largo * vuelta);
+        arco(
+            &mut pb,
+            c,
+            c,
+            RADIO_INTERIOR,
+            desde * vuelta,
+            largo * vuelta,
+        );
         if let Some(camino) = pb.finish() {
             let mut pintura = Paint::default();
             pintura.set_color_rgba8(color[0], color[1], color[2], alfa);
@@ -220,6 +226,7 @@ pub fn png_llenado(trozos: &[Trozo], fraccion: f64, n: u32) -> Option<Vec<u8>> {
             lienzo.stroke_path(&camino, &pintura, &trazo, Transform::identity(), None);
         }
     };
+    trazar(0.0, 1.0, [128, 128, 128], 90);
     if f > 0.0 {
         trazar(0.0, f, VERDE_LLENADO, 255);
     }
@@ -354,25 +361,29 @@ mod tests {
     }
 
     #[test]
-    fn el_llenado_cubre_su_parte_en_orden_horario_y_deja_tenue_el_resto() {
+    fn el_llenado_va_por_dentro_en_orden_horario_y_no_toca_el_anillo_del_disco() {
         // A little over half: three o'clock is well inside the fill, and the
         // pulsing tip is past six o'clock, away from every point checked here.
         let png = png_llenado(&todo_rojo(), 0.6, 0).unwrap();
-        assert!(es_verde(pixel(&png, 31, 18)), "{:?}", pixel(&png, 31, 18));
-        let nueve = pixel(&png, 4, 18);
+        assert!(es_verde(pixel(&png, 24, 18)), "{:?}", pixel(&png, 24, 18));
+        let nueve = pixel(&png, 11, 18);
         assert!(!es_verde(nueve), "se llenó de más: {nueve:?}");
-        assert!(nueve[3] < 110, "el resto no quedó tenue: {nueve:?}");
+        // The disk's ring is exactly as without a cleanup, all the way round.
+        let normal = super::png(&todo_rojo()).unwrap();
+        for (x, y) in [(31, 18), (4, 18), (18, 31), (18, 4)] {
+            assert_eq!(pixel(&png, x, y), pixel(&normal, x, y), "({x}, {y})");
+        }
     }
 
     #[test]
     fn sin_avance_no_hay_verde_y_completo_no_queda_hueco() {
         let cero = png_llenado(&todo_rojo(), 0.0, 0).unwrap();
-        assert!(!es_verde(pixel(&cero, 31, 18)));
-        assert!(!es_verde(pixel(&cero, 4, 18)));
+        assert!(!es_verde(pixel(&cero, 24, 18)));
+        assert!(!es_verde(pixel(&cero, 11, 18)));
         let lleno = png_llenado(&todo_rojo(), 1.0, 0).unwrap();
-        assert!(es_verde(pixel(&lleno, 31, 18)));
-        assert!(es_verde(pixel(&lleno, 18, 31)));
-        assert!(es_verde(pixel(&lleno, 4, 18)));
+        assert!(es_verde(pixel(&lleno, 24, 18)));
+        assert!(es_verde(pixel(&lleno, 18, 24)));
+        assert!(es_verde(pixel(&lleno, 11, 18)));
     }
 
     #[test]
