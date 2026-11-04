@@ -88,7 +88,7 @@ cp -R static "$DESTINO/static"
 # quita el recorte de arriba); las ruedas valen igual, porque son de la misma
 # versión de Python y la misma arquitectura.
 echo "▸ Instalando las dependencias del servidor (~25 MB)…"
-venv-web/bin/pip install -q --target "$DESTINO" -r requirements-web.txt
+venv-web/bin/pip install -q --target "$DESTINO" -r requirements-web.lock
 
 find "$DESTINO" -name "__pycache__" -type d -prune -exec rm -rf {} + 2>/dev/null || true
 

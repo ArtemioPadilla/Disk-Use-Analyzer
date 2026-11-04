@@ -19,8 +19,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements-web.txt
-          pip install pytest httpx
+          pip install -r requirements-web.lock -r requirements-dev.lock
 
       - name: Run tests
         run: python -m pytest tests/ -v
@@ -58,9 +57,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy
+      # Installs the version in rust-toolchain.toml.
+      - name: Rust
+        run: rustup show active-toolchain || rustup toolchain install
 
       - uses: Swatinem/rust-cache@v2
         with:

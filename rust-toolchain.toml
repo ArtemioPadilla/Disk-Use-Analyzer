@@ -1,0 +1,5 @@
+# The version CI tests and the app is built with. To upgrade, change it in a PR
+# of its own: a new stable has already turned `main` red with no code change.
+[toolchain]
+channel = "1.97.1"
+components = ["clippy", "rustfmt"]
