@@ -16,8 +16,8 @@ use objc2::AnyThread;
 use objc2_app_kit::{
     NSAttributedStringAttachmentConveniences, NSColor, NSFont, NSFontAttributeName,
     NSFontWeightRegular, NSForegroundColorAttributeName, NSMenu, NSMenuItem,
-    NSMutableParagraphStyle, NSParagraphStyleAttributeName, NSTextAlignment, NSTextAttachment,
-    NSTextField, NSTextTab, NSView,
+    NSMutableParagraphStyle, NSParagraphStyleAttributeName, NSProgressIndicator,
+    NSProgressIndicatorStyle, NSTextAlignment, NSTextAttachment, NSTextField, NSTextTab, NSView,
 };
 use objc2_foundation::{
     MainThreadMarker, NSArray, NSAttributedString, NSAttributedStringKey, NSDictionary,
@@ -68,6 +68,10 @@ const TAM_FUENTE: f64 = 13.0;
 const MARGEN_FILA: f64 = 14.0;
 const ALTO_FILA: f64 = 24.0;
 const LADO_PUNTO: f64 = 16.0;
+/// The progress bar under a row's label, and the narrowest it is drawn, so that
+/// it does not change width with the text above it.
+const ALTO_BARRA: f64 = 10.0;
+const ANCHO_MINIMO_BARRA: f64 = 280.0;
 /// What a text attachment reads as in a plain title.
 const ADJUNTO: char = '\u{fffc}';
 
@@ -177,6 +181,44 @@ fn poner_etiqueta(item: &NSMenuItem, texto: &NSAttributedString, mtm: MainThread
     item.setView(Some(&fila));
 }
 
+/// A label with a determinate bar under it. Each call builds it again, like a
+/// label whose text changed; `ya_dice` keeps it through a plain `aplicar`.
+fn poner_barra(
+    item: &NSMenuItem,
+    texto: &NSAttributedString,
+    fraccion: f64,
+    mtm: MainThreadMarker,
+) {
+    let etiqueta = NSTextField::labelWithAttributedString(texto, mtm);
+    etiqueta.sizeToFit();
+    let tam = etiqueta.frame().size;
+    etiqueta.setFrameOrigin(NSPoint::new(
+        MARGEN_FILA,
+        ALTO_BARRA + (ALTO_FILA - tam.height) / 2.0,
+    ));
+    let ancho = tam.width.max(ANCHO_MINIMO_BARRA);
+    let barra = NSProgressIndicator::initWithFrame(
+        mtm.alloc(),
+        NSRect::new(
+            NSPoint::new(MARGEN_FILA, 2.0),
+            NSSize::new(ancho, ALTO_BARRA),
+        ),
+    );
+    barra.setStyle(NSProgressIndicatorStyle::Bar);
+    barra.setIndeterminate(false);
+    barra.setMinValue(0.0);
+    barra.setMaxValue(1.0);
+    barra.setDoubleValue(fraccion.clamp(0.0, 1.0));
+    let marco = NSRect::new(
+        NSPoint::new(0.0, 0.0),
+        NSSize::new(ancho + 2.0 * MARGEN_FILA, ALTO_FILA + ALTO_BARRA),
+    );
+    let fila = NSView::initWithFrame(mtm.alloc(), marco);
+    fila.addSubview(&etiqueta);
+    fila.addSubview(&barra);
+    item.setView(Some(&fila));
+}
+
 fn recorrer(menu: &NSMenu, raiz: bool, mtm: MainThreadMarker) {
     let titulos: Vec<String> = menu
         .itemArray()
@@ -227,6 +269,33 @@ pub fn aplicar(app: &AppHandle<Wry>) {
         };
         if let Some(menu) = item.menu(mtm) {
             recorrer(&menu, true, mtm);
+        }
+    });
+}
+
+/// `aplicar`, plus a progress bar under the top-level row that says `titulo`.
+/// The bar goes away by itself when the row's text next changes.
+pub fn aplicar_con_barra(app: &AppHandle<Wry>, titulo: &str, fraccion: f64) {
+    let Some(bandeja) = app.tray_by_id(ID_BANDEJA) else {
+        return;
+    };
+    let titulo = titulo.to_string();
+    let _ = bandeja.with_inner_tray_icon(move |t| {
+        let (Some(mtm), Some(item)) = (MainThreadMarker::new(), t.ns_status_item()) else {
+            return;
+        };
+        let Some(menu) = item.menu(mtm) else {
+            return;
+        };
+        recorrer(&menu, true, mtm);
+        let Some(texto) = atribuido(&titulo, Estilo::Informativo, FIN_CIFRAS) else {
+            return;
+        };
+        for fila in menu.itemArray().iter() {
+            if fila.title().to_string() == titulo {
+                poner_barra(&fila, &texto, fraccion, mtm);
+                break;
+            }
         }
     });
 }
