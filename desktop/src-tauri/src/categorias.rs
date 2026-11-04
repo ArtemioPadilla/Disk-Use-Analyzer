@@ -125,7 +125,7 @@ fn docker_por_cli() -> Option<u64> {
 
 /// `du -sk` over several paths, summed. Missing paths are skipped. Runs at
 /// low priority: it walks tens of GB and nobody is waiting on it.
-fn du(rutas: &[PathBuf]) -> u64 {
+pub fn du(rutas: &[PathBuf]) -> u64 {
     let existentes: Vec<&PathBuf> = rutas.iter().filter(|p| p.exists()).collect();
     if existentes.is_empty() {
         return 0;
@@ -229,16 +229,21 @@ impl Categoria {
     }
 }
 
+/// A category's figure: the same as its slice of the ring.
+pub fn bytes_de(categoria: Categoria, uso: &DiskUsage, reparto: &Reparto) -> u64 {
+    porciones(uso, reparto)
+        .iter()
+        .find(|p| p.categoria == categoria)
+        .map(|p| (p.fraccion * uso.total as f64) as u64)
+        .unwrap_or(0)
+}
+
 /// The menu row of a category: its name and its size, separated by a tab, with
 /// the same figures as the ring's slices. Without Full Disk Access it says so,
 /// so a mostly grey ring reads as "missing permission" rather than "your disk
 /// is all system".
 pub fn fila(categoria: Categoria, uso: &DiskUsage, reparto: &Reparto) -> String {
-    let medida = porciones(uso, reparto)
-        .iter()
-        .find(|p| p.categoria == categoria)
-        .map(|p| (p.fraccion * uso.total as f64) as u64)
-        .unwrap_or(0);
+    let medida = bytes_de(categoria, uso, reparto);
     let cifra = match categoria {
         Categoria::Docker if reparto.docker.is_none() => "—".to_string(),
         Categoria::Tuyo if reparto.tuyo.is_none() => "sin permiso".to_string(),

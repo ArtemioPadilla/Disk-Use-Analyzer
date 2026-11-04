@@ -14,6 +14,7 @@ pub mod analisis;
 pub mod anillo;
 pub mod avisos;
 pub mod categorias;
+pub mod desglose;
 pub mod disk;
 pub mod estado;
 pub mod liberar;
@@ -903,6 +904,12 @@ pub fn run() {
                     *pintor.reparto.lock().unwrap() = medido;
                     if let Some(uso) = disk::read() {
                         pintor.pintar(&uso);
+                        let acceso = analisis::hay_acceso_total_al_disco();
+                        liberador.poner_desglose(desglose::filas(
+                            &desglose::medir(acceso),
+                            categorias::bytes_de(Categoria::Resto, &uso, &medido),
+                            acceso,
+                        ));
                     }
                     // After the split, not before: both run `du`, and the
                     // ring is what the user sees first.

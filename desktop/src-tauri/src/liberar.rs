@@ -52,6 +52,7 @@ const EXTERNO_MONITOR: &str = "monitor";
 pub const PREFIJO_CERRAR: &str = "cerrar:";
 
 const TITULO_DESCARGA: &str = "Hay que volver a descargar";
+const TITULO_DESGLOSE: &str = "De qué está hecho";
 
 const REGENERA: &str = "regenera";
 const REDESCARGA: &str = "redescarga";
@@ -276,9 +277,6 @@ pub fn filas(c: Categoria, lista: &[Limpieza], aviso: Option<&str>) -> Vec<Fila>
                 out.push(a);
             } else if propias.is_empty() {
                 out.push(Fila::Texto("Nada que limpiar desde aquí".into()));
-                out.push(Fila::Texto(
-                    "Es macOS, las apps y lo que no se pudo medir".into(),
-                ));
             } else {
                 out.extend(propias.iter().map(|l| limpieza(l)));
             }
@@ -808,6 +806,8 @@ pub struct Liberador {
     lista: Mutex<Vec<Limpieza>>,
     /// What comes from the slower measures: projects and the like.
     desarrollo: Mutex<Vec<Limpieza>>,
+    /// The rows that explain "Sistema y otros". Read-only.
+    desglose: Mutex<Vec<String>>,
     ocupado: AtomicBool,
 }
 
@@ -831,6 +831,7 @@ impl Liberador {
             motor,
             lista: Mutex::new(Vec::new()),
             desarrollo: Mutex::new(Vec::new()),
+            desglose: Mutex::new(Vec::new()),
             ocupado: AtomicBool::new(false),
         });
         let texto = if l.motor.is_some() {
@@ -845,7 +846,18 @@ impl Liberador {
     /// Rebuilds every submenu and the top-level row.
     fn poner(&self, lista: &[Limpieza], aviso: Option<&str>) {
         for (c, submenu) in &self.categorias {
-            poner_filas(&self.app, submenu, &filas(*c, lista, aviso));
+            let mut todas = filas(*c, lista, aviso);
+            if *c == Categoria::Resto {
+                let desglose = self.desglose.lock().unwrap();
+                if !desglose.is_empty() {
+                    let mut primero = vec![Fila::Texto(TITULO_DESGLOSE.into())];
+                    primero.extend(desglose.iter().cloned().map(Fila::Texto));
+                    primero.push(Fila::Separador);
+                    primero.append(&mut todas);
+                    todas = primero;
+                }
+            }
+            poner_filas(&self.app, submenu, &todas);
         }
         let (texto, activa) = match aviso {
             Some(a) => (a.to_string(), false),
@@ -855,6 +867,12 @@ impl Liberador {
         let _ = self.fila_seguro.set_enabled(activa);
         self.poner_desarrollo(aviso);
         menu_nativo::aplicar(&self.app);
+    }
+
+    /// Keeps what "Sistema y otros" is made of. It shows with the next
+    /// `refrescar`, which the same thread runs right after.
+    pub fn poner_desglose(&self, filas: Vec<String>) {
+        *self.desglose.lock().unwrap() = filas;
     }
 
     fn poner_desarrollo(&self, aviso: Option<&str>) {
