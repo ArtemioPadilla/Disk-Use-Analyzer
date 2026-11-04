@@ -338,8 +338,13 @@ Cada categoría del menú abre sus acciones al pasar el cursor, con su tamaño:
   contenedores parados, que hay que volver a descargar. Nada toca los volúmenes. Con el
   daemon apagado solo ofrece encenderlo, con un clic. Con él encendido nombra las imágenes,
   que se quitan una a una con `docker image rm` sin forzar, y los volúmenes, que solo se
-  listan. Docker guarda todo en una imagen de disco, así que lo liberado puede tardar en verse;
-  cuánto tarda está sin medir.
+  listan. Docker guarda todo en una imagen de disco que no se reduce al momento, sino un
+  rato después. Tras limpiarlo el menú vuelve a estar disponible, y la app vigila esa imagen
+  hasta dos minutos, hasta que deje de encoger, para dar la cifra. Esa cifra sale de la imagen
+  y no del espacio libre, que también cambia con lo que haga cualquier otra app. Sin Acceso
+  total al disco no se puede vigilar, y se da lo medido al terminar. El total de
+  «recuperable» que da `docker system df` cuenta capas compartidas más de una vez, así que
+  puede pasarse de lo que realmente se libera.
 - **Cachés**: cada caché por separado y, con más de una, **Limpiar todas**.
 - **Tus archivos**: la papelera, bajo **No vuelve**, y enlaces a los archivos más
   grandes y las descargas más antiguas en el analizador, donde se elige uno por uno.

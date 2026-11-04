@@ -291,7 +291,7 @@ Con el daemon apagado la app no sabe qué hay en `Docker.raw`, y con él encendi
 - [x] Pruebas con el `docker` falso
 - [x] Inventario por nombre
 - [x] Encender desde el menú
-- [ ] Probar de verdad y medir `Docker.raw`
+- [x] Probar de verdad y medir `Docker.raw`, con imágenes desechables propias
 
 **Hecho cuando**
 
