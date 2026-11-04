@@ -6,6 +6,7 @@ haya que volver a descargar, y nada sin comando.
 """
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -172,3 +173,47 @@ def test_npm_no_promete_lo_que_su_comando_no_borra():
 def test_sin_npx_no_hay_regla_npx():
     casa = str(Path.home())
     assert 'npx' not in _core_con_caches((f'{casa}/.npm/_cacache', 200 * MB))
+
+
+def _casa_con(tmp_path, monkeypatch, *carpetas):
+    # Inside ~/Library/Caches because the gate rejects /private/var/folders.
+    base = tempfile.mkdtemp(dir=Path.home() / 'Library' / 'Caches')
+    for c in carpetas:
+        d = Path(base) / c
+        d.mkdir(parents=True)
+        (d / 'pesado').write_bytes(b'x' * (60 * MB))
+    monkeypatch.setenv('HOME', base)
+    return Path(base)
+
+
+def test_cada_herramienta_de_dot_cache_tiene_su_regla(tmp_path, monkeypatch):
+    casa = _casa_con(tmp_path, monkeypatch, '.cache/huggingface/hub', '.cache/act')
+    try:
+        reglas = {r['id']: r for r in DiskAnalyzerCore(str(casa))._reglas_de_herramientas()}
+        assert set(reglas) == {'cache_huggingface', 'cache_act'}
+        assert reglas['cache_huggingface']['consecuencia'] == 'redescarga'
+        assert reglas['cache_act']['consecuencia'] == 'regenera'
+    finally:
+        shutil.rmtree(casa)
+
+
+def test_el_token_de_hugging_face_no_se_toca(tmp_path, monkeypatch):
+    casa = _casa_con(tmp_path, monkeypatch, '.cache/huggingface/hub')
+    token = casa / '.cache/huggingface/token'
+    token.write_text('secreto')
+    try:
+        regla, = DiskAnalyzerCore(str(casa))._reglas_de_herramientas()
+        subprocess.run(['/bin/sh', '-c', regla['command']], check=True)
+        assert not (casa / '.cache/huggingface/hub/pesado').exists()
+        assert token.read_text() == 'secreto'
+    finally:
+        shutil.rmtree(casa)
+
+
+def test_sin_el_comando_de_la_herramienta_no_se_ofrece(tmp_path, monkeypatch):
+    casa = _casa_con(tmp_path, monkeypatch, '.cache/uv')
+    monkeypatch.setenv('PATH', '/usr/bin:/bin')
+    try:
+        assert DiskAnalyzerCore(str(casa))._reglas_de_herramientas() == []
+    finally:
+        shutil.rmtree(casa)

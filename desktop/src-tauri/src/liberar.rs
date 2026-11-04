@@ -44,6 +44,8 @@ const EXTERNO_MONITOR: &str = "monitor";
 /// Prefix of the menu ids that ask an app to quit.
 pub const PREFIJO_CERRAR: &str = "cerrar:";
 
+const TITULO_DESCARGA: &str = "Hay que volver a descargar";
+
 const REGENERA: &str = "regenera";
 const REDESCARGA: &str = "redescarga";
 const PERMANENTE: &str = "permanente";
@@ -174,7 +176,7 @@ pub fn filas(c: Categoria, lista: &[Limpieza], aviso: Option<&str>) -> Vec<Fila>
                 if !vuelve.is_empty() {
                     out.push(Fila::Separador);
                 }
-                out.push(Fila::Texto("Hay que volver a descargar".into()));
+                out.push(Fila::Texto(TITULO_DESCARGA.into()));
                 out.extend(descarga.iter().map(|l| limpieza(l)));
                 out.push(Fila::Texto("También borra contenedores parados".into()));
                 out.push(Fila::Texto("Los volúmenes no se tocan".into()));
@@ -183,22 +185,31 @@ pub fn filas(c: Categoria, lista: &[Limpieza], aviso: Option<&str>) -> Vec<Fila>
             out.push(analizador("/", "Abrir analizador completo"));
         }
         Categoria::Caches => {
+            let (vuelven, descarga): (Vec<&&Limpieza>, Vec<&&Limpieza>) =
+                propias.iter().partition(|l| l.consecuencia == REGENERA);
             if let Some(a) = aviso {
                 out.push(a);
             } else if propias.is_empty() {
                 out.push(Fila::Texto("Nada que limpiar ahora mismo".into()));
-            } else {
-                if propias.len() > 1 {
-                    let total: u64 = propias.iter().map(|l| l.space).sum();
-                    out.push(accion(
-                        format!("{PREFIJO}{TODAS_CACHES}"),
-                        format!("Limpiar todas…\t{}", tamano(total)),
-                    ));
+            }
+            if vuelven.len() > 1 {
+                let total: u64 = vuelven.iter().map(|l| l.space).sum();
+                out.push(accion(
+                    format!("{PREFIJO}{TODAS_CACHES}"),
+                    format!("Limpiar todas…\t{}", tamano(total)),
+                ));
+                out.push(Fila::Separador);
+            }
+            out.extend(vuelven.iter().map(|l| limpieza(l)));
+            if !descarga.is_empty() {
+                if !vuelven.is_empty() {
                     out.push(Fila::Separador);
                 }
-                out.extend(propias.iter().map(|l| limpieza(l)));
+                out.push(Fila::Texto(TITULO_DESCARGA.into()));
+                out.extend(descarga.iter().map(|l| limpieza(l)));
             }
             out.push(Fila::Separador);
+            out.push(Fila::Texto("Lo demás no se limpia desde aquí".into()));
             out.push(externo(EXTERNO_CACHES, "Abrir en Finder"));
         }
         Categoria::Tuyo => {
@@ -284,12 +295,11 @@ pub fn poner_filas(app: &AppHandle, submenu: &Submenu<Wry>, filas: &[Fila]) {
 }
 
 /// "Liberar lo seguro" and what it adds up to. It runs what comes back by
-/// itself, without a rebuild or a download behind it: never the Trash, never
-/// Docker.
+/// itself, without a download behind it: never the Trash, never Docker.
 fn seguras(lista: &[Limpieza]) -> impl Iterator<Item = &Limpieza> {
     lista
         .iter()
-        .filter(|l| !l.es_permanente() && !l.esta_en(Categoria::Docker))
+        .filter(|l| l.consecuencia == REGENERA && !l.esta_en(Categoria::Docker))
 }
 
 /// The text of the top-level "Liberar lo seguro" row, and whether it can be
@@ -332,7 +342,7 @@ pub fn elegir(lista: &[Limpieza], id: &str) -> Vec<Limpieza> {
         TODO => seguras(lista).cloned().collect(),
         TODAS_CACHES => lista
             .iter()
-            .filter(|l| l.esta_en(Categoria::Caches))
+            .filter(|l| l.esta_en(Categoria::Caches) && l.consecuencia == REGENERA)
             .cloned()
             .collect(),
         _ => lista.iter().filter(|l| l.id == id).cloned().collect(),
@@ -356,8 +366,12 @@ pub fn confirmacion(elegidas: &[Limpieza]) -> Confirmacion {
         .map(|l| format!("• {} — {}", l.titulo, tamano(l.space)))
         .collect();
     let descarga = elegidas.iter().any(|l| l.consecuencia == REDESCARGA);
+    let docker = elegidas.iter().any(|l| l.esta_en(Categoria::Docker));
     let despues = if permanente {
         "Lo que hay en la papelera se borra para siempre. Esto no se puede deshacer."
+    } else if descarga && !docker {
+        "Habrá que volver a descargarlo cuando lo necesites, y según lo que sea puede tardar \
+         y gastar datos."
     } else if descarga {
         "Las imágenes habrá que volver a descargarlas cuando las necesites, y los \
          contenedores parados se pierden. Lo que esté corriendo y los volúmenes no se tocan."
@@ -378,8 +392,10 @@ pub fn confirmacion(elegidas: &[Limpieza]) -> Confirmacion {
         ),
         boton: if permanente {
             "Vaciar la papelera".into()
-        } else if descarga {
+        } else if descarga && docker {
             "Borrar imágenes".into()
+        } else if descarga {
+            "Borrar".into()
         } else {
             "Liberar".into()
         },
@@ -786,6 +802,31 @@ mod tests {
         let dos = filas(Categoria::Caches, &lista, None);
         assert_eq!(ids(&dos)[0], "liberar:caches");
         assert_eq!(elegir(&lista, TODAS_CACHES).len(), 2);
+    }
+
+    #[test]
+    fn lo_que_hay_que_descargar_no_entra_en_limpiar_todas_ni_en_lo_seguro() {
+        let lista = vec![
+            l("uv", REGENERA, GB),
+            l("act", REGENERA, GB),
+            l("modelos", REDESCARGA, 8 * GB),
+        ];
+        let f = filas(Categoria::Caches, &lista, None);
+        assert!(f.contains(&Fila::Texto(TITULO_DESCARGA.into())));
+        assert!(ids(&f).contains(&"liberar:modelos".to_string()));
+        assert!(!elegir(&lista, TODAS_CACHES)
+            .iter()
+            .any(|x| x.id == "modelos"));
+        assert!(!elegir(&lista, TODO).iter().any(|x| x.id == "modelos"));
+        assert_eq!(fila_seguro(&lista).0, "Liberar lo seguro…\t2,0 GB");
+    }
+
+    #[test]
+    fn la_confirmacion_de_una_cache_a_descargar_no_habla_de_imagenes() {
+        let c = confirmacion(&[l("modelos", REDESCARGA, GB)]);
+        assert_eq!(c.boton, "Borrar");
+        assert!(c.mensaje.contains("volver a descargarlo"));
+        assert!(!c.mensaje.contains("contenedores"));
     }
 
     #[test]
