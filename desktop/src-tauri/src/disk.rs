@@ -17,9 +17,9 @@ pub struct DiskUsage {
 /// This is the same call the Python engine makes (`shutil.disk_usage`), so the
 /// tray and the web UI agree by construction. They used not to: `sysinfo`
 /// reports macOS's "available for important usage", which includes purgeable
-/// space. With next to none purgeable that made no difference; after the
-/// upgrade to macOS 27 the development machine had 5.5 GB purgeable, the tray
-/// said 19.6 GB free while the web said 14.0, and tests/consistency.rs failed.
+/// space. With next to none purgeable that made no difference; with a
+/// lot purgeable, the tray and the web disagreed on the free figure and
+/// tests/consistency.rs failed.
 fn statvfs_raiz() -> Option<(u64, u64)> {
     let mut st: libc::statvfs = unsafe { std::mem::zeroed() };
     let r = unsafe { libc::statvfs(c"/".as_ptr(), &mut st) };

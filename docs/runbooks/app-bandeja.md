@@ -156,7 +156,7 @@ así una oscilación de 19,9 a 20,1 GB no dispara una tormenta de avisos.
 
 El número que cuenta es el espacio **estrictamente libre**, el mismo que usa el
 motor Python. El espacio **purgable** —el que macOS puede recuperar por su
-cuenta— se muestra aparte en el menú ("+5,7 GB purgables") y nunca se cuenta
+cuenta— se muestra aparte en el menú ("+N GB purgables") y nunca se cuenta
 como libre, porque macOS lo devuelve cuando decide, no cuando tú lo necesitas.
 
 La primera vez que arranca, macOS pide permiso para mostrar notificaciones. Si
@@ -169,7 +169,7 @@ no sirve: publica con `NSUserNotification`, obsoleta desde macOS 11, y en macOS
 ## Cuando el disco se llena por el swap
 
 El menú muestra una línea **Swap**. Si pasa de 4 GB, nombra la app que lo
-retiene: *"Swap: 12.2 GB · lo retiene Visual Studio Code"*. Los avisos lo
+retiene: *"Swap: N GB · lo retiene <app>"*. Los avisos lo
 repiten.
 
 El swap vive en ficheros del propio disco. Si una app acumula mucha memoria,
@@ -179,9 +179,8 @@ reiniciar la app que lo retiene.
 
 La app se averigua subiendo por el árbol de procesos hasta el primer `.app`,
 porque `top` corta los nombres a 16 caracteres y un servidor de lenguaje
-aparece como `java` a secas. En la máquina de desarrollo el swap llegó a 23 GB
-por las extensiones de VS Code (SonarLint ejecuta un servidor Java en cada
-ventana) y dejó el disco con 205 MB libres.
+aparece como `java` a secas. Las extensiones de un editor, por ejemplo, pueden
+retener mucho swap y casi llenar el disco.
 
 ## El anillo de la barra
 
@@ -196,7 +195,7 @@ texto.
   estado se lee en el hueco blanco que mengua, la cifra de al lado y las
   notificaciones.
 - **Lo libre nunca se dibuja por debajo del 8 % del círculo** (unos 30°), y lo
-  usado se encoge en proporción. Proporcional, 9 GB de 460 eran una raya de 7°
+  usado se encoge en proporción. Proporcional, poco espacio libre era una raya
   que no se veía justo cuando más importa; la cifra exacta ya va en el texto.
   Solo un disco lleno del todo (0 bytes libres) se dibuja sin hueco.
 
@@ -226,8 +225,7 @@ líneas: "Analizando… 23 % · faltan ~1 min" y "71 de 313 GB · 506 mil archiv
 escribe su progreso en un temporal cada segundo (`disk_analyzer.py --progreso`)
 y la app lo lee. El total es una estimación: un escaneo de `/` nunca cuenta todo
 lo que `df` da por usado (el volumen sellado del sistema, carpetas ilegibles),
-así que se toma lo usado hoy por la proporción que contó el último escaneo
-(un 69 % estable en la máquina de desarrollo). Sin escaneo anterior no hay
+así que se toma lo usado hoy por la proporción que contó el último escaneo. Sin escaneo anterior no hay
 porcentaje ni tiempo, solo GB y archivos contados. El porcentaje se queda en 99 %
 si el escaneo encuentra más de lo estimado, el tiempo no se estima en los
 primeros 20 s, y tras el recorrido la línea nombra la fase (duplicados, cachés,
@@ -415,8 +413,7 @@ arrancar**, sin hacerte esperar a un escaneo que tarda minutos.
 **No confundas esto con los directorios que piden `sudo`.** Un escaneo del disco
 entero siempre topa con un puñado de carpetas de `root` en modo 700
 —`/usr/sbin/authserver`, cachés de Apple, algún antivirus— que no se leen ni con
-Acceso total al disco. Medido en la máquina de desarrollo con el permiso
-concedido: 10 carpetas así, ninguna protegida por TCC. La app las reporta aparte,
+Acceso total al disco. Ninguna está protegida por TCC. La app las reporta aparte,
 como "N carpetas de sistema omitidas, piden sudo", en vez de mandarte a activar
 un permiso que ya tienes.
 

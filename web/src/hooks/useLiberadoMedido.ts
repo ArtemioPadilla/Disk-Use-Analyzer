@@ -7,8 +7,8 @@ import { on } from '../lib/events';
  *
  * Replaces the old "freed so far" figures, which added up the analysis's
  * estimates for every command that had ever exited 0 — including commands
- * that only list files, and commands run in earlier sessions. On the
- * development machine it claimed 15.8 GB for a run that freed 0.3 GB.
+ * that only list files, and commands run in earlier sessions, so it
+ * could claim far more than a run actually freed.
  */
 export function useLiberadoMedido(): number {
   const [total, setTotal] = useState(0);

@@ -30,7 +30,7 @@ def _core_con(locs, docker=None):
 
 
 def test_las_caches_de_library_se_recomiendan():
-    """21,4 GB reales en la máquina de desarrollo, sin ninguna regla."""
+    """Pueden ocupar mucho, y no había ninguna regla."""
     ruta = os.path.expanduser('~/Library/Caches')
     core = _core_con([{'type': cache_types.GENERAL, 'path': ruta,
                        'size': 21 * GB}])
