@@ -56,7 +56,7 @@ cuando debe, borre lo que dice y prometa el espacio que puede liberar.
 | ✅ | Reglas para cachés de apps, papelera y Docker sin escaneo completo | Salen sobre un estado sintético | Saneamiento T7 |
 | ⬜ | **E1.1** Las reglas muertas vuelven a funcionar o desaparecen | `node_modules_huerfano` y `git_pack_files` disparan sobre un disco real, o se borran junto con el caso de patrón `node_modules` de la verja | — |
 | ⬜ | **E1.2** La cifra de cabecera suma solo lo que se ofrece | `cache_size` deja de contar `~/Downloads`, datos de Docker, `/private/var/folders` y simuladores instalados | — |
-| ⬜ | **E1.3** `simuladores` promete lo que puede liberar | Su `space` sale de lo que borra su comando , no de todo `CoreSimulator` (B) | — |
+| ⬜ | **E1.3** `simuladores` promete lo que puede liberar | Su `space` sale de lo que borra su comando, no de todo `CoreSimulator` | — |
 | ⬜ | **E1.4** Los comandos del informe HTML pasan por el mismo camino | `delete_cmd` usa `comandos.py` y la verja; el script de duplicados funciona con apóstrofos en el nombre | — |
 
 **Por qué E1.1 importa más de lo que parece:** `node_modules` y `.git/objects`
