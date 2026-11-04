@@ -908,12 +908,17 @@ pub fn run() {
                     *pintor.reparto.lock().unwrap() = medido;
                     if let Some(uso) = disk::read() {
                         pintor.pintar(&uso);
-                        let acceso = analisis::hay_acceso_total_al_disco();
-                        liberador.poner_desglose(desglose::filas(
-                            &desglose::medir(acceso),
-                            categorias::bytes_de(Categoria::Resto, &uso, &medido),
-                            acceso,
-                        ));
+                        // On its own thread: it reads a lot, and "Liberar lo
+                        // seguro" must not wait for it.
+                        let liberador = Arc::clone(&liberador);
+                        std::thread::spawn(move || {
+                            let acceso = analisis::hay_acceso_total_al_disco();
+                            liberador.poner_desglose(desglose::filas(
+                                &desglose::medir(acceso),
+                                categorias::bytes_de(Categoria::Resto, &uso, &medido),
+                                acceso,
+                            ));
+                        });
                     }
                     // After the split, not before: both run `du`, and the
                     // ring is what the user sees first.
